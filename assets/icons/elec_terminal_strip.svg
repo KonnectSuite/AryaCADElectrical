@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Terminal Strips">
+  <rect x="3" y="5.5" width="18" height="13" rx="1.5" stroke="#B4B6B9" stroke-width="1.625" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M9 5.5 V18.5" stroke="#B4B6B9" stroke-width="1.625" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M15 5.5 V18.5" stroke="#B4B6B9" stroke-width="1.625" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <circle cx="6" cy="12" r="1.4" fill="#6DB7ED"/>
+  <circle cx="12" cy="12" r="1.4" fill="#6DB7ED"/>
+  <circle cx="18" cy="12" r="1.4" fill="#6DB7ED"/>
+</svg>

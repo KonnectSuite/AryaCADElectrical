@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Number Devices">
+  <rect x="3" y="8.5" width="7.5" height="7" rx="1" stroke="#B4B6B9" stroke-width="1.625" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M1.5 12 H3" stroke="#B4B6B9" stroke-width="1.625" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M10.5 12 H12.2" stroke="#B4B6B9" stroke-width="1.625" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M14.4 17.5 V8 L20 16.5 V7" stroke="#6DB7ED" stroke-width="1.625" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

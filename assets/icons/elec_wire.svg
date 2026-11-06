@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Wire">
+  <path d="M3 17 L9 6.5 L15 14 L21 5.5" stroke="#B4B6B9" stroke-width="1.625" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <circle cx="9" cy="6.5" r="1.5" fill="#6DB7ED"/>
+  <circle cx="15" cy="14" r="1.5" fill="#6DB7ED"/>
+</svg>

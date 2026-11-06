@@ -273,11 +273,10 @@ impl OpenCADStudio {
     /// them would make the bill of material meaningless.
 /// Components of any document, so the same extraction serves one drawing and a project.
 fn components_of(document: &codec::Document) -> Vec<Component> {
-    let model_space = document.header.model_space_block_handle;
     let mut out = Vec::new();
     let mut next_id = 0u64;
     for entity in document.entities() {
-        if entity.common().owner_handle != model_space {
+        if !Self::in_drawing_space(document, entity.common().owner_handle) {
             continue;
         }
         let codec::EntityType::Insert(insert) = entity else {
@@ -321,7 +320,228 @@ fn components_of(document: &codec::Document) -> Vec<Component> {
         }
         out.push(component);
     }
+
+    // AutoCAD Electrical sheets that were exploded (or plotted after a flatten) keep no
+    // attributes on the symbols: the tag survives only as plain TEXT. A reference
+    // designator is a device with or without its symbol, so recover those too — otherwise
+    // a real customer sheet reports "no components found" while the tags are right there.
+    let mut known: std::collections::BTreeSet<String> = out
+        .iter()
+        .map(|component| component.tag.trim().to_ascii_uppercase())
+        .filter(|tag| !tag.is_empty())
+        .collect();
+    let mut references: Vec<(String, f64, f64)> = Vec::new();
+    let mut descriptions: Vec<(String, f64, f64)> = Vec::new();
+    for entity in document.entities() {
+        if !Self::in_drawing_space(document, entity.common().owner_handle) {
+            continue;
+        }
+        let codec::EntityType::Text(text) = entity else {
+            continue;
+        };
+        if text.common.layer.eq_ignore_ascii_case("TITLE_BLOCK") {
+            continue;
+        }
+        let value = text.value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        // Project text sits at 0.125 or 0.15 units; anything far outside that is a title or
+        // a note rather than a device label.
+        let height = text.height.abs();
+        if !(0.09..=0.26).contains(&height) {
+            continue;
+        }
+        let point = (text.insertion_point.x, text.insertion_point.y);
+        if Self::looks_like_reference(value) {
+            references.push((value.to_string(), point.0, point.1));
+        } else if value.chars().any(|character| character.is_alphabetic())
+            && !Self::is_note_label(value)
+        {
+            descriptions.push((value.to_string(), point.0, point.1));
+        }
+    }
+    for (tag, x, y) in references {
+        // Coil and contacts share one tag: one device, however many parts are drawn.
+        if !known.insert(tag.to_ascii_uppercase()) {
+            continue;
+        }
+        next_id += 1;
+        let mut component = Component::new(next_id, Self::class_for_reference(&tag), &tag);
+        // The description is a separate TEXT that sits just below its tag; a note or a legend
+        // elsewhere on the sheet is not this device's description, so only look underneath.
+        let nearest = descriptions
+            .iter()
+            .filter(|(_, dx, dy)| {
+                let below = dy - y;
+                (-1.6..=-0.05).contains(&below) && (dx - x).abs() <= 1.6
+            })
+            .map(|(text, dx, dy)| {
+                let distance = ((dx - x).powi(2) + (dy - y).powi(2)).sqrt();
+                (text, distance)
+            })
+            .min_by(|left, right| {
+                left.1
+                    .partial_cmp(&right.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        if let Some((text, _)) = nearest {
+            component.description = Some(text.clone());
+        }
+        out.push(component);
+    }
     out
+}
+
+/// True for a string shaped like an IEC 81346 reference designator rather than prose.
+///
+/// The three shapes that occur on real sheets: `K12` (family then number), `326M` (module
+/// reference), and `XXX` (a device that has not been numbered yet). The exclusions are what
+/// keeps part numbers, phase labels, ratings and notes out of the component list.
+fn looks_like_reference(text: &str) -> bool {
+    let value = text.trim();
+    if value.is_empty() || value.len() > 9 {
+        return false;
+    }
+    // A hyphen almost always means a catalogue number (`LPJ-100SP`, `TS-1`), not a tag.
+    if value.contains('-') {
+        return false;
+    }
+    let characters: Vec<char> = value.chars().collect();
+    if !characters
+        .iter()
+        .all(|character| character.is_ascii_digit() || character.is_ascii_uppercase())
+    {
+        return false;
+    }
+    // `XXX` / `XXXXA`: reserved for a device still awaiting a number.
+    if characters.len() >= 3 && characters[..3].iter().all(|character| *character == 'X') {
+        return true;
+    }
+    let leading_digits = characters
+        .iter()
+        .take_while(|character| character.is_ascii_digit())
+        .count();
+    let trailing_letters = characters
+        .iter()
+        .rev()
+        .take_while(|character| character.is_ascii_uppercase())
+        .count();
+    if (3..=5).contains(&leading_digits)
+        && (2..=4).contains(&trailing_letters)
+        && leading_digits + trailing_letters == characters.len()
+    {
+        let suffix: String = characters[leading_digits..].iter().collect();
+        return !matches!(suffix.as_str(), "VAC" | "VDC" | "AMP" | "HZ" | "AWG" | "RPM");
+    }
+    let leading_letters = characters
+        .iter()
+        .take_while(|character| character.is_ascii_uppercase())
+        .count();
+    let trailing_digits = characters
+        .iter()
+        .rev()
+        .take_while(|character| character.is_ascii_digit())
+        .count();
+    if (1..=4).contains(&leading_letters)
+        && (1..=4).contains(&trailing_digits)
+        && leading_letters + trailing_digits == characters.len()
+    {
+        let prefix: String = characters[..leading_letters].iter().collect();
+        return !matches!(
+            prefix.as_str(),
+            "L" | "IN" | "OUT" | "CH" | "IP" | "TYP" | "REF" | "MIN" | "MAX" | "AWG"
+        );
+    }
+    false
+}
+
+/// True when the owner is a drawing space: model space or a layout's paper space.
+///
+/// The electrical collectors must read what the user is looking at. Placing a symbol on a
+/// layout sheet and then being told "no components found" is exactly the bolted-on
+/// behaviour this layer must not have; a null owner is accepted too, because some writers
+/// leave the `330` group out.
+fn in_drawing_space(document: &codec::Document, owner: codec::Handle) -> bool {
+    if owner.is_null() {
+        return true;
+    }
+    document.block_records.iter().any(|record| {
+        record.handle == owner
+            && (record.name.eq_ignore_ascii_case("*Model_Space")
+                || record.name.to_ascii_lowercase().starts_with("*paper_space"))
+    })
+}
+
+/// True for sheet furniture that must never become a device description (`TYP.`, `BLOCK`…).
+fn is_note_label(value: &str) -> bool {
+    let upper = value.trim().to_ascii_uppercase();
+    if upper.starts_with("SEE ") {
+        return true;
+    }
+    matches!(
+        upper.as_str(),
+        "TYP." | "TYP" | "BLOCK" | "LOCATED IN" | "CONTINUED" | "WIRE" | "WIRES" | "N/A"
+    )
+}
+
+/// The device class an IEC 81346 reference letter stands for, for tags recovered from text.
+///
+/// Two shapes occur: family-first (`K12`) and number-first (`264CB`, where the family is the
+/// trailing letters). Longest known family matching wins so `CB` is a breaker before `C`.
+fn class_for_reference(tag: &str) -> &'static str {
+    let letters: String = tag
+        .chars()
+        .filter(|character| character.is_ascii_uppercase())
+        .collect();
+    let number_first = tag.starts_with(|character: char| character.is_ascii_digit());
+    let family = if number_first {
+        letters.as_str()
+    } else {
+        &letters[..letters.len().min(1)]
+    };
+    if family.starts_with("PDB") {
+        return "Power Distribution";
+    }
+    if family.starts_with("CB") {
+        return "Circuit Breaker";
+    }
+    if family.starts_with("FB") {
+        return "Fuse";
+    }
+    if family.starts_with("CON") {
+        return "Connector";
+    }
+    if family.starts_with("PB") {
+        return "Pushbutton";
+    }
+    if family.starts_with("OL") {
+        return "Overload";
+    }
+    if family.starts_with("PS") {
+        return "Power Supply";
+    }
+    match family.chars().next() {
+        Some('A') => "Assembly",
+        Some('B') => "Sensor",
+        Some('C') => "Capacitor",
+        Some('E') => "Other",
+        Some('F') => "Fuse",
+        Some('G') => "Power Supply",
+        Some('H') => "Lamp",
+        Some('K') => "Contactor",
+        Some('L') => "Inductor",
+        Some('M') => "Motor",
+        Some('P') => "Indicator",
+        Some('Q') => "Circuit Breaker",
+        Some('R') => "Resistor",
+        Some('S') => "Switch",
+        Some('T') => "Transformer",
+        Some('U') => "Drive",
+        Some('W') => "Cable",
+        Some('X') => "Terminal",
+        _ => "Device",
+    }
 }
 
 

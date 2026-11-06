@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Electrical Setup">
+  <path d="M3 8.5 H21" stroke="#B4B6B9" stroke-width="1.625" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M3 15.5 H21" stroke="#B4B6B9" stroke-width="1.625" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <circle cx="15" cy="8.5" r="2.2" fill="#6DB7ED"/>
+  <circle cx="9" cy="15.5" r="2.2" fill="#6DB7ED"/>
+</svg>

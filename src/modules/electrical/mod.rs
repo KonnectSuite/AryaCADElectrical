@@ -1,13 +1,108 @@
 ﻿//! Electrical (ECAD) ribbon tab.
 //!
-//! The tab is the entry point for the electrical layer: component tools, numbering and
-//! the reports that make an electrical drawing worth drawing. Tools dispatch the same
-//! commands the command line uses, so every feature is scriptable.
+//! The tab is the entry point for the electrical layer: symbols, conductors, the devices
+//! on them, and the numbering, cross-references and reports that make an electrical
+//! drawing worth drawing. Every button dispatches the same command the command line uses,
+//! so each feature stays scriptable and a tool's id is its command name.
+//!
+//! The layout follows the module idiom the other tabs use — an icon per command, a
+//! [`ToolDef`] that carries it, and ribbon groups shaped by the drafting workflow rather
+//! than by the order the commands happened to be written: place symbols, wire them, number
+//! the devices, then describe them with terminals, cross-references and reports.
 
 pub mod place;
 pub mod wire;
 
 use crate::modules::{CadModule, IconKind, ModuleEvent, RibbonGroup, RibbonItem, ToolDef};
+use ocs_plugin_api::ribbon::FOLLOW_CHOSEN;
+
+/// An electrical tool button.
+///
+/// The id *is* the command name: the ribbon sends [`ModuleEvent::Command`] back with it,
+/// so a button runs exactly the verb typing it would run and no mapping table can drift
+/// from the dispatcher. A command that needs arguments starts and prompts for them, the
+/// way every other CAD command does.
+fn elec_tool(id: &'static str, label: &'static str, icon: IconKind) -> ToolDef {
+    ToolDef {
+        id,
+        label,
+        icon,
+        event: ModuleEvent::Command(id.to_string()),
+    }
+}
+
+/// One entry of a dropdown: (command, menu label, icon).
+fn menu_item(
+    id: &'static str,
+    label: &'static str,
+    icon: IconKind,
+) -> (&'static str, &'static str, IconKind) {
+    (id, label, icon)
+}
+
+/// The tab's icons, one per tool, embedded the way every other module embeds its own.
+///
+/// They are drawn on the same 24x24 grid with the application's stroke weight and its
+/// grey body plus blue accent, so the tab reads as Draw and Annotate do rather than as a
+/// row of glyphs.
+mod icons {
+    use crate::modules::IconKind;
+
+    pub const ATTEDIT: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/attedit.svg"));
+    pub const ATTRIBUTES: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_attributes.svg"));
+    pub const BOM: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/elec_bom.svg"));
+    pub const DEVICE_LIST: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_device_list.svg"));
+    pub const INSERT: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_insert.svg"));
+    pub const IO: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/elec_io.svg"));
+    pub const JUNCTION: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_junction.svg"));
+    pub const LIBRARY: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_library.svg"));
+    pub const LIBRARY_FOLDER: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_library_folder.svg"));
+    pub const MAKE_SYMBOL: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_make_symbol.svg"));
+    pub const NEW_DRAWING: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_new_drawing.svg"));
+    pub const NUMBER_DEVICE: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_number_device.svg"));
+    pub const NUMBER_PREVIEW: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_number_preview.svg"));
+    pub const PANEL: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_panel.svg"));
+    pub const PART: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/elec_part.svg"));
+    pub const PLC: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/elec_plc.svg"));
+    pub const PLC_NEXT: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_plc_next.svg"));
+    pub const PROJECT: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_project.svg"));
+    pub const PROJECT_NEW: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_project_new.svg"));
+    pub const PROJECT_OPEN: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_project_open.svg"));
+    pub const PROJECT_RENUMBER: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_project_renumber.svg"));
+    pub const SETUP: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_setup.svg"));
+    pub const SHEET: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_sheet.svg"));
+    pub const TERMINAL_SIDES: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_terminal_sides.svg"));
+    pub const TERMINAL_STRIP: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_terminal_strip.svg"));
+    pub const WIRE: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/elec_wire.svg"));
+    pub const WIRE_LIST: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_wire_list.svg"));
+    pub const WIRE_NUMBER: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_wire_number.svg"));
+    pub const XREF: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/elec_xref.svg"));
+    pub const XREF_WRITE: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_xref_write.svg"));
+}
 
 pub struct ElectricalModule;
 
@@ -23,112 +118,175 @@ impl CadModule for ElectricalModule {
     fn ribbon_groups(&self) -> &[RibbonGroup] {
         static GROUPS: std::sync::OnceLock<Vec<RibbonGroup>> = std::sync::OnceLock::new();
         GROUPS.get_or_init(|| {
+            use icons::*;
             vec![
+                // ── Symbols ───────────────────────────────────────────────────
+                // Insert is the action a drawing starts with; the library face
+                // runs the palette and its menu also reaches loading a folder.
                 RibbonGroup {
-                    title: "Numbering",
+                    title: "Symbols",
                     tools: vec![
-                        RibbonItem::LargeTool(ToolDef {
-                            id: "ELECNUMBER",
-                            label: "Number\nDevices",
-                            icon: IconKind::Glyph("\u{2116}"),
-                            event: ModuleEvent::Command("ELECNUMBER".to_string()),
-                        }),
-                        RibbonItem::Tool(ToolDef {
-                            id: "ELECNUMBERPREVIEW",
-                            label: "Preview",
-                            icon: IconKind::Glyph("\u{1F50D}"),
-                            event: ModuleEvent::Command("ELECNUMBERPREVIEW".to_string()),
-                        }),
+                        RibbonItem::LargeTool(elec_tool("ELECINSERT", "Insert\nSymbol", INSERT)),
+                        RibbonItem::LargeDropdown {
+                            id: "ELEC_SYMBOL_LIBRARY",
+                            label: "Symbol\nLibrary",
+                            icon: LIBRARY,
+                            items: vec![
+                                menu_item("ELECPALETTE", "Browse Symbols", LIBRARY),
+                                menu_item("ELECLIB", "Load Library Folder", LIBRARY_FOLDER),
+                            ],
+                            default: "ELECPALETTE",
+                        },
+                        RibbonItem::LabeledTool(elec_tool(
+                            "ELECMAKESYMBOL",
+                            "Make Symbol",
+                            MAKE_SYMBOL,
+                        )),
+                        RibbonItem::LabeledDropdown {
+                            id: "ELEC_ATTRIBUTES",
+                            label: "Edit Attributes",
+                            icon: ATTRIBUTES,
+                            items: vec![
+                                menu_item("ATTEDIT", "Attribute Editor", ATTEDIT),
+                                menu_item("ELECSETATTR", "Set Electrical Attributes", ATTRIBUTES),
+                            ],
+                            default: "ATTEDIT",
+                        },
                     ],
                 },
+                // ── Wiring ───────────────────────────────────────────────────
+                // Conductors first: a wire is drawn differently from a line (it
+                // chains from the last point and lands on the wire layer), and
+                // junctions and wire numbers read the geometry this draws.
                 RibbonGroup {
-                    title: "Components",
+                    title: "Wiring",
                     tools: vec![
-                        RibbonItem::LargeTool(ToolDef {
-                            id: "ELECLIST",
-                            label: "Components",
-                            icon: IconKind::Glyph("\u{26A1}"),
-                            event: ModuleEvent::Command("ELECLIST".to_string()),
-                        }),
-                        RibbonItem::LargeTool(ToolDef {
-                            id: "ELECPALETTE",
-                            label: "Library",
-                            icon: IconKind::Glyph("\u{1F4D6}"),
-                            event: ModuleEvent::Command("ELECPALETTE".to_string()),
-                        }),
-                        RibbonItem::Tool(ToolDef {
-                            id: "ELECINSERT",
-                            label: "Insert\nSymbol",
-                            icon: IconKind::Glyph("\u{2795}"),
-                            event: ModuleEvent::Command("ELECINSERT".to_string()),
-                        }),
-                        RibbonItem::Tool(ToolDef {
-                            id: "ATTDEF",
-                            label: "Attribute\nDefinition",
-                            icon: IconKind::Glyph("\u{0040}"),
-                            event: ModuleEvent::Command("ATTDEF".to_string()),
-                        }),
-                        RibbonItem::Tool(ToolDef {
-                            id: "ATTEDIT",
-                            label: "Edit\nAttributes",
-                            icon: IconKind::Glyph("\u{270E}"),
-                            event: ModuleEvent::Command("ATTEDIT".to_string()),
-                        }),
+                        RibbonItem::LargeTool(elec_tool("ELECWIRE", "Wire", WIRE)),
+                        RibbonItem::LabeledTool(elec_tool(
+                            "ELECJUNCTIONS",
+                            "Junctions",
+                            JUNCTION,
+                        )),
+                        RibbonItem::LabeledTool(elec_tool(
+                            "ELECWIRENUMBER",
+                            "Number Wires",
+                            WIRE_NUMBER,
+                        )),
                     ],
                 },
+                // ── Devices ──────────────────────────────────────────────────
+                // The numbering face shows and runs the numbering last chosen, the
+                // Annotate dropdown idiom; I/O and the PLC placement share a menu
+                // because they are one workflow — place the module, list its points.
+                RibbonGroup {
+                    title: "Devices",
+                    tools: vec![
+                        RibbonItem::LargeTool(elec_tool("ELECLIST", "Component\nList", DEVICE_LIST)),
+                        RibbonItem::LargeDropdown {
+                            id: "ELEC_NUMBER_DEVICES",
+                            label: FOLLOW_CHOSEN,
+                            icon: NUMBER_DEVICE,
+                            items: vec![
+                                menu_item("ELECNUMBER", "Number Devices", NUMBER_DEVICE),
+                                menu_item("ELECNUMBERPREVIEW", "Preview Numbering", NUMBER_PREVIEW),
+                            ],
+                            default: "ELECNUMBER",
+                        },
+                        RibbonItem::LabeledDropdown {
+                            id: "ELEC_PLC_IO",
+                            label: "I/O & PLC",
+                            icon: IO,
+                            items: vec![
+                                menu_item("ELECIO", "I/O Cross-Refs", IO),
+                                menu_item("ELECPLC", "PLC Module", PLC),
+                                menu_item("ELECPLCNEXT", "PLC Next Module", PLC_NEXT),
+                            ],
+                            default: "ELECIO",
+                        },
+                    ],
+                },
+                // ── Terminals ────────────────────────────────────────────────
+                // A terminal strip is a component; its two sides are what the
+                // netlist cannot see, so they get their own report.
+                RibbonGroup {
+                    title: "Terminals",
+                    tools: vec![
+                        RibbonItem::LargeTool(elec_tool(
+                            "ELECTERMINALS",
+                            "Terminal\nStrips",
+                            TERMINAL_STRIP,
+                        )),
+                        RibbonItem::LabeledTool(elec_tool(
+                            "ELECTSIDES",
+                            "Terminal Sides",
+                            TERMINAL_SIDES,
+                        )),
+                    ],
+                },
+                // ── Cross-Reference ──────────────────────────────────────────
+                // Report where a device's parts are, then write those
+                // references onto the drawing beside each part.
+                RibbonGroup {
+                    title: "Cross-Reference",
+                    tools: vec![
+                        RibbonItem::LargeTool(elec_tool("ELECXREF", "Cross\nReference", XREF)),
+                        RibbonItem::LabeledTool(elec_tool(
+                            "ELECXREFWRITE",
+                            "Write Xrefs",
+                            XREF_WRITE,
+                        )),
+                    ],
+                },
+                // ── Reports ──────────────────────────────────────────────────
+                // What leaves the drawing: the bill of material, the wire list,
+                // the panel arrangement, and the parts catalogue that fills the
+                // manufacturer and description columns of the first.
                 RibbonGroup {
                     title: "Reports",
                     tools: vec![
-                        RibbonItem::LargeTool(ToolDef {
-                            id: "ELECBOM",
-                            label: "Bill of\nMaterial",
-                            icon: IconKind::Glyph("\u{2637}"),
-                            event: ModuleEvent::Command("ELECBOM".to_string()),
-                        }),
-                        RibbonItem::LargeTool(ToolDef {
-                            id: "ELECWIRELIST",
-                            label: "Wire\nList",
-                            icon: IconKind::Glyph("\u{1F5C7}"),
-                            event: ModuleEvent::Command("ELECWIRELIST".to_string()),
-                        }),
-                        RibbonItem::LargeTool(ToolDef {
-                            id: "ELECWIRENUMBER",
-                            label: "Number\nWires",
-                            icon: IconKind::Glyph("\u{2318}"),
-                            event: ModuleEvent::Command("ELECWIRENUMBER".to_string()),
-                        }),
-                        RibbonItem::LargeTool(ToolDef {
-                            id: "ELECTERMINALS",
-                            label: "Terminal\nStrips",
-                            icon: IconKind::Glyph("\u{2393}"),
-                            event: ModuleEvent::Command("ELECTERMINALS".to_string()),
-                        }),
-                        RibbonItem::Tool(ToolDef {
-                            id: "ELECTSIDES",
-                            label: "Terminal\nSides",
-                            icon: IconKind::Glyph("\u{21C6}"),
-                            event: ModuleEvent::Command("ELECTSIDES".to_string()),
-                        }),
-                        RibbonItem::LargeTool(ToolDef {
-                            id: "ELECXREF",
-                            label: "Cross\nReference",
-                            icon: IconKind::Glyph("\u{21C4}"),
-                            event: ModuleEvent::Command("ELECXREF".to_string()),
-                        }),
-                        RibbonItem::Tool(ToolDef {
-                            id: "ELECXREFWRITE",
-                            label: "Write\nXrefs",
-                            icon: IconKind::Glyph("\u{270E}"),
-                            event: ModuleEvent::Command("ELECXREFWRITE".to_string()),
-                        }),
+                        RibbonItem::LargeTool(elec_tool("ELECBOM", "Bill of\nMaterial", BOM)),
+                        RibbonItem::LargeTool(elec_tool("ELECWIRELIST", "Wire\nList", WIRE_LIST)),
+                        RibbonItem::LabeledTool(elec_tool("ELECPANEL", "Panel Layout", PANEL)),
+                        RibbonItem::LabeledTool(elec_tool("ELECPART", "Parts Catalogue", PART)),
+                    ],
+                },
+                // ── Project & Sheet ──────────────────────────────────────────
+                // The sheet frame and the project that indexes the sheets, then
+                // the project-file menu and the drawing setup behind it.
+                RibbonGroup {
+                    title: "Project & Sheet",
+                    tools: vec![
+                        RibbonItem::LargeTool(elec_tool("ELECSHEET", "Sheet\nFrame", SHEET)),
+                        RibbonItem::LargeTool(elec_tool(
+                            "ELECPROJECT",
+                            "Project\nReport",
+                            PROJECT,
+                        )),
+                        RibbonItem::LabeledDropdown {
+                            id: "ELEC_PROJECT_FILES",
+                            label: "Project Files",
+                            icon: PROJECT,
+                            items: vec![
+                                menu_item("ELECPROJLIST", "List Sheets", PROJECT),
+                                menu_item("ELECPROJNEW", "New Project", PROJECT_NEW),
+                                menu_item("ELECPROJOPEN", "Open Project", PROJECT_OPEN),
+                                menu_item("ELECPROJNUM", "Renumber Project", PROJECT_RENUMBER),
+                            ],
+                            default: "ELECPROJLIST",
+                        },
+                        RibbonItem::LabeledDropdown {
+                            id: "ELEC_SHEET_DRAWING",
+                            label: "Drawing",
+                            icon: NEW_DRAWING,
+                            items: vec![
+                                menu_item("ELECNEW", "Prepare Drawing", NEW_DRAWING),
+                                menu_item("ELECSETUP", "Electrical Setup", SETUP),
+                            ],
+                            default: "ELECNEW",
+                        },
                     ],
                 },
             ]
         })
     }
 }
-
-
-
-
-

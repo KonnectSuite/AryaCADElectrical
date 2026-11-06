@@ -75,14 +75,66 @@ So the electrical layer *does* read the customer's drawings — but it sees 4 co
 
 ### Library and SkyCAD model landed
 - **`library/`** — 20 symbols, **18 load cleanly** (`ELECLIB` → `loaded 18 symbol(s) … 0 failed, 786 preview segment(s)`; 2 are filename/class collisions, documented in [`library-bootstrap.md`](library-bootstrap.md)). Two sources: harvested from the customer's own drawings (`BOX`, `DOT`, `WDDOT`, `TERMINAL`, `Ground`, `ELGND`, `CONT-NO`, `CONT-NC`, `PB-NO`, `PB-NC`, `TY`, `PT`, `PLUG`, `ELCB`, `FAN`, `PHONEJACK`, `24VDCPRX`, `Arrow-l`) plus a licence-clean generated starter set under `library/starter/`. `library/library.tsv` format is `symbol \t class \t attributes \t scale` (4 columns, `|`-separated attribute tags).
-- **`library/wd_m_profile.tsv`** — the customer's full 67-attribute `WD_M` settings with a per-sheet agreement count, extracted from all 34 sheets (`tools/wd_m_profile.py`). This is the numbering contract in machine-readable form.
+- **`library/wd_m_profile.tsv`** — the customer's full **77-attribute** `WD_M` settings with a per-sheet agreement count, extracted from all 34 sheets (`tools/wd_m_profile.py`). This is the numbering contract in machine-readable form. (Corrected in round 2: 34/34 sheets carry them, 68 inserts, 11 attributes empty — not "67 attributes on 32/34".)
 - **`tools/`** — `harvest_library.py`, `make_library.py`, `wd_m_profile.py`, `dxfio.py` (dependency-free DXF reader/writer).
 - **`tests/ecad/`** — 12 headless batches plus `run_smoke.py` covering library load, placement, reset, scale, make-symbol, mixed, and real-sheet runs.
 - **[`skycad-model.md`](skycad-model.md)** — 1,038-line clean-room design spec from static analysis of `SkyCadKernel.dll` and the installed environment: 240 classes as objects, 644 property definitions, 17 typed relation kinds, 278 data-defined queries, report = query + ordered column spec + template anchor, and one expression engine shared by queries, property defaults and numbering formats. Full column sets for all 11 templates, a Rust struct sketch, and the licence boundary. **No SkyCAD code or assets were copied.**
 
 ### Safety note before the next round
 - **Do not run `ELECNUMBER` (apply) on the customer's real sheets.** On `FC1000495-003` its preview says it *would* rewrite the real `M326` tags to `M1` (3 changed) and skip `-H` as structured. Preview is safe; apply is destructive until numbering reads the real tags.
-- **Unit scale mismatch:** the sheets are ~35.5 × 25.1 units per A3 with symbols 0.06–1.25 units, text 0.125, while the drafting aids assume millimetres (junction dot radius 1.0, wire-number height 2.5, `ELECINSERT` step 40, `ELECSHEET` paper 420×297). A 10–20× mismatch — the frame lands at 1:10 on real sheets.
+- **Unit scale mismatch:** the sheets are ~35.5 × 23.5 drawing units (frame 35.0 × 23.0), symbols 0.06–1.25 units, text 0.125/0.15, while the drafting aids assume millimetres (junction dot radius 1.0, wire-number height 2.5, `ELECINSERT` step 40, `ELECSHEET` paper 420×297). The DXF is unitless (`$INSUNITS=0`) and the title-block `SCALE:` field is empty on all 34, so plot scale is not recoverable from the file — treat units as abstract. (Round 2 corrected the earlier "25.1" figure: it was an A3 inference, not a measurement.)
+
+---
+
+## Round 2 — 2026-11-06
+
+The round's theme was the user's new requirement: *"Make sure the integration into OpenCad fits and feels right. like it was made for it."* Two things had to change — the electrical layer had to see real customer drawings, and the UI had to stop looking bolted on.
+
+### The big one: real sheets now yield real devices
+The customer's 34 sheets were **exploded**: on 31 of them the symbol inserts are gone and their ATTRIB values became plain `TEXT`, so the attribute-based collector found nothing. `components_of()` now also recovers **reference designators from TEXT** (IEC 81346 shapes `K12` / `264CB` / `XXX`, with the exclusions that keep part numbers, phases, ratings and notes out), de-duplicates multi-part devices by tag, resolves the class from the reference family, and picks up the description from the TEXT just below the tag.
+
+| Sheet | Round 1 | Round 2 |
+|---|---|---|
+| `FC1000495-002` | **0 components** | **13 components**, correctly classified |
+| `FC1000495-041` | 0 | 15 |
+| `FC1000495-046` | 0 | 5 |
+| `FC1000495-003` (attributes survive here) | 4 | 4 attribute devices + 6 recovered |
+
+`ELECBOM` on sheet 002 now writes meaningful rows:
+```
+Circuit Breaker      6  208CB, 224CB, 264CB, 270CB, 276CB, 282CB
+Power Distribution   3  203PDB, 207PDB, 261PDB   100 AMP FUSED
+Fuse                 2  212FB, 218FB
+Connector            2  4214CON, 4216CON
+```
+
+### Collectors read the space the user is looking at
+`components_of()` compared `owner_handle == model_space`, so a symbol placed on a **layout sheet** was invisible: on `tests/fixtures/embedded-image-print.dxf` (whose inserts are owned by `*Paper_Space`) `ELECINSERT` reported success and `ELECLIST` then said "no components found". The collector now accepts model space and every `*Paper_Space*` layout, and a null owner (some writers omit the `330` group). Verified: `ELECINSERT FUSE` → `placed FUSE as -F1`, then `ELECLIST` lists `Fuse -F1`.
+
+### The drawing configures the layer (`WD_M`)
+- **`ELECSETUP`** (new command) prints the drawing's tag/wire/xref format, mode, start value, suffixes and the library status. On a real sheet:
+  `tag %F%N mode R (existing references are fixed) start 1 suffixes A,B,C,D,E,F,G,H,J · wire %N mode R · xref %N`.
+- **`ELECNUMBER`** takes `TAGFMT`/`TAG-START` from `WD_M` and, when `TAGMODE`/`WIREMODE` is `R`, **freezes existing references**. This retires the round-1 safety warning: on `FC1000495-003` the preview changed from "would rename `M326` to `M1`" to **"would write 0 tag(s)"**.
+- **`ELECWIRENUMBER`** takes `WIREFMT`/`WIRE-START` from the same block.
+- **`ELECLIST`/`ELECBOM`** report the symbol's class from the loaded library (`CONT-NO` → `Contactor`) instead of its block name.
+
+### No more dead ribbon buttons
+Eight commands existed only in argument form, so their ribbon buttons answered "Unknown command". `ELECLIB`, `ELECPART`, `ELECSETATTR`, `ELECPROJNEW`, `ELECPROJOPEN`, `ELECPLC`, `ELECPLCNEXT` and `ELECPANEL` now print their usage line instead. Verified for all eight.
+
+### UI integration (ui-integrator)
+The Electrical tab is no longer an emoji toolbar. It was rebuilt in the app's own idiom:
+- **29 hand-authored SVG icons** in `assets/icons/elec_*.svg`, matched to the house set (24×24, grey `#B4B6B9` body + blue `#6DB7ED` accent, stroke 1.625 — the set does not use `currentColor`).
+- **7 ribbon groups / 22 controls / 31 command ids**: Symbols, Wiring, Devices, Terminals, Cross-Reference, Reports, Project & Sheet. Dropdowns follow the Annotate `dimension_menu_items()` pattern, and every `ToolDef.id` is verbatim the command name.
+- **Reachable commands went from 14 to 31** — 17 previously had no UI at all, plus the new `ELECSETUP`.
+- **Symbol palette rebuilt** (5.4 KB → ~22 KB) inside the app's modal harness: search over name *and* class, `N / M` count, 56 px thumbnails, class column, zebra/hover rows from the same `row_button` style the Layers/Xref lists use, whole-row click still sends `Message::Command("ELECPLACE <name>")`, themed scrollbar and empty states. State lives in the widget `tree` because the modal body is built twice per frame.
+
+Gate on the frozen tree: `cargo build --release` exit 0 (4 m 44 s), `cargo check --release --tests` exit 0, substituted smoke batch exit 0 (`ELECLIB: loaded 27 symbol(s)`, `ELECLIST` lists 6 components with library classes, `ELECBOM: 6 components -> 5 rows`).
+
+### Known gaps carried into the next round
+- `ELECINSERT` gives the same tag to two consecutive placements in one batch (`-K1` twice) — the "next free tag" needs to advance from what this run already placed.
+- Wire/net recovery tolerances are specified but not implemented yet (`reports/real-sheet-model.md`: exact joins ≤ 0.001, T-junction ≤ 0.02, terminal bridge 0.14 with a `TERMINAL` within 0.09, skip wire-hop arcs).
+- `ELECNUMBER`'s own collector still scans model space only (the `components_of` fix was not propagated to all 14 collector sites).
+- Terminals cannot be named: the customer DXFs contain no strip/number text at all.
 
 ### Next round
 1. **Component recognition from real ACADE symbols** — map `TAG1`/`DESC1`/`TAG`/`DESC` attribute conventions and read tags off the real blocks, so a real sheet yields its true device list instead of 4 items.
