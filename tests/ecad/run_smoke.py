@@ -457,7 +457,12 @@ def run_smoke(baseline, symbols):
           and abs(dots[0][1]) < 1e-6 and abs(dots[0][2] - 1.0) < 1e-6,
           f"{dots}")
 
-    listing = [line for line in text.splitlines() if line.strip().startswith(("CLASS ", "CONTACT_", "MOTOR", "TERMINAL", "EARTH", "FUSE"))]
+    listing = [line for line in text.splitlines()
+               if line.startswith("CLASS ")
+               or (len(line) > 40 and line.split()[0] in (
+                   "Contactor", "Motor", "Terminal", "Earth", "Fuse", "Button",
+                   "Selector", "Relay", "Lamp", "Sensor", "Drive", "Transformer",
+                   "Power Supply", "Circuit Breaker", "Cable"))]
     check("ELECLIST printed the placed components",
           any("X1:1" in line for line in listing) and any("-K1" in line for line in listing),
           f"{len(listing)} listing rows")
@@ -469,7 +474,7 @@ def run_smoke(baseline, symbols):
         check("ELECBOM wrote the CSV header",
               header == "Class name,Part number,Manufacturer,Description,Qty,Where used",
               header)
-        check("ELECBOM wrote one row per symbol", len(rows) - 1 == 6,
+        check("ELECBOM wrote one row per (class, part)", len(rows) - 1 == 5,
               f"{len(rows) - 1} rows: {rows[1:]}")
         joined = "\n".join(rows)
         check("BOM carries the part number and location",
@@ -1001,14 +1006,17 @@ def run_real_sheets(current):
                         os.path.join(WORK, "real_batch_002.txt"), {"@BOM@": bom})
     code, text = run(current, [current, "--each", batch, sheet_002], "real_002")
     check("real sheet 002 batch exits 0", code == 0, f"exit {code}")
-    check("ELECLIST finds no components on a sheet whose symbols carry no attributes",
-          "ELECLIST: no electrical components found" in text, "")
-    check("ELECBOM finds no components on that sheet",
-          "ELECBOM: no electrical components found" in text, "")
-    check("ELECBOM writes no CSV when it has nothing to report",
-          not os.path.exists(bom), f"{bom} exists" if os.path.exists(bom) else "no file")
-    check("ELECNUMBERPREVIEW reports no components on that sheet",
-          "no electrical components found" in text and "ELECNUMBER:" in text, "")
+    # The sheet's symbols were exploded, so the tags survive only as TEXT. Round 2's
+    # recovery reads them: 13 components on this sheet, 4 BOM rows.
+    check("ELECLIST recovers the component tags from the sheet's TEXT",
+          "CLASS" in text and "264CB" in text and "4214CON" in text, "")
+    check("ELECBOM counts the recovered components",
+          "ELECBOM: 13 component(s)" in text and "4 bill-of-material row(s)" in text, "")
+    check("ELECBOM writes the CSV for that sheet", os.path.exists(bom),
+          f"{bom} exists" if os.path.exists(bom) else "no file")
+    check("ELECNUMBERPREVIEW still sees no attributed inserts on that sheet",
+          "ELECNUMBER: no electrical components found" in text,
+          "the exploded symbols carry no attributes")
 
     # --- sheet 003: the only sheets whose module inserts carry attributes ----- #
     sheet_003 = prepare_realsheet("FC1000495-003.dxf")
@@ -1028,13 +1036,14 @@ def run_real_sheets(current):
                if line.startswith(("HMS21", "HMO13"))]
     check("ELECLIST reports the module inserts that do carry attributes",
           len(listing) == 4, f"{len(listing)} component rows: {listing[:2]}")
-    check("ELECBOM counts those components", "ELECBOM: 4 component(s)" in text, "")
+    check("ELECBOM counts the attributed and recovered components",
+          "ELECBOM: 10 component(s)" in text, "")
     check("ELECNUMBERPREVIEW sees the same components", "ELECNUMBER: 4 component" in text, "")
     if os.path.exists(bom):
         with open(bom, "r", encoding="utf-8") as handle:
             rows = [line for line in handle.read().splitlines() if line.strip()]
         check("ELECBOM CSV on real data has one row per (class, part)",
-              len(rows) - 1 == 2, f"{len(rows) - 1} data rows: {rows[1:]}")
+              len(rows) - 1 == 4, f"{len(rows) - 1} data rows: {rows[1:]}")
         check("the BOM 'Class name' column is the BLOCK NAME, not the ACADE class",
               any(row.startswith("HMS21,") for row in rows[1:])
               and any(row.startswith("HMO13,") for row in rows[1:]),
@@ -1118,6 +1127,9 @@ def main(argv=None):
     parser.add_argument("--baseline", default=None,
                         help="path to the pre-rebuild binary copy "
                              "(default: %%TEMP%%/ocs_baseline.exe)")
+    parser.add_argument("--no-real-sheets", action="store_true",
+                        help="skip the customer-sheet baseline: those fixtures are not in "
+                             "the repository, so CI runs the rest of the suite")
     parser.add_argument("--current", default=None,
                         help="path to the current build "
                              "(default: %%TEMP%%/ocs_current.exe, else target/release)")
@@ -1167,8 +1179,12 @@ def main(argv=None):
         run_edge_cases(baseline)
         run_fabricated(baseline)
         run_client_library(baseline, current, client_symbols)
-        run_real_sheets(current)
-        run_machine_files()
+        if args.no_real_sheets:
+            section("13. baseline on the real client sheets (skipped: --no-real-sheets)")
+            run_machine_files()
+        else:
+            run_real_sheets(current)
+            run_machine_files()
     finally:
         if cache and os.path.exists(cache):
             os.remove(cache)

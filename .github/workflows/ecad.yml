@@ -37,3 +37,15 @@ jobs:
 
       - name: Run the electrical domain tests
         run: cargo test -p elec --lib
+
+      - name: Build the release binary
+        run: cargo build --release -j 2
+
+      - name: Headless ECAD smoke suite
+        env:
+          PYTHONUTF8: "1"
+        run: >-
+          python tests/ecad/run_smoke.py
+          --baseline target/release/OpenCADStudio.exe
+          --current target/release/OpenCADStudio.exe
+          --no-real-sheets
