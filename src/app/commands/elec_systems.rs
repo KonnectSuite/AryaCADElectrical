@@ -143,13 +143,124 @@ impl OpenCADStudio {
                 }
                 self.insert_system(i, system, position)
             }
+            Some("SAVE") => {
+                let Some(name) = words.next() else {
+                    self.command_line
+                        .push_output("ELECSYSTEM: use ELECSYSTEM SAVE <name>.");
+                    return Task::none();
+                };
+                self.elec_system_save(i, name)
+            }
             Some(_) => {
                 self.command_line.push_output(
-                    "ELECSYSTEM: use ELECSYSTEM [LIST] or ELECSYSTEM INSERT <name> [x,y].",
+                    "ELECSYSTEM: use ELECSYSTEM [LIST], INSERT <name> [x,y] or SAVE <name>.",
                 );
                 Task::none()
             }
         }
+    }
+
+    /// `ELECSYSTEM SAVE <name>`: capture the drawing's tagged devices and wires as a system.
+    ///
+    /// The fragment is written inside the project (`<project>/systems/<name>.tsv`) so it
+    /// travels with the project and overrides a library system of the same name. Offsets are
+    /// relative to the lower-left device, so `ELECSYSTEM INSERT <name>` can place it anywhere.
+    fn elec_system_save(&mut self, i: usize, name: &str) -> Task<Message> {
+        let Some(folder) = super::elec::project_dir_for_revisions() else {
+            self.command_line.push_output(
+                "ELECSYSTEM SAVE: no project is loaded — ELECPROJNEW or ELECPROJOPEN first.",
+            );
+            return Task::none();
+        };
+        let stem: String = name
+            .trim()
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if stem.is_empty() {
+            self.command_line
+                .push_output("ELECSYSTEM: use ELECSYSTEM SAVE <name>.");
+            return Task::none();
+        }
+        let (devices, wires) = {
+            let document = &self.tabs[i].scene.document;
+            (
+                super::elec::system_devices(document),
+                super::elec::wire_segments(document),
+            )
+        };
+        if devices.is_empty() {
+            self.command_line
+                .push_output("ELECSYSTEM SAVE: no tagged devices on this drawing.");
+            return Task::none();
+        }
+        let directory = folder.join("systems");
+        let _ = std::fs::create_dir_all(&directory);
+        let path = directory.join(format!("{stem}.tsv"));
+        if path.exists() {
+            let message = format!(
+                "ELECSYSTEM: {} already exists — delete it or save under another name.",
+                path.display()
+            );
+            self.command_line.push_output(&message);
+            return Task::none();
+        }
+        let origin_x = devices
+            .iter()
+            .map(|(_, _, x, _)| *x)
+            .fold(f64::MAX, f64::min);
+        let origin_y = devices
+            .iter()
+            .map(|(_, _, _, y)| *y)
+            .fold(f64::MAX, f64::min);
+        let mut text = String::from(
+            "# AryaCAD system saved from a drawing\n# device <dx> <dy> <symbol>\n# wire <x1> <y1> <x2> <y2>\n",
+        );
+        for (_tag, block, x, y) in &devices {
+            text.push_str(&format!(
+                "device {:.4} {:.4} {}\n",
+                x - origin_x,
+                y - origin_y,
+                block
+            ));
+        }
+        for (x1, y1, x2, y2) in &wires {
+            text.push_str(&format!(
+                "wire {:.4} {:.4} {:.4} {:.4}\n",
+                x1 - origin_x,
+                y1 - origin_y,
+                x2 - origin_x,
+                y2 - origin_y
+            ));
+        }
+        match std::fs::write(&path, text) {
+            Ok(()) => {
+                let message = format!(
+                    "ELECSYSTEM: saved {} to {} — {} device(s) ({}), {} wire(s).",
+                    stem,
+                    path.display(),
+                    devices.len(),
+                    devices
+                        .iter()
+                        .map(|(tag, _, _, _)| tag.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    wires.len()
+                );
+                self.command_line.push_output(&message);
+            }
+            Err(error) => self.command_line.push_output(&format!(
+                "ELECSYSTEM: cannot write {}: {error}",
+                path.display()
+            )),
+        }
+        Task::none()
     }
 
     /// Place a system's devices and wires, retagged into the drawing's own sequences.

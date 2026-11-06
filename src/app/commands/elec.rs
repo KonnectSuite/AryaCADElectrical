@@ -750,6 +750,48 @@ pub(super) fn device_pin_points(document: &codec::Document) -> Vec<(f64, f64, St
         .collect()
 }
 
+/// Tagged symbol inserts with their positions, for `ELECSYSTEM SAVE`.
+pub(super) fn system_devices(document: &codec::Document) -> Vec<(String, String, f64, f64)> {
+    let spaces = OpenCADStudio::drawing_spaces(document);
+    let mut out = Vec::new();
+    for entity in document.entities() {
+        if !spaces.contains(&entity.common().owner_handle) {
+            continue;
+        }
+        let codec::EntityType::Insert(insert) = entity else {
+            continue;
+        };
+        if insert.attributes.is_empty() || is_setup_block(&insert.block_name) {
+            continue;
+        }
+        let tag = insert
+            .attributes
+            .iter()
+            .find(|attribute| is_tag_attribute(&attribute.tag))
+            .map(|attribute| attribute.value.trim().to_string())
+            .unwrap_or_default();
+        if tag.is_empty() {
+            continue;
+        }
+        out.push((
+            tag,
+            insert.block_name.clone(),
+            insert.insert_point.x,
+            insert.insert_point.y,
+        ));
+    }
+    out
+}
+
+/// The drawing's wire segments as `(x1, y1, x2, y2)`, for `ELECSYSTEM SAVE`.
+pub(super) fn wire_segments(document: &codec::Document) -> Vec<(f64, f64, f64, f64)> {
+    wire_graph(document)
+        .wires
+        .into_iter()
+        .map(|wire| (wire.from.x, wire.from.y, wire.to.x, wire.to.y))
+        .collect()
+}
+
 impl OpenCADStudio {
     /// Turn every block insert in the active tab into a component.
     ///
