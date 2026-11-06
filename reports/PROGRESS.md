@@ -484,3 +484,79 @@ A cable is one drawn bundle: its individual **conductors are not separate nets**
 shield bracket is a graphic, not a connectivity object. Per-core nets (a 3-core cable whose
 cores land on three different wire pairs) needs cores as entities; that is the next depth
 step, after panel layout.
+
+---
+
+## Round 11 — 2026-11-06 (panel layout with real footprints and cut-outs)
+
+`ELECPANEL` drew fixed 14×10 boxes on a grid and wrote a loose DXF. It now lays out the
+panel from a footprint table, draws the enclosure, DIN rails, door and cut-outs, and
+registers the drawing in the project.
+
+### The footprint table
+
+New `library/panel/footprints.tsv`: one row per device class with mounting width, height
+and mount point (`rail`, `door` or `plate`), plus a `DEFAULT` row. It targets 28 classes
+(the seven classes the starter library produces and the parts catalogue's classes); a
+project can override any row with `<project>/footprints.tsv`. Millimetres, because a panel
+drawing is a manufacturing document.
+
+### The layout
+
+Rail devices are placed left to right on 35 mm DIN rails (wrapping at 560 mm), plate-mounted
+devices on plate rows below, and door devices along the door band at the top with a round
+cut-out each. Enclosure size comes from the union of the placements plus edge clearance.
+Eight placed symbols (two contactors, fuse, breaker, terminal, button, motor, PLC input):
+
+```
+ELECPANEL: 8 device(s); enclosure 420x380 mm; 1 rail(s), 1 door cut-out(s);
+           wrote …\panel.dxf; registered in …\project.eprj.
+```
+
+The saved drawing, read back independently:
+
+| Layer | Contents |
+|---|---|
+| `PANEL-ENCLOSURE` | 4 lines (outline) |
+| `PANEL-DOOR` | 8 lines (door rectangle + handle) |
+| `PANEL-RAIL` | 2 lines (one 35 mm DIN rail band) |
+| `PANEL-DEVICE` | 32 lines (8 footprints × 4 edges) |
+| `PANEL-CUTOUT` | 1 circle, radius 15 mm (the 30 mm button) |
+| `PANEL-TEXT` | 25 texts (tag, class, W×H, title) |
+
+Footprint widths read back from the rectangles are `{8, 18, 30, 45, 90, 100}` mm — exactly
+the table's Terminal, Fuse/Breaker, Button, Contactor, Motor, PLC Digital Input rows. The
+title reports `420x380 mm`.
+
+### Registered in the project
+
+The panel drawing joins the project file once, as the next sheet:
+
+```
+sheet blank11.dxf
+sheet panel.dxf
+number P2
+title Panel layout
+```
+
+A second `ELECPANEL` run says `already a project sheet` and does not duplicate the entry
+(the file-existence check runs after the save, and the relative path is written without the
+Windows verbatim prefix).
+
+### Gate
+
+```
+cargo check --release --tests   exit 0
+cargo test -p elec --lib        131 passed
+cargo build --release -j 1      14 m 09 s (4-CPU affinity)
+```
+
+Rounds 8–10 verification is unchanged (real sheets 8/10/4 nets and 53/39; declared library
+pins, pin columns, navigation and drawn cables all pass), and the smoke suite stays at 92/99
+with the same seven pre-round-2 expectations.
+
+### Still open on panel layout
+
+No part-level footprint overrides (a 2-pole breaker and a 4-pole breaker are both 18 mm
+today), no enclosure catalogue or wall-mount/door dimensioning, and the door devices are
+drawn on the plate view rather than on a separate door elevation.

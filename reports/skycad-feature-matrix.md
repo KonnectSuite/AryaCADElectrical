@@ -223,3 +223,16 @@ Current honest score: **1 implemented, 14 partial, 3 missing, 1 not applicable.*
 true gaps: panel layout with footprints and cut-outs, configuration management / variants,
 design-by-systems (plus the harness deferred), and inside the partial features the per-core
 cable nets, clickable cross-reference labels, and the `ELECPROJNUM` / `WD_M` interaction.
+
+---
+
+## Round 11 update — panel layout from footprints (2026-11-06)
+
+| # | Feature | New status | Evidence |
+|---|---|---|---|
+| 11 | Panel layout design | **Partial+ (footprint-driven)** | `library/panel/footprints.tsv` (28 class rows + `DEFAULT`, project override at `<project>/footprints.tsv`) gives each class its mounting width, height and mount point (`rail`/`door`/`plate`). `ELECPANEL` places rail devices on 35 mm DIN rails (wrapping at 560 mm), plate devices on plate rows and door devices along the door band with round cut-outs, sizes the enclosure from the placements (`420x380 mm` on an 8-device drawing), draws enclosure/door/handle/rails/footprints/cut-outs on six layers, and registers the drawing once in `project.eprj` (`sheet panel.dxf`, `number P2`, `title Panel layout`). Read back: 4 enclosure lines, 8 door lines, 2 rail lines, 32 device lines, 1 r=15 cut-out; widths {8,18,30,45,90,100} mm match the table. Missing: part-level footprint overrides (2-pole vs 4-pole breaker), an enclosure catalogue, and a separate door elevation. |
+
+Current honest score: **1 implemented, 14 partial, 3 missing, 1 not applicable.** Remaining
+true gaps: configuration management / variants and design-by-systems (18, 19), the deferred
+harness (17), and inside the partial features the per-core cable nets, clickable
+cross-reference labels, and the `ELECPROJNUM` / `WD_M` interaction — plus packaging.

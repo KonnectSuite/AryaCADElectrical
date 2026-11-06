@@ -57,6 +57,8 @@ Fixtures and data:
   attributed devices; `FC1000495-046` is flattened (53 layer-0 wires, 39 nets).
 - `library/` â€” 18 symbol DXFs harvested from those sheets + `library.tsv`
   (`symbol \t class \t attributes \t scale`). `library/starter/` â€” 27 generated IEC symbols.
+- `library/panel/footprints.tsv` — panel footprint per device class (width, height, mount
+  point); a project may override it with `<project>/footprints.tsv`.
 - `library/parts/parts.tsv` â€” the local parts catalogue (29 parts, 13 classes).
 - `tools/` â€” `dxfio.py` (DXF reader/writer), `harvest_library.py`, `make_library.py`,
   `wd_m_profile.py`, `parts_import.py`, `parts_check.py`, `make_io_sample.py`.
@@ -75,6 +77,11 @@ Fixtures and data:
   regenerated), `ELECWIRELIST <out.csv>` and the `ELECREPORT` XLSX wire sheet carry
   `From pin`/`To pin`, and `ELECHIGHLIGHT <tag>` / `ELECGOTO <tag>` live in a Navigation
   ribbon group.
+- **Panel layout from footprints (round 11):** `library/panel/footprints.tsv` gives each
+  class a width, height and mount point (`rail`/`door`/`plate`); `ELECPANEL` places the
+  devices on 35 mm DIN rails, sizes the enclosure from them, draws the door with round
+  cut-outs, and registers the drawing once in `project.eprj`. Measured on an 8-device
+  drawing: `420x380 mm; 1 rail(s), 1 door cut-out(s)`, footprints 8/18/30/45/90/100 mm.
 - **Cables drawn as schematic objects (round 10):** `ELECCABLEDRAW <tag> [CORES=]
   [SHIELD=yes] [PART=] [DESC=]` chains a route onto the `CABLES` layer, writes the tag and
   the shield bracket, and upserts the schedule record as each segment is drawn.
@@ -87,23 +94,23 @@ Fixtures and data:
 
 ## The next three things, in order
 
-1. **Panel layout with real footprints and cut-outs** — `ELECPANEL` still draws fixed
-   14×10 boxes on a grid. Add `footprint` columns to `library/parts/parts.tsv`, place the
-   footprint blocks on DIN-rail rows, size the enclosure from the union of footprints, and
-   register the panel drawing in the project.
-2. **Configuration management / design-by-systems** — extend `.eprj` with `variant <name>`
+1. **Configuration management / design-by-systems** — extend `.eprj` with `variant <name>`
    blocks (sheet list + excluded tags) and add `library/systems/` fragments with
    instantiate-and-retag, so a motor starter drawn once can be dropped into a new project.
    Then `ELECPROJNUM` should read each sheet's `WD_M` freeze (it respects `ELECBUILT` only).
-3. **Per-core cable nets and click-through cross-references** — a drawn cable is one bundle
+2. **Per-core cable nets and click-through cross-references** — a drawn cable is one bundle
    today: its cores are not separate nets. Make each core an entity that can carry a wire
    net, so a 3-core cable can land on three different pairs. In parallel, give
    `ELECXREFWRITE` labels a payload (extension dictionary or side table mapping label →
    handle) so `ELECHIGHLIGHT`/`ELECGOTO` can be bound to a double-click on the label and
    the PDF can carry link annotations.
+3. **Package the suite** — installer/portable build, a shipped sample project, a quick-start
+   document, the refreshed `tests/ecad/run_smoke.py` (seven pre-round-2 expectations to
+   replace) and CI running `cargo check --release --tests`, `cargo test -p elec --lib` and
+   the headless verification batches.
 
-Then: harness design stays deferred (needs lengths a 2D schematic does not carry), and the
-refreshed smoke suite should replace the seven pre-round-2 expectations.
+Then: harness design stays deferred (needs lengths a 2D schematic does not carry), panel
+layout still needs part-level footprint overrides and a separate door elevation.
 
 ## Gotchas that cost time (do not relearn these)
 
