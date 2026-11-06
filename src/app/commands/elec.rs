@@ -1,4 +1,4 @@
-﻿//! Electrical (ECAD) commands.
+//! Electrical (ECAD) commands.
 //!
 //! These are the host-side features of the electrical layer. They read placed symbols
 //! from the drawing, turn each block insert and its attributes into an `elec::Component`,
@@ -285,6 +285,396 @@ fn project_is_built() -> bool {
 /// The loaded project's folder, for sibling command modules (revision control).
 pub(super) fn project_dir_for_revisions() -> Option<std::path::PathBuf> {
     project_dir().read().ok().and_then(|guard| guard.clone())
+}
+
+// ---------------------------------------------------------------------------------------
+// Wire graph: wire segments, device pins and the hints that join them
+// ---------------------------------------------------------------------------------------
+
+/// Wire segments and device pins of one drawing, shared by every connectivity command.
+///
+/// Before this existed each command built its own list, and the lists disagreed: the wire
+/// list saw *every* `LINE` in the drawing (symbol strokes, the sheet frame and the title
+/// block included — 132 "wire segments" on a sheet that has 8), the terminals report saw
+/// only attributed inserts, and no command knew where a symbol's pins were. A net list is
+/// only as good as those two decisions, so they are made once, here.
+struct WireGraph {
+    wires: Vec<::elec::geometry::WireSeg>,
+    anchors: Vec<::elec::geometry::Anchor>,
+    hints: ::elec::geometry::NetlistHints,
+}
+
+impl WireGraph {
+    fn netlist(&self, tolerance: f64) -> ::elec::geometry::GeoNetlist {
+        ::elec::geometry::netlist_with_hints(
+            &self.wires,
+            &self.anchors,
+            tolerance,
+            &self.hints,
+            true,
+        )
+    }
+
+    fn label_of(&self, id: u64) -> String {
+        self.anchors
+            .iter()
+            .find(|anchor| anchor.id == id)
+            .map(|anchor| anchor.display_label())
+            .unwrap_or_else(|| "?".to_string())
+    }
+}
+
+/// A wire endpoint is a pin's connection point up to this distance.
+///
+/// Measured on the customer's sheets: an ACADE attribute pin is exact (0.000), while the
+/// generated symbol library leaves its pin stub 0 units away but a hand-placed wire can be a
+/// few thousandths off. 0.2 also covers the 0.125 symbol-pin gap the print files show, where
+/// the wire stops short of the contact.
+const PIN_ASSOC: f64 = 0.2;
+
+/// Two wire ends on either side of one terminal block: the pass-through gap.
+const TERMINAL_GAP: f64 = 0.14;
+
+/// The midpoint of a terminal pass-through must be this close to the terminal block.
+const TERMINAL_MIDPOINT: f64 = 0.09;
+
+/// Wire length below which a layer-0 line is symbol geometry rather than a wire.
+const FLAT_WIRE_MIN: f64 = 0.5;
+
+/// The nearest of `points` to `target`, if it is within `max`.
+fn nearest_point(
+    points: &[::elec::geometry::Point],
+    target: ::elec::geometry::Point,
+    max: f64,
+) -> Option<::elec::geometry::Point> {
+    let mut best: Option<(f64, ::elec::geometry::Point)> = None;
+    for point in points {
+        let distance = ((point.x - target.x).powi(2) + (point.y - target.y).powi(2)).sqrt();
+        if distance <= max && best.map(|(seen, _)| distance < seen).unwrap_or(true) {
+            best = Some((distance, *point));
+        }
+    }
+    best.map(|(_, point)| point)
+}
+
+/// The pins a block insert exposes, in world coordinates.
+///
+/// Two sources, in order of authority:
+///
+/// * ACADE wire-connection attributes (`X1TERM02`): the attribute's insertion point is the
+///   pin, or its value when the writer stored `x,y` there (this app's PLC modules do);
+/// * the block's own geometry: the ends of its lines and the cardinal points of its circles.
+///   The generated symbol library carries no pin attributes, so a symbol placed with
+///   `ELECINSERT` is anchored from its stubs.
+///
+/// The returned name is empty for geometry-derived pins: the drawing does not say which
+/// number that point is, so the caller numbers the pins that actually find a wire.
+fn insert_pins(
+    document: &codec::Document,
+    insert: &codec::entities::Insert,
+) -> Vec<(::elec::geometry::Point, String)> {
+    use ::elec::geometry::Point;
+
+    let mut declared: Vec<(Point, String)> = Vec::new();
+    for attribute in &insert.attributes {
+        let Some(number) = ::elec::pin_number(&attribute.tag) else {
+            continue;
+        };
+        let point = ::elec::parse_point(&attribute.value)
+            .map(|(x, y)| Point::new(x, y))
+            .unwrap_or_else(|| {
+                Point::new(attribute.insertion_point.x, attribute.insertion_point.y)
+            });
+        declared.push((point, number));
+    }
+    if !declared.is_empty() {
+        return declared;
+    }
+
+    let Some(record) = document.block_records.get(insert.block_name.as_str()) else {
+        return Vec::new();
+    };
+    let base = record.base_point;
+    let (scale_x, scale_y) = (insert.x_scale(), insert.y_scale());
+    let (sin, cos) = insert.rotation.sin_cos();
+    let to_world = |x: f64, y: f64| -> Point {
+        let local_x = (x - base.x) * scale_x;
+        let local_y = (y - base.y) * scale_y;
+        Point::new(
+            insert.insert_point.x + local_x * cos - local_y * sin,
+            insert.insert_point.y + local_x * sin + local_y * cos,
+        )
+    };
+    let mut points: Vec<Point> = Vec::new();
+    for handle in &record.entity_handles {
+        match document.get_entity(*handle) {
+            Some(codec::EntityType::Line(line)) => {
+                points.push(to_world(line.start.x, line.start.y));
+                points.push(to_world(line.end.x, line.end.y));
+            }
+            Some(codec::EntityType::LwPolyline(polyline)) => {
+                for vertex in &polyline.vertices {
+                    points.push(to_world(vertex.location.x, vertex.location.y));
+                }
+            }
+            Some(codec::EntityType::Circle(circle)) => {
+                let (cx, cy) = (circle.center.x, circle.center.y);
+                let radius = circle.radius;
+                for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                    points.push(to_world(cx + dx * radius, cy + dy * radius));
+                }
+            }
+            _ => {}
+        }
+    }
+    // The block corners and the body ends are all in here; the netlist only keeps the ones a
+    // wire actually reaches, so a candidate that is symbol outline costs nothing.
+    points.sort_by(|left, right| {
+        left.x
+            .partial_cmp(&right.x)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(left.y.partial_cmp(&right.y).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    points.dedup_by(|left, right| {
+        (left.x - right.x).abs() <= 1e-6 && (left.y - right.y).abs() <= 1e-6
+    });
+    points
+        .into_iter()
+        .map(|point| (point, String::new()))
+        .collect()
+}
+
+/// Build the drawing's wires, device pins and connectivity hints.
+///
+/// The wire rule is the one measured on the customer's drawings: a sheet that keeps its
+/// ACADE `WIRES` layer is read from that layer alone; a flattened print (30 of the 34
+/// sheets) falls back to layer-0 lines at least half a unit long, because symbol strokes
+/// are shorter than that and the frame is longer. Everything else on the sheet is not a
+/// wire: `WIRENO` labels, symbol strokes, hatch and title block.
+fn wire_graph(document: &codec::Document) -> WireGraph {
+    use ::elec::geometry::{Anchor, NetlistHints, Point, WireSeg};
+
+    let mut lines: Vec<(String, Point, Point)> = Vec::new();
+    let mut polylines: Vec<(String, Vec<Point>)> = Vec::new();
+    let mut terminals: Vec<Point> = Vec::new();
+    let mut junctions: Vec<Point> = Vec::new();
+    let mut inserts: Vec<&codec::entities::Insert> = Vec::new();
+    let mut reference_texts: Vec<(String, f64, f64)> = Vec::new();
+
+    for entity in document.entities() {
+        if !OpenCADStudio::in_drawing_space(document, entity.common().owner_handle) {
+            continue;
+        }
+        match entity {
+            codec::EntityType::Line(line) => lines.push((
+                line.common.layer.clone(),
+                Point::new(line.start.x, line.start.y),
+                Point::new(line.end.x, line.end.y),
+            )),
+            codec::EntityType::LwPolyline(polyline) => polylines.push((
+                polyline.common.layer.clone(),
+                polyline
+                    .vertices
+                    .iter()
+                    .map(|vertex| Point::new(vertex.location.x, vertex.location.y))
+                    .collect(),
+            )),
+            codec::EntityType::Insert(insert) => {
+                if insert.block_name.eq_ignore_ascii_case("TERMINAL") {
+                    terminals.push(Point::new(
+                        insert.insert_point.x,
+                        insert.insert_point.y,
+                    ));
+                }
+                if insert.block_name.eq_ignore_ascii_case("DOT")
+                    || insert.block_name.eq_ignore_ascii_case("WDDOT")
+                {
+                    junctions.push(Point::new(
+                        insert.insert_point.x,
+                        insert.insert_point.y,
+                    ));
+                }
+                inserts.push(insert);
+            }
+            codec::EntityType::Circle(circle)
+                if circle.common.layer.eq_ignore_ascii_case("JUNCTIONS") =>
+            {
+                junctions.push(Point::new(circle.center.x, circle.center.y));
+            }
+            codec::EntityType::Text(text) => {
+                if text.common.layer.eq_ignore_ascii_case("TITLE_BLOCK") {
+                    continue;
+                }
+                let value = text.value.trim();
+                let height = text.height.abs();
+                if value.is_empty() || !(0.09..=0.26).contains(&height) {
+                    continue;
+                }
+                if OpenCADStudio::looks_like_reference(value) {
+                    reference_texts.push((
+                        value.to_string(),
+                        text.insertion_point.x,
+                        text.insertion_point.y,
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let has_wire_layer = lines
+        .iter()
+        .any(|(layer, _, _)| ::elec::is_wire_layer(layer))
+        || polylines
+            .iter()
+            .any(|(layer, _)| ::elec::is_wire_layer(layer));
+
+    let mut wires: Vec<WireSeg> = Vec::new();
+    let mut next_wire = 0u64;
+    let keep = |layer: &str, a: Point, b: Point| -> bool {
+        if has_wire_layer {
+            ::elec::is_wire_layer(layer)
+        } else {
+            (layer.trim().is_empty() || layer.trim() == "0")
+                && (a.x - b.x).hypot(a.y - b.y) >= FLAT_WIRE_MIN
+        }
+    };
+    for (layer, from, to) in &lines {
+        if !keep(layer, *from, *to) {
+            continue;
+        }
+        next_wire += 1;
+        wires.push(WireSeg::new(next_wire, *from, *to));
+    }
+    for (layer, points) in &polylines {
+        for pair in points.windows(2) {
+            if !keep(layer, pair[0], pair[1]) {
+                continue;
+            }
+            next_wire += 1;
+            wires.push(WireSeg::new(next_wire, pair[0], pair[1]));
+        }
+    }
+
+    // Device pins, then the wire endpoint each pin reaches.
+    let mut endpoints: Vec<Point> = Vec::new();
+    for wire in &wires {
+        endpoints.push(wire.from);
+        endpoints.push(wire.to);
+    }
+
+    // Terminal pass-through: two wire ends on opposite sides of one terminal block.
+    let mut bridges: Vec<(Point, Point)> = Vec::new();
+    for terminal in &terminals {
+        let near: Vec<Point> = endpoints
+            .iter()
+            .copied()
+            .filter(|point| {
+                (point.x - terminal.x).hypot(point.y - terminal.y) <= TERMINAL_GAP
+            })
+            .collect();
+        for (index, first) in near.iter().enumerate() {
+            for second in near.iter().skip(index + 1) {
+                let gap = (first.x - second.x).hypot(first.y - second.y);
+                if gap <= 0.0 || gap > TERMINAL_GAP {
+                    continue;
+                }
+                let midpoint = Point::new((first.x + second.x) / 2.0, (first.y + second.y) / 2.0);
+                if (midpoint.x - terminal.x).hypot(midpoint.y - terminal.y) <= TERMINAL_MIDPOINT {
+                    bridges.push((*first, *second));
+                }
+            }
+        }
+    }
+
+    let mut anchors: Vec<Anchor> = Vec::new();
+    let mut next_anchor = 0u64;
+    for insert in &inserts {
+        if is_setup_block(&insert.block_name) {
+            continue;
+        }
+        let has_attributes = !insert.attributes.is_empty();
+        if !has_attributes && ::elec::is_non_device_block(&insert.block_name) {
+            continue;
+        }
+        let mut tag = insert
+            .attributes
+            .iter()
+            .find(|attribute| is_tag_attribute(&attribute.tag))
+            .map(|attribute| attribute.value.trim().to_string())
+            .unwrap_or_default();
+        if tag.is_empty() {
+            // A symbol whose attributes were exploded keeps only its tag TEXT nearby.
+            let mut best: Option<(f64, String)> = None;
+            for (value, x, y) in &reference_texts {
+                let distance = (x - insert.insert_point.x).hypot(y - insert.insert_point.y);
+                if distance <= 1.0 && best.as_ref().map(|(seen, _)| distance < *seen).unwrap_or(true)
+                {
+                    best = Some((distance, value.clone()));
+                }
+            }
+            if let Some((_, value)) = best {
+                tag = value;
+            }
+        }
+        let label = if tag.is_empty() {
+            insert.block_name.clone()
+        } else {
+            tag
+        };
+
+        let pins = insert_pins(document, insert);
+        if pins.is_empty() {
+            continue;
+        }
+        // A declared pin (attribute) stays visible even when no wire reaches it; a geometry
+        // candidate only becomes a pin when a wire ends on it. Two candidates can land on
+        // the same endpoint, so the endpoint wins once.
+        let mut accepted: Vec<(Point, String)> = Vec::new();
+        for (point, number) in &pins {
+            let endpoint = if number.is_empty() {
+                nearest_point(&endpoints, *point, PIN_ASSOC)
+            } else {
+                Some(nearest_point(&endpoints, *point, PIN_ASSOC).unwrap_or(*point))
+            };
+            let Some(endpoint) = endpoint else {
+                continue;
+            };
+            if accepted
+                .iter()
+                .any(|(seen, _)| (seen.x - endpoint.x).abs() <= 1e-6 && (seen.y - endpoint.y).abs() <= 1e-6)
+            {
+                continue;
+            }
+            accepted.push((endpoint, number.clone()));
+        }
+        accepted.sort_by(|left, right| {
+            left.0
+                .x
+                .partial_cmp(&right.0.x)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(left.0.y.partial_cmp(&right.0.y).unwrap_or(std::cmp::Ordering::Equal))
+        });
+        for (index, (point, number)) in accepted.iter().enumerate() {
+            next_anchor += 1;
+            let pin = if number.is_empty() {
+                (index + 1).to_string()
+            } else {
+                number.clone()
+            };
+            anchors.push(Anchor::new(next_anchor, &label, *point).with_pin(&pin));
+        }
+    }
+
+    WireGraph {
+        wires,
+        anchors,
+        hints: NetlistHints {
+            bridges,
+            junctions,
+            require_junctions: true,
+        },
+    }
 }
 
 impl OpenCADStudio {
@@ -1130,93 +1520,31 @@ fn class_for_reference(tag: &str) -> &'static str {
 
     /// `ELECWIRELIST` derives connectivity from the drawn wires and reports the nets.
     ///
-    /// Wires are LINE and LWPOLYLINE entities; a component anchors to a net where its
-    /// insertion point meets a wire endpoint. Points within `tolerance` are the same node,
-    /// so a wire drawn to a symbol pin connects without pixel-perfect coordinates.
+    /// Wires are the drawing's `WIRES` layer (or, on a flattened print, layer-0 lines long
+    /// enough to be a conductor); a device anchors to a net at its **pin**, not at the
+    /// symbol's insertion point. Points within `tolerance` are the same node, a terminal
+    /// pass-through bridges the two ends on either side of it, and a T-junction only
+    /// connects where a junction dot marks it.
     pub(super) fn elec_wirelist(&mut self, i: usize) -> Task<Message> {
-        use ::elec::geometry::{netlist_from_geometry_with_wire_runs, Anchor, Point, WireSeg};
         use ::elec::infer_tag_prefix;
 
         const TOLERANCE: f64 = 0.05;
 
-        let mut wires: Vec<WireSeg> = Vec::new();
-        let mut anchors: Vec<Anchor> = Vec::new();
-        let mut labels: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();
-
-        {
+        let graph = {
             let doc = &self.tabs[i].scene.document;
-            let _model_space = doc.header.model_space_block_handle;
-            let spaces = Self::drawing_spaces(doc);
-            let mut next_wire = 0u64;
-            let mut next_anchor = 0u64;
-            for entity in doc.entities() {
-                if !spaces.contains(&entity.common().owner_handle) { continue; }
-                match entity {
-                    codec::EntityType::Line(line) => {
-                        next_wire += 1;
-                        wires.push(WireSeg::new(
-                            next_wire,
-                            Point::new(line.start.x, line.start.y),
-                            Point::new(line.end.x, line.end.y),
-                        ));
-                    }
-                    codec::EntityType::LwPolyline(polyline) => {
-                        let points: Vec<Point> = polyline
-                            .vertices
-                            .iter()
-                            .map(|vertex| Point::new(vertex.location.x, vertex.location.y))
-                            .collect();
-                        for pair in points.windows(2) {
-                            next_wire += 1;
-                            wires.push(WireSeg::new(next_wire, pair[0], pair[1]));
-                        }
-                        if polyline.is_closed && points.len() > 2 {
-                            next_wire += 1;
-                            wires.push(WireSeg::new(
-                                next_wire,
-                                *points.last().unwrap(),
-                                points[0],
-                            ));
-                        }
-                    }
-                    codec::EntityType::Insert(insert)
-                        if !insert.attributes.is_empty() && !is_setup_block(&insert.block_name) =>
-                    {
-                        next_anchor += 1;
-                        let tag = insert
-                            .attributes
-                            .iter()
-                            .find(|attribute| is_tag_attribute(&attribute.tag))
-                            .map(|attribute| attribute.value.trim().to_string())
-                            .unwrap_or_default();
-                        let label = if tag.is_empty() {
-                            insert.block_name.clone()
-                        } else {
-                            tag
-                        };
-                        labels.insert(next_anchor, label.clone());
-                        anchors.push(Anchor::new(
-                            next_anchor,
-                            &label,
-                            Point::new(insert.insert_point.x, insert.insert_point.y),
-                        ));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        if wires.is_empty() {
+            wire_graph(doc)
+        };
+        if graph.wires.is_empty() {
             self.command_line
                 .push_output("ELECWIRELIST: no wires found (LINE or LWPOLYLINE entities).");
             return Task::none();
         }
 
-        let netlist = netlist_from_geometry_with_wire_runs(&wires, &anchors, TOLERANCE);
+        let netlist = graph.netlist(TOLERANCE);
         let summary = format!(
-            "ELECWIRELIST: {} wire segment(s), {} component(s) -> {} net(s); {} unconnected component(s), {} loose wire(s).",
-            wires.len(),
-            anchors.len(),
+            "ELECWIRELIST: {} wire segment(s), {} pin(s) -> {} net(s); {} unconnected pin(s), {} loose wire(s).",
+            graph.wires.len(),
+            graph.anchors.len(),
             netlist.nets.len(),
             netlist.loose_anchors.len(),
             netlist.loose_wires.len()
@@ -1224,17 +1552,17 @@ fn class_for_reference(tag: &str) -> &'static str {
         self.command_line.push_output(&summary);
 
         for net in &netlist.nets {
-            let members: Vec<&str> = net
+            let members: Vec<String> = net
                 .anchors
                 .iter()
-                .map(|id| labels.get(id).map(String::as_str).unwrap_or("?"))
+                .map(|id| graph.label_of(*id))
                 .collect();
             let line = format!(
                 "  net {}: {} wire(s) -> {}",
                 net.id,
                 net.wires.len(),
                 if members.is_empty() {
-                    "(no components)".to_string()
+                    "(no devices)".to_string()
                 } else {
                     members.join(", ")
                 }
@@ -1243,10 +1571,10 @@ fn class_for_reference(tag: &str) -> &'static str {
         }
 
         if !netlist.loose_anchors.is_empty() {
-            let names: Vec<&str> = netlist
+            let names: Vec<String> = netlist
                 .loose_anchors
                 .iter()
-                .map(|id| labels.get(id).map(String::as_str).unwrap_or("?"))
+                .map(|id| graph.label_of(*id))
                 .collect();
             let line = format!("  unconnected: {}", names.join(", "));
             self.command_line.push_output(&line);
@@ -1254,7 +1582,11 @@ fn class_for_reference(tag: &str) -> &'static str {
 
         // A drawing that names its devices is a drawing we can sanity-check: report the
         // prefixes in use so a numbering mistake is visible from the same command.
-        let tags: Vec<&str> = labels.values().map(String::as_str).collect();
+        let tags: Vec<&str> = graph
+            .anchors
+            .iter()
+            .map(|anchor| anchor.label.as_str())
+            .collect();
         if let Some(prefix) = infer_tag_prefix(&tags) {
             let line = format!("  device prefix: {prefix}");
             self.command_line.push_output(&line);
@@ -1270,77 +1602,39 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// wire on layer `WIRENO`. An existing label at the same point is updated rather than
     /// duplicated, so the command is safe to run again after a design change.
     pub(super) fn elec_wirenumber(&mut self, i: usize) -> Task<Message> {
-        use ::elec::geometry::{netlist_from_geometry_with_wire_runs, Anchor, Point, WireSeg};
         use ::elec::{reading_order_key, NumberingFormat};
 
         const TOLERANCE: f64 = 0.05;
         const LABEL_LAYER: &str = "WIRENO";
         const LABEL_HEIGHT: f64 = 2.5;
 
-        let mut wires: Vec<WireSeg> = Vec::new();
-        let mut anchors: Vec<Anchor> = Vec::new();
-        let mut existing: Vec<(codec::Handle, String, f64, f64)> = Vec::new();
-        {
+        let graph = {
             let doc = &self.tabs[i].scene.document;
-            let _model_space = doc.header.model_space_block_handle;
+            wire_graph(doc)
+        };
+        let wires = &graph.wires;
+        let existing: Vec<(codec::Handle, String, f64, f64)> = {
+            let doc = &self.tabs[i].scene.document;
             let spaces = Self::drawing_spaces(doc);
-            let mut next_wire = 0u64;
-            let mut next_anchor = 0u64;
-            for entity in doc.entities() {
-                if !spaces.contains(&entity.common().owner_handle) { continue; }
-                match entity {
-                    codec::EntityType::Line(line) => {
-                        next_wire += 1;
-                        wires.push(WireSeg::new(
-                            next_wire,
-                            Point::new(line.start.x, line.start.y),
-                            Point::new(line.end.x, line.end.y),
-                        ));
-                    }
-                    codec::EntityType::LwPolyline(polyline) => {
-                        let points: Vec<Point> = polyline
-                            .vertices
-                            .iter()
-                            .map(|vertex| Point::new(vertex.location.x, vertex.location.y))
-                            .collect();
-                        for pair in points.windows(2) {
-                            next_wire += 1;
-                            wires.push(WireSeg::new(next_wire, pair[0], pair[1]));
-                        }
-                    }
-                    codec::EntityType::Insert(insert)
-                        if !insert.attributes.is_empty() && !is_setup_block(&insert.block_name) =>
-                    {
-                        next_anchor += 1;
-                        let label = insert
-                            .attributes
-                            .iter()
-                            .find(|attribute| is_tag_attribute(&attribute.tag))
-                            .map(|attribute| attribute.value.trim().to_string())
-                            .filter(|value| !value.is_empty())
-                            .unwrap_or_else(|| insert.block_name.clone());
-                        anchors.push(Anchor::new(
-                            next_anchor,
-                            &label,
-                            Point::new(insert.insert_point.x, insert.insert_point.y),
-                        ));
-                    }
+            doc.entities()
+                .filter(|entity| spaces.contains(&entity.common().owner_handle))
+                .filter_map(|entity| match entity {
                     codec::EntityType::Text(text)
                         if text.common.layer.eq_ignore_ascii_case(LABEL_LAYER) =>
                     {
-                        existing.push((
+                        Some((
                             text.common.handle,
                             text.value.clone(),
                             text.insertion_point.x,
                             text.insertion_point.y,
-                        ));
+                        ))
                     }
-                    _ => {}
-                }
-            }
-        }
+                    _ => None,
+                })
+                .collect()
+        };
 
-        let netlist = netlist_from_geometry_with_wire_runs(&wires, &anchors, TOLERANCE);
+        let netlist = graph.netlist(TOLERANCE);
         if netlist.nets.is_empty() {
             self.command_line
                 .push_output("ELECWIRENUMBER: no connected nets found.");
@@ -1392,16 +1686,10 @@ fn class_for_reference(tag: &str) -> &'static str {
             let reuse = existing.iter().find(|(_, _, ex, ey)| {
                 (ex - x).abs() <= 0.1 && (ey - y).abs() <= 0.1
             });
-            let names: Vec<&str> = net
+            let names: Vec<String> = net
                 .anchors
                 .iter()
-                .map(|id| {
-                    anchors
-                        .iter()
-                        .find(|anchor| anchor.id == *id)
-                        .map(|anchor| anchor.label.as_str())
-                        .unwrap_or("?")
-                })
+                .map(|id| graph.label_of(*id))
                 .collect();
             match reuse {
                 Some((handle, current, _, _)) if current == &number => {
@@ -1455,7 +1743,9 @@ fn class_for_reference(tag: &str) -> &'static str {
         Task::none()
     }
 
-    /// Collect the drawing's wire segments and component anchors.
+    /// Collect the drawing's wire segments and device pins, as the connectivity commands see
+    /// them. One collector, so the terminals list, the Excel report and the I/O pass cannot
+    /// disagree about which segments and pins exist.
     fn elec_collect(
         &self,
         i: usize,
@@ -1463,62 +1753,8 @@ fn class_for_reference(tag: &str) -> &'static str {
         Vec<::elec::geometry::WireSeg>,
         Vec<::elec::geometry::Anchor>,
     ) {
-        use ::elec::geometry::{Anchor, Point, WireSeg};
-        let doc = &self.tabs[i].scene.document;
-        // Model space only. `doc.entities()` also walks block definitions, and a drawing
-        // with a symbol library loaded holds hundreds of block-geometry lines: counting
-        // those as wires produced 24,950 "wire segments" on a three-wire drawing.
-        let _model_space = doc.header.model_space_block_handle;
-        let spaces = Self::drawing_spaces(doc);
-        let mut wires = Vec::new();
-        let mut anchors = Vec::new();
-        let mut next_wire = 0u64;
-        let mut next_anchor = 0u64;
-        for entity in doc.entities() {
-            if !spaces.contains(&entity.common().owner_handle) {
-                continue;
-            }
-            match entity {
-                codec::EntityType::Line(line) => {
-                    next_wire += 1;
-                    wires.push(WireSeg::new(
-                        next_wire,
-                        Point::new(line.start.x, line.start.y),
-                        Point::new(line.end.x, line.end.y),
-                    ));
-                }
-                codec::EntityType::LwPolyline(polyline) => {
-                    let points: Vec<Point> = polyline
-                        .vertices
-                        .iter()
-                        .map(|vertex| Point::new(vertex.location.x, vertex.location.y))
-                        .collect();
-                    for pair in points.windows(2) {
-                        next_wire += 1;
-                        wires.push(WireSeg::new(next_wire, pair[0], pair[1]));
-                    }
-                }
-                codec::EntityType::Insert(insert)
-                        if !insert.attributes.is_empty() && !is_setup_block(&insert.block_name) =>
-                    {
-                    next_anchor += 1;
-                    let label = insert
-                        .attributes
-                        .iter()
-                        .find(|attribute| is_tag_attribute(&attribute.tag))
-                        .map(|attribute| attribute.value.trim().to_string())
-                        .filter(|value| !value.is_empty())
-                        .unwrap_or_else(|| insert.block_name.clone());
-                    anchors.push(Anchor::new(
-                        next_anchor,
-                        &label,
-                        Point::new(insert.insert_point.x, insert.insert_point.y),
-                    ));
-                }
-                _ => {}
-            }
-        }
-        (wires, anchors)
+        let graph = wire_graph(&self.tabs[i].scene.document);
+        (graph.wires, graph.anchors)
     }
 
     /// `ELECTERMINALS` reports the terminal strips in the drawing.
@@ -1526,24 +1762,21 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// Terminals are components tagged `strip:index` (`X1:12`). Each strip is listed in
     /// terminal order with the devices its terminals reach through their nets.
     pub(super) fn elec_terminals(&mut self, i: usize) -> Task<Message> {
-        use ::elec::geometry::netlist_from_geometry_with_wire_runs;
         use ::elec::terminal_strips;
 
         const TOLERANCE: f64 = 0.05;
 
-        let (wires, anchors) = self.elec_collect(i);
-        let netlist = netlist_from_geometry_with_wire_runs(&wires, &anchors, TOLERANCE);
-        let label_of = |id: u64| {
-            anchors
-                .iter()
-                .find(|anchor| anchor.id == id)
-                .map(|anchor| anchor.label.clone())
-                .unwrap_or_else(|| "?".to_string())
+        let graph = {
+            let doc = &self.tabs[i].scene.document;
+            wire_graph(doc)
         };
+        let netlist = graph.netlist(TOLERANCE);
+        let anchors = &graph.anchors;
+        let label_of = |id: u64| graph.label_of(id);
 
         let mut terminals: Vec<(String, Vec<String>)> = Vec::new();
         let mut others: Vec<String> = Vec::new();
-        for anchor in &anchors {
+        for anchor in anchors {
             let peers: Vec<String> = netlist
                 .nets
                 .iter()
@@ -1877,7 +2110,6 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// material (enriched from the parts catalogue when one is loaded), the wire list, and
     /// the terminal strips.
     pub(super) fn elec_report(&mut self, i: usize, path: &str) -> Task<Message> {
-        use ::elec::geometry::netlist_from_geometry_with_wire_runs;
         use ::elec::{bom_sheet, terminal_sheet, wire_rows, wire_sheet_from};
 
         const TOLERANCE: f64 = 0.05;
@@ -1892,19 +2124,16 @@ fn class_for_reference(tag: &str) -> &'static str {
         }
         let rows = bill_of_materials(&components);
 
-        let (wires, anchors) = self.elec_collect(i);
-        let netlist = netlist_from_geometry_with_wire_runs(&wires, &anchors, TOLERANCE);
-        let wire_rows = wire_rows(&wires, &netlist);
-
-        let label_of = |id: u64| {
-            anchors
-                .iter()
-                .find(|anchor| anchor.id == id)
-                .map(|anchor| anchor.label.clone())
-                .unwrap_or_else(|| "?".to_string())
+        let graph = {
+            let doc = &self.tabs[i].scene.document;
+            wire_graph(doc)
         };
+        let netlist = graph.netlist(TOLERANCE);
+        let wire_rows = wire_rows(&graph.wires, &netlist);
+        let anchors = &graph.anchors;
+        let label_of = |id: u64| graph.label_of(id);
         let mut terminals: Vec<(String, Vec<String>)> = Vec::new();
-        for anchor in &anchors {
+        for anchor in anchors {
             if ::elec::parse_terminal_tag(&anchor.label).is_none() {
                 continue;
             }
@@ -3631,8 +3860,6 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// `X1TERMnn`/`X2TERMnn` (the same idea as the reference products' terminal-position
     /// attributes), so this can follow the wire from the pin and name the devices on it.
     pub(super) fn elec_io(&mut self, i: usize) -> Task<Message> {
-        use ::elec::geometry::{netlist_from_geometry_with_wire_runs, wire_rows, Point};
-
         const TOLERANCE: f64 = 0.05;
 
         let (wires, anchors) = self.elec_collect(i);

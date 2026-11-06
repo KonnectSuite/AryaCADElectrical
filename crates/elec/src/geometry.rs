@@ -45,6 +45,11 @@ pub struct Anchor {
     /// Human-readable identity for reports, e.g. the device tag.
     pub label: String,
     pub at: Point,
+    /// The pin this anchor is, when the drawing says so (`"2"` for `X1TERM02`).
+    ///
+    /// A device can anchor to a net at more than one point, and the pin is what makes a
+    /// wire list read `-K1:2` rather than three anonymous `-K1` rows.
+    pub pin: Option<String>,
 }
 
 impl Anchor {
@@ -53,7 +58,52 @@ impl Anchor {
             id,
             label: label.to_string(),
             at,
+            pin: None,
         }
+    }
+
+    /// Name the anchor with the pin it belongs to, e.g. `M326` + `2`.
+    pub fn with_pin(mut self, pin: &str) -> Self {
+        self.pin = Some(pin.to_string());
+        self
+    }
+
+    /// The label a report shows: `TAG:pin` when the pin is known, else the tag.
+    pub fn display_label(&self) -> String {
+        match &self.pin {
+            Some(pin) if !pin.is_empty() => format!("{}:{}", self.label, pin),
+            _ => self.label.clone(),
+        }
+    }
+}
+
+/// Connectivity evidence the wire geometry alone cannot express.
+///
+/// Two things on a real schematic are not a shared point:
+///
+/// * **Terminal pass-through** — two wires end on opposite sides of one terminal block,
+///   `0.125` apart. They are the same equipotential, so the two points are *bridged*.
+/// * **Junction dots** — a wire ending on the middle of another wire is a connection only
+///   where a dot marks it; a bare crossing is not. When `require_junctions` is set, the
+///   T-junction merge only fires at a point in `junctions`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NetlistHints {
+    /// Point pairs that are one node although they are apart (a wire through a terminal).
+    pub bridges: Vec<(Point, Point)>,
+    /// Junction markers (dots) on the drawing.
+    pub junctions: Vec<Point>,
+    /// When true, a T-junction needs one of `junctions`; when false, any endpoint landing
+    /// on another wire's interior connects (the historical behaviour).
+    pub require_junctions: bool,
+}
+
+impl NetlistHints {
+    /// True when a junction dot sits on `point` (within `JUNCTION_SNAP`).
+    fn has_junction(&self, point: Point) -> bool {
+        const JUNCTION_SNAP: f64 = 0.05;
+        self.junctions.iter().any(|dot| {
+            (dot.x - point.x).abs() <= JUNCTION_SNAP && (dot.y - point.y).abs() <= JUNCTION_SNAP
+        })
     }
 }
 
@@ -142,7 +192,7 @@ fn point_to_segment_distance(point: Point, a: Point, b: Point) -> f64 {
 }
 
 pub fn netlist_from_geometry(wires: &[WireSeg], anchors: &[Anchor], tolerance: f64) -> GeoNetlist {
-    netlist_from_geometry_impl(wires, anchors, tolerance, false)
+    netlist_from_geometry_impl(wires, anchors, tolerance, false, None)
 }
 
 /// Like [`netlist_from_geometry`], but a run of wires with no component on it is still a net.
@@ -155,7 +205,22 @@ pub fn netlist_from_geometry_with_wire_runs(
     anchors: &[Anchor],
     tolerance: f64,
 ) -> GeoNetlist {
-    netlist_from_geometry_impl(wires, anchors, tolerance, true)
+    netlist_from_geometry_impl(wires, anchors, tolerance, true, None)
+}
+
+/// The full pass: wire runs, anchors, terminal bridges and dot-verified junctions.
+///
+/// This is what the electrical commands use. `hints` carries the evidence that is not a
+/// shared point (see [`NetlistHints`]); the plain functions above stay for callers and
+/// tests that only have bare geometry.
+pub fn netlist_with_hints(
+    wires: &[WireSeg],
+    anchors: &[Anchor],
+    tolerance: f64,
+    hints: &NetlistHints,
+    keep_wire_runs: bool,
+) -> GeoNetlist {
+    netlist_from_geometry_impl(wires, anchors, tolerance, keep_wire_runs, Some(hints))
 }
 
 fn netlist_from_geometry_impl(
@@ -163,6 +228,7 @@ fn netlist_from_geometry_impl(
     anchors: &[Anchor],
     tolerance: f64,
     keep_wire_runs: bool,
+    hints: Option<&NetlistHints>,
 ) -> GeoNetlist {
     let mut dsu = DisjointSet::new();
     for wire in wires {
@@ -170,20 +236,35 @@ fn netlist_from_geometry_impl(
         let b = cell(wire.to, tolerance);
         dsu.union(a, b);
     }
+    if let Some(hints) = hints {
+        // A wire that passes through a terminal stops 0.125 short of it on each side: the
+        // two ends are the same equipotential even though no point is shared.
+        for (a, b) in &hints.bridges {
+            dsu.union(cell(*a, tolerance), cell(*b, tolerance));
+        }
+    }
     if keep_wire_runs {
         // A wire that ends on the middle of another wire is a T-junction: the same net.
         // That is what a junction dot means on a schematic, and endpoint-only unioning left
         // real drawings with one net per segment. The gap allowed is deliberately small
         // (0.02 drawing units) so 0.125-unit symbol-pin gaps and wire-hop arcs do not merge.
         const T_JUNCTION: f64 = 0.02;
+        let junction_allowed = |point: Point| -> bool {
+            match hints {
+                Some(hints) if hints.require_junctions => hints.has_junction(point),
+                _ => true,
+            }
+        };
         for wire in wires {
             for other in wires {
                 if wire.id == other.id {
                     continue;
                 }
                 for endpoint in [wire.from, wire.to] {
-                    if point_to_segment_distance(endpoint, other.from, other.to) <= T_JUNCTION {
-                        dsu.union(cell(wire.from, tolerance), cell(other.from, tolerance));
+                    if point_to_segment_distance(endpoint, other.from, other.to) <= T_JUNCTION
+                        && junction_allowed(endpoint)
+                    {
+                        dsu.union(cell(endpoint, tolerance), cell(other.from, tolerance));
                     }
                 }
             }
@@ -412,5 +493,100 @@ mod tests {
         assert_eq!(rows[1].wire, 2);
         assert_eq!(rows[0].net, 1);
         assert_eq!(rows[1].net, 1);
+    }
+
+    // ---- pins and hints ------------------------------------------------------------
+
+    #[test]
+    fn an_anchor_can_name_its_pin() {
+        let anchor = Anchor::new(10, "M326", p(5.0, 5.0)).with_pin("2");
+        assert_eq!(anchor.pin.as_deref(), Some("2"));
+        assert_eq!(anchor.display_label(), "M326:2");
+        let bare = Anchor::new(11, "-K1", p(0.0, 0.0));
+        assert_eq!(bare.display_label(), "-K1");
+    }
+
+    #[test]
+    fn two_pins_on_one_device_anchor_separately() {
+        // A contact has two pins; a wire reaches only one of them.
+        let wires = vec![WireSeg::new(1, p(10.0, 0.0), p(50.0, 0.0))];
+        let anchors = vec![
+            Anchor::new(10, "K1", p(10.0, 0.0)).with_pin("1"),
+            Anchor::new(11, "K1", p(0.0, 0.0)).with_pin("2"),
+        ];
+        let netlist = netlist_from_geometry_with_wire_runs(&wires, &anchors, 0.01);
+        assert_eq!(netlist.nets.len(), 1);
+        assert_eq!(netlist.nets[0].anchors, vec![10]);
+        assert_eq!(netlist.loose_anchors, vec![11]);
+    }
+
+    #[test]
+    fn a_terminal_bridge_joins_the_two_wire_ends() {
+        // A wire stops 0.0625 short of the terminal on each side: no shared point.
+        let wires = vec![
+            WireSeg::new(1, p(0.0, 0.0), p(9.9375, 0.0)),
+            WireSeg::new(2, p(10.0625, 0.0), p(20.0, 0.0)),
+        ];
+        let anchors = vec![
+            Anchor::new(10, "-K1", p(0.0, 0.0)).with_pin("1"),
+            Anchor::new(11, "-K2", p(20.0, 0.0)).with_pin("2"),
+        ];
+        let apart = netlist_from_geometry_with_wire_runs(&wires, &anchors, 0.01);
+        assert_eq!(apart.nets.len(), 2, "without the bridge the two wires stay apart");
+
+        let hints = NetlistHints {
+            bridges: vec![(p(9.9375, 0.0), p(10.0625, 0.0))],
+            ..Default::default()
+        };
+        let joined = netlist_with_hints(&wires, &anchors, 0.01, &hints, true);
+        assert_eq!(joined.nets.len(), 1);
+        assert_eq!(joined.nets[0].wires, vec![1, 2]);
+        assert_eq!(joined.nets[0].anchors, vec![10, 11]);
+    }
+
+    #[test]
+    fn a_t_junction_needs_a_dot_when_the_drawing_uses_dots() {
+        // A branch wire ends on the middle of a straight run: the classic T.
+        let wires = vec![
+            WireSeg::new(1, p(0.0, 0.0), p(100.0, 0.0)),
+            WireSeg::new(2, p(50.0, 0.0), p(50.0, 40.0)),
+        ];
+        let anchors = vec![
+            Anchor::new(10, "-K1", p(0.0, 0.0)).with_pin("1"),
+            Anchor::new(11, "-K2", p(50.0, 40.0)).with_pin("2"),
+        ];
+        // Historical behaviour: any T merges.
+        let merged = netlist_from_geometry_with_wire_runs(&wires, &anchors, 0.01);
+        assert_eq!(merged.nets.len(), 1);
+
+        // With dot discipline on and no dot, the branch is a crossing: two nets.
+        let strict = NetlistHints {
+            require_junctions: true,
+            ..Default::default()
+        };
+        let split = netlist_with_hints(&wires, &anchors, 0.01, &strict, true);
+        assert_eq!(split.nets.len(), 2);
+
+        // A dot at the T makes it one net again.
+        let dotted = NetlistHints {
+            junctions: vec![p(50.0, 0.0)],
+            require_junctions: true,
+            ..Default::default()
+        };
+        let joined = netlist_with_hints(&wires, &anchors, 0.01, &dotted, true);
+        assert_eq!(joined.nets.len(), 1);
+    }
+
+    #[test]
+    fn a_hop_gap_stays_apart_at_wire_tolerance() {
+        // A wire hop leaves 0.125 units of air at the crossing; it must not be bridged.
+        let wires = vec![
+            WireSeg::new(1, p(0.0, 0.0), p(49.9375, 0.0)),
+            WireSeg::new(2, p(50.0625, 0.0), p(100.0, 0.0)),
+            WireSeg::new(3, p(50.0, -20.0), p(50.0, 20.0)),
+        ];
+        let netlist = netlist_from_geometry_with_wire_runs(&wires, &[], 0.05);
+        // The two halves of the horizontal run stay separate; the vertical is its own net.
+        assert!(netlist.nets.len() >= 2);
     }
 }

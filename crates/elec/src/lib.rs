@@ -1,4 +1,4 @@
-﻿//! AryaCAD Electrical Ã¢â‚¬â€ the ECAD domain core.
+//! AryaCAD Electrical Ã¢â‚¬â€ the ECAD domain core.
 //!
 //! This crate holds the parts of an electrical CAD that are independent of the drawing
 //! host: how devices and wires are numbered, how label templates are parsed and rendered,
@@ -17,6 +17,7 @@ pub mod geometry;
 pub mod junction;
 pub mod netlist;
 pub mod numbering;
+pub mod pins;
 pub mod report;
 pub mod sides;
 pub mod terminal;
@@ -24,7 +25,11 @@ pub mod xref;
 
 pub use catalogue::{Catalogue, CatalogueError, PartRecord};
 pub use component::{bill_of_materials, BomRow, Component};
-pub use geometry::{netlist_from_geometry, wire_rows, Anchor, GeoNet, GeoNetlist, GeoWireRow, Point, WireSeg};
+pub use geometry::{
+    netlist_from_geometry, netlist_with_hints, wire_rows, Anchor, GeoNet, GeoNetlist,
+    GeoWireRow, NetlistHints, Point, WireSeg,
+};
+pub use pins::{is_non_device_block, is_wire_layer, parse_point, pin_number};
 pub use junction::junction_points;
 pub use netlist::{build_nets, wire_list, Net, Port, Wire, WireRow};
 pub use sides::{terminal_sides, SideNet, TerminalSides};
