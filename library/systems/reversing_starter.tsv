@@ -1,0 +1,11 @@
+# Reversing starter: forward and reverse contactors, overload, motor, two buttons.
+# Inserting it retags every device into the drawing's own sequences.
+device 0 0 CONTACT_NO
+device 20 0 CONTACT_NO
+device 40 0 THERMAL_OVERLOAD
+device 60 0 MOTOR
+device 0 -20 PUSHBUTTON_NO
+device 20 -20 PUSHBUTTON_NO
+wire 0.5 0 19.5 0
+wire 20.5 0 39.5 0
+wire 40.5 0 59.5 0

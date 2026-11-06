@@ -31,6 +31,7 @@ mod elec_cables;
 mod elec_ioimport;
 mod elec_parts_lib;
 mod elec_revision;
+mod elec_systems;
 mod field;
 mod fileops;
 mod hyperlink;
@@ -1308,6 +1309,9 @@ inventory::submit!(crate::command::CommandRegistration {
         "ELECCABLELIST",
         "ELECCABLEDEL",
         "ELECREV",
+        "ELECSYSTEM",
+        "ELECVARIANT",
+        "ELECOPTION",
         "ELECNUMBER",
         "ELECNUMBERPREVIEW",
         "ELECWIRELIST",

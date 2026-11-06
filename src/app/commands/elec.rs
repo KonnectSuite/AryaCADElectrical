@@ -96,7 +96,7 @@ struct ProjectSheet {
 static PROJECT_FILE: std::sync::OnceLock<std::sync::RwLock<Option<std::path::PathBuf>>> =
     std::sync::OnceLock::new();
 
-fn project_file() -> &'static std::sync::RwLock<Option<std::path::PathBuf>> {
+pub(super) fn project_file() -> &'static std::sync::RwLock<Option<std::path::PathBuf>> {
     PROJECT_FILE.get_or_init(|| std::sync::RwLock::new(None))
 }
 
@@ -263,6 +263,24 @@ fn read_setup(document: &codec::Document) -> ElecSetup {
         break;
     }
     setup
+}
+
+
+/// The last library folder a session loaded, for sibling modules.
+pub(super) fn library_directory() -> Option<std::path::PathBuf> {
+    library_dir().read().ok().and_then(|guard| guard.clone())
+}
+
+/// Library facts a system insertion needs: class and attribute tags.
+pub(super) fn library_symbol(symbol: &str) -> Option<(String, Vec<String>, f64, f64)> {
+    let index = library_index().read().ok()?;
+    let entry = index.get(&symbol.trim().to_ascii_uppercase())?;
+    Some((
+        entry.class.clone(),
+        entry.attributes.clone(),
+        entry.scale,
+        entry.label_height,
+    ))
 }
 
 /// True when the loaded project is flagged as already built and wired.
@@ -739,7 +757,7 @@ impl OpenCADStudio {
     /// border, a title block, a graphic) rather than an electrical device, and counting
     /// them would make the bill of material meaningless.
 /// Components of any document, so the same extraction serves one drawing and a project.
-fn components_of(document: &codec::Document) -> Vec<Component> {
+pub(super) fn components_of(document: &codec::Document) -> Vec<Component> {
     let mut out = Vec::new();
     let mut next_id = 0u64;
     for entity in document.entities() {
@@ -1038,7 +1056,7 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// but not the command name. Every line names a command the dispatcher really handles,
     /// so the reference cannot drift without the list looking obviously wrong in review.
     pub(super) fn elec_help(&mut self) -> Task<Message> {
-        let sections: [(&str, &[&str]); 11] = [
+        let sections: [(&str, &[&str]); 12] = [
             (
                 "Symbols",
                 &[
@@ -1096,6 +1114,15 @@ fn class_for_reference(tag: &str) -> &'static str {
                 &[
                     "ELECHIGHLIGHT <tag>           select every part of one device",
                     "ELECGOTO <tag>                centre the view on a device",
+                ],
+            ),
+            (
+                "Configuration",
+                &[
+                    "ELECSYSTEM [LIST]             list reusable systems",
+                    "ELECSYSTEM INSERT <name> [x,y]  place a system and retag its devices",
+                    "ELECVARIANT NEW|LIST|USE <name>  project variants beside the master",
+                    "ELECOPTION <tag> <option>     mark a device with an option code",
                 ],
             ),
             (
@@ -2604,7 +2631,7 @@ fn class_for_reference(tag: &str) -> &'static str {
     }
 
     /// Attribute definitions belonging to one block, as owned values.
-    fn elec_block_definitions(
+    pub(super) fn elec_block_definitions(
         &self,
         i: usize,
         block: &str,
@@ -5270,6 +5297,9 @@ fn class_for_reference(tag: &str) -> &'static str {
             return Some(task);
         }
         if let Some(task) = self.dispatch_elec_cables(cmd, i) {
+            return Some(task);
+        }
+        if let Some(task) = self.dispatch_elec_systems(cmd, i) {
             return Some(task);
         }
         match cmd {
