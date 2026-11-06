@@ -45,6 +45,10 @@ $samples = Join-Path $root 'samples'
 if (Test-Path -LiteralPath $samples) {
     Copy-Item -LiteralPath $samples -Destination (Join-Path $outPath 'samples') -Recurse
 }
+$templates = Join-Path $root 'templates'
+if (Test-Path -LiteralPath $templates) {
+    Copy-Item -LiteralPath $templates -Destination (Join-Path $outPath 'templates') -Recurse
+}
 $quickstart = Join-Path $root 'docs\QUICKSTART.md'
 if (Test-Path -LiteralPath $quickstart) {
     Copy-Item -LiteralPath $quickstart -Destination (Join-Path $outPath 'QUICKSTART.md')

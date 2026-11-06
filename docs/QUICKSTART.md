@@ -28,6 +28,7 @@ run `ELECLIST`, `ELECWIRELIST`, `ELECCABLELIST` and `ELECPANEL` to see the finis
 
 | step | command |
 |---|---|
+| start from a standard sheet | `ELECNEW templates\iec\A3_landscape.dxf` (IEC A4–A0, NEC ANSI A–E; see `templates\README.md`) |
 | new drawing, electrical layers | `ELECNEW` |
 | load the symbol library | `ELECLIB library\starter` (or `library` for the harvested set) |
 | browse/place symbols | `ELECPALETTE`, or `ELECINSERT CONTACT_NO` |
