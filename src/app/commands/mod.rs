@@ -1291,6 +1291,7 @@ inventory::submit!(crate::command::CommandRegistration {
         // Electrical (ECAD) layer.
         "ELECBOM",
         "ELECLIST",
+        "ELECSETUP",
         "ELECNUMBER",
         "ELECNUMBERPREVIEW",
         "ELECWIRELIST",

@@ -175,6 +175,96 @@ fn field_for_attribute(tag: &str) -> Option<&'static str> {
     }
 }
 
+/// The per-drawing electrical setup, as AutoCAD Electrical stores it on `WD_M`.
+///
+/// These are the project's own rules, not ours: `TAGFMT`/`WIREFMT` are format templates
+/// (`%F` family, `%N` number, `%S` sheet), and the `*-START`/`*-RSUF` attributes seed the
+/// counters. Reading them means a drawing produced by ACADE renumbers the way its template
+/// says, and — because `TAGMODE`/`WIREMODE` `R` means "existing references are fixed" —
+/// that its real device tags are left alone.
+#[derive(Debug, Clone)]
+struct ElecSetup {
+    /// True when the drawing actually carries a `WD_M` block we could read.
+    present: bool,
+    tag_format: String,
+    tag_mode: String,
+    tag_start: u32,
+    tag_suffixes: Vec<String>,
+    wire_format: String,
+    wire_mode: String,
+    wire_start: u32,
+    xref_format: String,
+    sheet: String,
+}
+
+impl Default for ElecSetup {
+    fn default() -> Self {
+        Self {
+            present: false,
+            tag_format: "%F%N".to_string(),
+            tag_mode: "S".to_string(),
+            tag_start: 1,
+            tag_suffixes: Vec::new(),
+            wire_format: "%N".to_string(),
+            wire_mode: "S".to_string(),
+            wire_start: 1,
+            xref_format: "%N".to_string(),
+            sheet: String::new(),
+        }
+    }
+}
+
+impl ElecSetup {
+    /// True when the drawing says its references are fixed (ACADE `TAGMODE`/`WIREMODE` `R`).
+    fn references_are_fixed(&self) -> bool {
+        self.tag_mode.eq_ignore_ascii_case("R") || self.wire_mode.eq_ignore_ascii_case("R")
+    }
+}
+
+/// Read the electrical setup off the first `WD_M` block in the document.
+///
+/// A drawing without one gets the defaults, so every command still works on a drawing
+/// that was never touched by AutoCAD Electrical.
+fn read_setup(document: &codec::Document) -> ElecSetup {
+    let mut setup = ElecSetup::default();
+    for entity in document.entities() {
+        let codec::EntityType::Insert(insert) = entity else {
+            continue;
+        };
+        if !insert.block_name.trim().eq_ignore_ascii_case("WD_M") {
+            continue;
+        }
+        setup.present = true;
+        for attribute in &insert.attributes {
+            let value = attribute.value.trim();
+            if value.is_empty() {
+                continue;
+            }
+            match attribute.tag.trim().to_ascii_uppercase().as_str() {
+                "TAGFMT" => setup.tag_format = value.to_string(),
+                "TAGMODE" => setup.tag_mode = value.to_string(),
+                "TAG-START" => setup.tag_start = value.parse().unwrap_or(1),
+                "TAG-RSUF" => {
+                    setup.tag_suffixes = value
+                        .split(',')
+                        .map(|part| part.trim().to_string())
+                        .filter(|part| !part.is_empty())
+                        .collect()
+                }
+                "WIREFMT" => setup.wire_format = value.to_string(),
+                "WIREMODE" => setup.wire_mode = value.to_string(),
+                "WIRE-START" => setup.wire_start = value.parse().unwrap_or(1),
+                "XREFFMT" => setup.xref_format = value.to_string(),
+                "SHEET" => setup.sheet = value.to_string(),
+                _ => {}
+            }
+        }
+        // The first WD_M wins; a sheet carries two identical inserts in practice.
+        break;
+    }
+    setup
+}
+
 impl OpenCADStudio {
     /// Turn every block insert in the active tab into a component.
     ///
@@ -197,7 +287,19 @@ fn components_of(document: &codec::Document) -> Vec<Component> {
             continue;
         }
         next_id += 1;
-        let mut component = Component::new(next_id, &insert.block_name, "");
+        // Report the class the library gives the symbol (`CONT-NO` is a `Contactor`), not the
+        // block name: a bill of material should say what the part *is*. A drawing read
+        // without a loaded library still lists something useful rather than nothing.
+        let class = library_index()
+            .read()
+            .ok()
+            .and_then(|index| {
+                index
+                    .get(&insert.block_name.trim().to_ascii_uppercase())
+                    .map(|entry| entry.class.clone())
+            })
+            .unwrap_or_else(|| insert.block_name.clone());
+        let mut component = Component::new(next_id, &class, "");
         for attribute in &insert.attributes {
             let tag = attribute.tag.trim();
             if tag.is_empty() {
@@ -225,6 +327,66 @@ fn components_of(document: &codec::Document) -> Vec<Component> {
 
     fn elec_components(&self, i: usize) -> Vec<Component> {
         Self::components_of(&self.tabs[i].scene.document)
+    }
+
+    /// `ELECSETUP` reports the drawing's electrical setup and the loaded symbol library.
+    ///
+    /// This is the read-only face of what an AutoCAD Electrical drawing keeps on `WD_M`:
+    /// the tag and wire formats, their start values and suffixes. It answers "what will
+    /// `ELECNUMBER` / `ELECWIRENUMBER` do on this sheet?" before anything is written.
+    pub(super) fn elec_setup(&mut self, i: usize) -> Task<Message> {
+        let setup = read_setup(&self.tabs[i].scene.document);
+        let origin = if setup.present {
+            "from this drawing's WD_M block"
+        } else {
+            "defaults — this drawing has no WD_M block"
+        };
+        let fixed = if setup.references_are_fixed() {
+            " (existing references are fixed)"
+        } else {
+            ""
+        };
+        let suffixes = if setup.tag_suffixes.is_empty() {
+            "none".to_string()
+        } else {
+            setup.tag_suffixes.join(",")
+        };
+        let sheet = if setup.sheet.is_empty() {
+            "-".to_string()
+        } else {
+            setup.sheet.clone()
+        };
+        let library = {
+            let loaded = library_index()
+                .read()
+                .map(|index| index.len())
+                .unwrap_or_default();
+            let folder = library_dir()
+                .read()
+                .ok()
+                .and_then(|guard| guard.clone())
+                .or_else(remembered_library);
+            match (folder, loaded) {
+                (Some(path), count) => format!("{} ({count} symbol(s))", path.display()),
+                (None, _) => "not loaded — ELECLIB <folder>".to_string(),
+            }
+        };
+
+        self.command_line
+            .push_output(&format!("ELECSETUP: {origin}"));
+        self.command_line.push_output(&format!(
+            "  tag   {}  mode {}{}  start {}  suffixes {suffixes}",
+            setup.tag_format, setup.tag_mode, fixed, setup.tag_start
+        ));
+        self.command_line.push_output(&format!(
+            "  wire  {}  mode {}  start {}",
+            setup.wire_format, setup.wire_mode, setup.wire_start
+        ));
+        self.command_line
+            .push_output(&format!("  xref  {}  sheet {sheet}", setup.xref_format));
+        self.command_line
+            .push_output(&format!("  library  {library}"));
+        Task::none()
     }
 
 
@@ -374,6 +536,9 @@ fn components_of(document: &codec::Document) -> Vec<Component> {
             return Task::none();
         }
 
+        // The drawing's own numbering contract (or the defaults when it has none).
+        let setup = read_setup(&self.tabs[i].scene.document);
+
         let mut by_class: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         // Group by tag *prefix*, not by block or class: a relay (HCR1) and a contactor
         // (CONT-NO) are both -K devices and must share one sequence, or each family
@@ -439,7 +604,20 @@ fn components_of(document: &codec::Document) -> Vec<Component> {
                 let first = parts[0];
                 reading_order_key(items[first].x, items[first].y)
             });
-            let format = NumberingFormat::tag(&prefix);
+            // Take the drawing's own `TAGFMT`/`TAG-START` when it has one: the crate's
+            // `NumberingFormat` already speaks the ACADE `%F`/`%N` language, so the settings
+            // only have to be copied across rather than re-implemented.
+            let mut format = NumberingFormat::tag(&prefix);
+            if setup.present {
+                if !setup.tag_format.trim().is_empty() {
+                    format.pattern = setup.tag_format.clone();
+                }
+                format.start = setup.tag_start.max(1);
+            }
+            // A drawing that came from AutoCAD Electrical says whether its references are
+            // fixed. When they are, an existing tag must keep its number: renumbering the
+            // customer's real `M326` to `M1` would silently rewrite a released drawing.
+            let freeze_existing = setup.present && setup.references_are_fixed();
             let numbered: Vec<Numbered> = device_list
                 .iter()
                 .enumerate()
@@ -452,7 +630,7 @@ fn components_of(document: &codec::Document) -> Vec<Component> {
                         } else {
                             Some(item.tag.clone())
                         },
-                        frozen: false,
+                        frozen: freeze_existing && !item.tag.is_empty(),
                     }
                 })
                 .collect();
@@ -460,16 +638,17 @@ fn components_of(document: &codec::Document) -> Vec<Component> {
             let mut assigned = Vec::new();
             let mut changed = 0usize;
             for result in &results {
+                let label = result.value.clone();
                 // One result per device; every part of that device takes the same tag.
                 let parts = &device_list[result.id as usize];
                 for part in parts {
                     let item = &items[*part];
-                    if item.tag != result.value {
+                    if item.tag != label {
                         changed += 1;
-                        changes.push((item.handle, result.value.clone()));
+                        changes.push((item.handle, label.clone()));
                     }
                 }
-                assigned.push(result.value.clone());
+                assigned.push(label);
             }
             report.push(format!(
                 "  {class}: {} ({changed} changed)",
@@ -748,7 +927,16 @@ fn components_of(document: &codec::Document) -> Vec<Component> {
         }
         ordered.sort_unstable();
 
-        let format = NumberingFormat::wire();
+        // The drawing's own wire numbering contract when it has one, so a sheet drawn in
+        // AutoCAD Electrical numbers wires the way its `WIREFMT` says.
+        let setup = read_setup(&self.tabs[i].scene.document);
+        let mut format = NumberingFormat::wire();
+        if setup.present {
+            if !setup.wire_format.trim().is_empty() {
+                format.pattern = setup.wire_format.clone();
+            }
+            format.start = setup.wire_start.max(1);
+        }
         let mut updates: Vec<(codec::Handle, String)> = Vec::new();
         let mut creates: Vec<(String, f64, f64)> = Vec::new();
         let mut report: Vec<String> = Vec::new();
@@ -4053,6 +4241,7 @@ fn components_of(document: &codec::Document) -> Vec<Component> {
         match cmd {
             "ELECBOM" => Some(self.elec_bom(i, None)),
             "ELECLIST" => Some(self.elec_list(i)),
+            "ELECSETUP" => Some(self.elec_setup(i)),
             "ELECWIRELIST" => Some(self.elec_wirelist(i)),
             "ELECWIRENUMBER" => Some(self.elec_wirenumber(i)),
             "ELECTERMINALS" => Some(self.elec_terminals(i)),
@@ -4072,6 +4261,26 @@ fn components_of(document: &codec::Document) -> Vec<Component> {
             "ELECATTR" => {
                 self.command_line
                     .push_output("ELECATTR: use ELECSETATTR <tag> NAME=value");
+                Some(Task::none())
+            }
+            // A ribbon button dispatches the bare verb, but these commands only exist with
+            // an argument, so a click used to answer "Unknown command" — a button that looks
+            // broken. Answer with the usage line instead.
+            "ELECLIB" | "ELECPART" | "ELECSETATTR" | "ELECPROJNEW" | "ELECPROJOPEN"
+            | "ELECPLC" | "ELECPLCNEXT" | "ELECPANEL" => {
+                let usage = match cmd {
+                    "ELECLIB" => "ELECLIB <folder>",
+                    "ELECPART" => "ELECPART <parts.csv>",
+                    "ELECSETATTR" => "ELECSETATTR <tag> NAME=value,...",
+                    "ELECPROJNEW" => "ELECPROJNEW <folder> [project.eprj]",
+                    "ELECPROJOPEN" => "ELECPROJOPEN <project.eprj>",
+                    "ELECPLC" => "ELECPLC <tag> <points> <base> [x,y]",
+                    "ELECPLCNEXT" => "ELECPLCNEXT <tag> <points> [prefix] [x,y]",
+                    "ELECPANEL" => "ELECPANEL <out.dxf>",
+                    _ => "",
+                };
+                self.command_line
+                    .push_output(&format!("{cmd}: use {usage}."));
                 Some(Task::none())
             }
             "ELECPLACE" => {
