@@ -4843,10 +4843,13 @@ fn class_for_reference(tag: &str) -> &'static str {
             prefix: String,
             tag: String,
             sheets: Vec<String>,
+            /// The drawing's `WD_M` says its references are already fixed.
+            frozen: bool,
         }
         let mut devices: Vec<Device> = Vec::new();
         let mut seen: BTreeMap<(String, String), usize> = BTreeMap::new();
         let mut duplicates: Vec<String> = Vec::new();
+        let mut tag_start = 1u32;
 
         for sheet in &sheets {
             let Ok(document) = crate::io::load_file(&sheet.path) else {
@@ -4864,6 +4867,13 @@ fn class_for_reference(tag: &str) -> &'static str {
             };
             let _model_space = document.header.model_space_block_handle;
             let spaces = Self::drawing_spaces(&document);
+            // `TAGMODE=R` freezes the references already on the sheet: a released drawing
+            // keeps its tags. `TAG-START` seeds the sequence for anything genuinely new.
+            let setup = read_setup(&document);
+            let frozen_sheet = setup.tag_mode.trim().eq_ignore_ascii_case("R");
+            if setup.present && setup.tag_start > 0 {
+                tag_start = tag_start.max(setup.tag_start);
+            }
             let mut on_sheet: Vec<(String, String, f64, f64)> = Vec::new();
             for entity in document.entities() {
                 if !spaces.contains(&entity.common().owner_handle) {
@@ -4897,6 +4907,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                         if !device.sheets.contains(&label) {
                             device.sheets.push(label.clone());
                         }
+                        device.frozen |= frozen_sheet;
                     }
                     None => {
                         seen.insert(key, devices.len());
@@ -4904,6 +4915,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                             prefix,
                             tag,
                             sheets: vec![label.clone()],
+                            frozen: frozen_sheet,
                         });
                     }
                 }
@@ -4917,15 +4929,49 @@ fn class_for_reference(tag: &str) -> &'static str {
         }
 
         // Pass 2: assign numbers per prefix, in encounter order.
-        let mut counters: BTreeMap<String, usize> = BTreeMap::new();
+        //
+        // A device on a sheet whose `WD_M` says `TAGMODE=R` keeps its reference: a released
+        // drawing must not be silently renumbered. Its number is still treated as taken, so a
+        // genuinely new device gets the next free number instead of a duplicate.
+        let mut counters: BTreeMap<String, u32> = BTreeMap::new();
+        let mut taken: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
+        for device in &devices {
+            if device.frozen {
+                if let Some(number) = trailing_number(&device.tag) {
+                    taken
+                        .entry(device.prefix.clone())
+                        .or_default()
+                        .insert(number);
+                }
+            }
+        }
         let mut mapping: BTreeMap<String, String> = BTreeMap::new();
         let mut plan: Vec<String> = Vec::new();
+        let mut frozen_count = 0usize;
         for device in &devices {
-            let next = counters.entry(device.prefix.clone()).or_insert(0);
-            *next += 1;
+            if device.frozen {
+                frozen_count += 1;
+                continue;
+            }
             let format = NumberingFormat::tag(&device.prefix);
-            // `value` is 0-based with a start of 1, so the first device is ordinal 0.
-            let value = format.value((*next - 1) as u32);
+            let taken_for_prefix = taken.get(&device.prefix);
+            // `value` is 0-based with a start of 1; TAG-START seeds the first ordinal.
+            let ordinal = counters
+                .entry(device.prefix.clone())
+                .or_insert(tag_start.saturating_sub(1));
+            loop {
+                let number = *ordinal + 1;
+                if taken_for_prefix
+                    .map(|set| set.contains(&number))
+                    .unwrap_or(false)
+                {
+                    *ordinal += 1;
+                    continue;
+                }
+                break;
+            }
+            let value = format.value(*ordinal);
+            *ordinal += 1;
             mapping.insert(device.tag.clone(), value.clone());
             if value != device.tag {
                 plan.push(format!(
@@ -4941,8 +4987,20 @@ fn class_for_reference(tag: &str) -> &'static str {
 
         let changed = plan.len();
         let verb = if dry_run { "would renumber" } else { "renumbered" };
+        let start_note = if tag_start > 1 {
+            format!(" TAG-START {tag_start}.")
+        } else {
+            String::new()
+        };
+        let frozen_note = if frozen_count > 0 {
+            format!(
+                " {frozen_count} device(s) frozen by WD_M (TAGMODE=R); existing references are left alone."
+            )
+        } else {
+            String::new()
+        };
         let summary = format!(
-            "ELECPROJNUM: {} sheet(s), {} device(s); {verb} {changed}.",
+            "ELECPROJNUM: {} sheet(s), {} device(s); {verb} {changed}.{start_note}{frozen_note}",
             sheets.len(),
             devices.len()
         );
@@ -4963,6 +5021,10 @@ fn class_for_reference(tag: &str) -> &'static str {
             if dry_run {
                 self.command_line
                     .push_output("  (preview only; run ELECPROJNUM apply to write)");
+            } else if changed == 0 && frozen_count > 0 {
+                self.command_line.push_output(
+                    "  (nothing to renumber: every device on a frozen sheet already has its reference)",
+                );
             }
             return Task::none();
         }
@@ -5875,6 +5937,23 @@ fn register_panel_sheet(path: &str) -> Option<String> {
     ));
     std::fs::write(&file, text).ok()?;
     Some(format!("registered in {}", file.display()))
+}
+
+/// The trailing number of a reference (`M326` -> 326), or `None` for a structured tag.
+fn trailing_number(tag: &str) -> Option<u32> {
+    let digits: String = tag
+        .chars()
+        .rev()
+        .take_while(|character| character.is_ascii_digit())
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse().ok()
+    }
 }
 
 /// True when an attribute carries the device tag.
