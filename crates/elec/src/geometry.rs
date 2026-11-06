@@ -127,6 +127,20 @@ impl DisjointSet {
 ///
 /// `tolerance` is the distance below which two points are the same node. A typical drawing
 /// uses something around the snap grid (0.1 mm at 1:1, or 1 unit at schematic scale).
+/// Shortest distance from a point to a line segment, used to recognise a T-junction.
+fn point_to_segment_distance(point: Point, a: Point, b: Point) -> f64 {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    let length_squared = dx * dx + dy * dy;
+    if length_squared <= f64::EPSILON {
+        return ((point.x - a.x).powi(2) + (point.y - a.y).powi(2)).sqrt();
+    }
+    let t = (((point.x - a.x) * dx + (point.y - a.y) * dy) / length_squared).clamp(0.0, 1.0);
+    let cx = a.x + t * dx;
+    let cy = a.y + t * dy;
+    ((point.x - cx).powi(2) + (point.y - cy).powi(2)).sqrt()
+}
+
 pub fn netlist_from_geometry(wires: &[WireSeg], anchors: &[Anchor], tolerance: f64) -> GeoNetlist {
     netlist_from_geometry_impl(wires, anchors, tolerance, false)
 }
@@ -156,6 +170,26 @@ fn netlist_from_geometry_impl(
         let b = cell(wire.to, tolerance);
         dsu.union(a, b);
     }
+    if keep_wire_runs {
+        // A wire that ends on the middle of another wire is a T-junction: the same net.
+        // That is what a junction dot means on a schematic, and endpoint-only unioning left
+        // real drawings with one net per segment. The gap allowed is deliberately small
+        // (0.02 drawing units) so 0.125-unit symbol-pin gaps and wire-hop arcs do not merge.
+        const T_JUNCTION: f64 = 0.02;
+        for wire in wires {
+            for other in wires {
+                if wire.id == other.id {
+                    continue;
+                }
+                for endpoint in [wire.from, wire.to] {
+                    if point_to_segment_distance(endpoint, other.from, other.to) <= T_JUNCTION {
+                        dsu.union(cell(wire.from, tolerance), cell(other.from, tolerance));
+                    }
+                }
+            }
+        }
+    }
+
     for anchor in anchors {
         // Registering the anchor's node is what lets a symbol with no wires still be
         // reported as unconnected rather than silently vanishing.

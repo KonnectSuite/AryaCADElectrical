@@ -194,9 +194,11 @@ New module [`src/app/commands/elec_ioimport.rs`](../src/app/commands/elec_ioimpo
 `crates/elec/src/geometry.rs` gained `netlist_from_geometry_with_wire_runs()`: a connected run of wires is an equipotential whether or not a symbol sits on it, so the run now appears in `nets` (with an empty anchor list) instead of being counted as loose. The strict `netlist_from_geometry()` is unchanged, so the existing 121 crate tests still pass (**verified: 121 passed, 0 failed**), and `ELECWIRELIST` / `ELECWIRENUMBER` / `ELECJUNCTIONS` / `ELECIO` use the lenient one.
 
 Measured on the customer sheets:
-- `FC1000495-046`: **77 wire segment(s) → 48 net(s)**, 0 loose wires (was "no wires found").
-- `FC1000495-003`: wire list reports nets plus `unconnected: HYD. UNIT, M326, M326, M326`; `ELECWIRENUMBER` now **numbers the nets** (it previously refused with "no connected nets found").
-- Nets are still mostly one segment each: end points that meet are merged (0.05), but a wire ending on the *middle* of another wire (a T-junction) is not yet merged, and symbol pins are not anchors because the customer sheets were exploded. That is the next refinement — the measured tolerances are in [`real-sheet-model.md`](real-sheet-model.md) (T-junction ≤ 0.02, terminal bridge 0.14).
+- `FC1000495-046`: **77 wire segment(s) → 21 net(s)** (was 48 one-wire "nets" before T-junctions), largest net **34 wires**.
+- `FC1000495-003`: **132 segments, 4 components → 57 nets**, with a 34-wire and a 22-wire net; the wire list reports `unconnected: HYD. UNIT, M326, M326, M326`, and `ELECWIRENUMBER` now **numbers the nets** (it previously refused with "no connected nets found").
+- **T-junctions merge too**: a wire ending on the middle of another wire (what a junction dot means) is now the same net, using the measured 0.02-unit gap, while 0.125-unit symbol-pin gaps and wire-hop arcs stay separate. This is what turned dozens of one-segment nets into real connection nets.
+
+Still not anchored: symbol **pins**. On the customer sheets the symbols were exploded, so there is nothing to anchor a net to; the 4 surviving attribute devices are reported as unconnected because their insertion points are not on a wire.
 
 ### A reported bug that turned out to be already fixed
 `ELECINSERT` giving the same tag to consecutive placements no longer reproduces: three consecutive inserts now report `-K1`, `-K2`, `-K3`. The cause was the same collector divergence — tags were counted in model space while the new symbols landed on a layout sheet, so the counter never saw them. The all-space collector fix closed it.
