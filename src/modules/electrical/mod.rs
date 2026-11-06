@@ -301,6 +301,7 @@ impl CadModule for ElectricalModule {
                             icon: CABLE,
                             items: vec![
                                 menu_item("ELECCABLELIST", "Cable Schedule", CABLE),
+                                menu_item("ELECCABLEDRAW", "Draw Cable", CABLE),
                                 menu_item("ELECCABLE", "Add Cable", CABLE),
                             ],
                             default: "ELECCABLELIST",

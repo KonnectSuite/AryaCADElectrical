@@ -1105,6 +1105,7 @@ impl OpenCADStudio {
             || tokens[0].eq_ignore_ascii_case("ELECASSIGN")
             || tokens[0].eq_ignore_ascii_case("ELECIOIMPORT")
             || tokens[0].eq_ignore_ascii_case("ELECCABLE")
+            || tokens[0].eq_ignore_ascii_case("ELECCABLEDRAW")
             || tokens[0].eq_ignore_ascii_case("ELECCABLELIST")
             || tokens[0].eq_ignore_ascii_case("ELECCABLEDEL")
             || tokens[0].eq_ignore_ascii_case("ELECWIRELABELS")

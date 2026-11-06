@@ -1304,6 +1304,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "ELECASSIGN",
         "ELECIOIMPORT",
         "ELECCABLE",
+        "ELECCABLEDRAW",
         "ELECCABLELIST",
         "ELECCABLEDEL",
         "ELECREV",

@@ -719,6 +719,19 @@ fn wire_graph(document: &codec::Document) -> WireGraph {
     }
 }
 
+/// Every device pin in the drawing as `(x, y, label)`.
+///
+/// Other command families (the cable schedule) resolve an endpoint to a device with the same
+/// pin rules the netlist uses, so a cable end and a wire end name a device identically.
+pub(super) fn device_pin_points(document: &codec::Document) -> Vec<(f64, f64, String)> {
+    let graph = wire_graph(document);
+    graph
+        .anchors
+        .iter()
+        .map(|anchor| (anchor.at.x, anchor.at.y, anchor.display_label()))
+        .collect()
+}
+
 impl OpenCADStudio {
     /// Turn every block insert in the active tab into a component.
     ///
@@ -1088,6 +1101,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             (
                 "Cables",
                 &[
+                    "ELECCABLEDRAW <tag> [CORES=] [PART=] [SHIELD=yes]  draw the cable route",
                     "ELECCABLE <tag> CORES=<n> [PART=] [MFG=] [LEN=] [DESC=]",
                     "ELECCABLELIST [out.csv]       print or export the cable schedule",
                     "ELECCABLEDEL <tag>            remove a cable",
@@ -2296,19 +2310,28 @@ fn class_for_reference(tag: &str) -> &'static str {
         }
         let strips = ::elec::terminal_strips(&terminals);
 
-        let sheets = vec![
+        let mut sheets = vec![
             bom_sheet(&rows),
             wire_sheet_from(&wire_rows),
             terminal_sheet(&strips),
         ];
+        // A cable schedule travels with the rest of the report when the project has cables.
+        if let Some(cables) = super::elec_cables::cable_sheet(&self.tabs[i].scene.document) {
+            sheets.push(cables);
+        }
 
         match write_xlsx(path, &sheets) {
             Ok(()) => {
+                let cables = sheets
+                    .get(3)
+                    .map(|sheet| sheet.body_len())
+                    .unwrap_or(0);
                 let summary = format!(
-                    "ELECREPORT: wrote {path} (BOM {} row(s), wire list {} row(s), terminals {} row(s)).",
+                    "ELECREPORT: wrote {path} (BOM {} row(s), wire list {} row(s), terminals {} row(s), cables {} row(s)).",
                     sheets[0].body_len(),
                     sheets[1].body_len(),
-                    sheets[2].body_len()
+                    sheets[2].body_len(),
+                    cables
                 );
                 self.command_line.push_output(&summary);
             }
