@@ -1,0 +1,6 @@
+# Reload the library after ELECMAKESYMBOL wrote a new symbol into it, and place
+# that symbol. This proves an authored symbol is immediately usable.
+#   @LIB@  the same library copy makesymbol_batch.txt wrote to (now 28 symbols)
+ELECLIB @LIB@
+ELECINSERT SMOKE_SYM
+QSAVE

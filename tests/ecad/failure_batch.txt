@@ -1,0 +1,12 @@
+# Failure modes, both silent-ish:
+#   * EMPTY.dxf has no entities at all -> ELECLIB must report "no geometry".
+#   * ELECINSERT of a name that is not a block -> does it refuse?
+#   * ELECPLACE of the same name -> does it refuse, or write a dangling INSERT?
+# ELECINSERT runs first on purpose: once a dangling INSERT of that name exists,
+# ELECINSERT finds it as a template and succeeds, which hides the refusal.
+#   @LIB@  a library with one deliberately empty DXF
+ELECLIB @LIB@
+ELECINSERT NOSUCH
+ELECPLACE NOSUCH
+0,0
+QSAVE

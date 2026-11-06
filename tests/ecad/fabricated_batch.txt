@@ -1,0 +1,8 @@
+# The loader's "fabricate attribute definitions" branch: a symbol DXF with NO
+# ATTDEF entities in it. ELECLIB is expected to synthesise them from library.tsv
+# at fixed height 2.0 / y = 4 - row*2.5. The runner reads the saved block back to
+# record exactly what that produces, so the sizing defect is evidence, not a claim.
+#   @LIB@  the fabricated-symbol library folder
+ELECLIB @LIB@
+ELECINSERT NOATTR_SYM
+QSAVE

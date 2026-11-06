@@ -1,0 +1,18 @@
+# ELECMAKESYMBOL: author a symbol from drawing geometry and get it back into the library.
+#
+# Run by tests/ecad/run_smoke.py against a COPY of library/ (the command appends a
+# row to library.tsv and writes <name>.dxf, so the delivered library stays clean).
+#   @LIB@  absolute path of the writable library copy
+#
+# LINE with four points and C to close leaves four LINE entities; SELECTALL
+# selects them, which is what ELECMAKESYMBOL requires.
+ELECLIB @LIB@
+LINE
+0,0
+10,0
+10,5
+0,5
+C
+SELECTALL
+ELECMAKESYMBOL SMOKE_SYM
+QSAVE

@@ -1,0 +1,4 @@
+# Does ELECSHEET run exactly once on a real sheet? The frame geometry it draws is
+# counted from the saved file (a double dispatch would draw 32 lines and 10 texts).
+ELECSHEET A3 Baseline Test
+QSAVE

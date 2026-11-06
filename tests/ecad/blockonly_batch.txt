@@ -1,0 +1,6 @@
+# Block-only symbol layout ("harvested" style): the DXF keeps its geometry
+# inside a BLOCK definition and model space is empty. Does ELECLIB load it?
+#   @LIB@  a one-symbol library written by the runner
+ELECLIB @LIB@
+ELECINSERT BOXSYM
+QSAVE

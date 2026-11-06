@@ -1,0 +1,6 @@
+# Baseline of the electrical reports on one real client sheet, with no edits.
+#   @BOM@  where ELECBOM should write its CSV (only written when it finds rows)
+ELECLIST
+ELECBOM @BOM@
+ELECNUMBERPREVIEW
+ELECWIRELIST

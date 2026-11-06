@@ -1,0 +1,6 @@
+# Mixed symbol layout: one line in model space AND a BLOCK definition in the
+# same file. `Document::entities()` returns both sets, so ELECLIB should merge
+# them into the new block - a trap for library authors.
+#   @LIB@  a one-symbol library written by the runner
+ELECLIB @LIB@
+QSAVE

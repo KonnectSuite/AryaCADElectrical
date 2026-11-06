@@ -1,0 +1,41 @@
+# ECAD smoke batch: the full drafting path, run headless.
+#
+# Run by tests/ecad/run_smoke.py as:
+#     ocs_baseline.exe --each smoke_batch.txt <work>/sheet.dxf
+# which opens the drawing, feeds each row, then closes it. QSAVE at the end is
+# what makes the results readable from the file.
+#
+# Placeholders substituted by the runner (this workspace path has no spaces, so
+# ELECLIB can take the folder bare - the command trims but does not unquote):
+#   @LIB@  absolute path of the library folder (library/)
+#   @BOM@  absolute path for the bill-of-material CSV
+#
+# A blank line means Enter: it finishes the interactive command that is running.
+ELECNEW
+ELECLIB @LIB@
+ELECINSERT CONTACT_NO
+ELECINSERT CONTACT_NC
+ELECINSERT MOTOR
+ELECINSERT TERMINAL
+ELECINSERT EARTH
+ELECPLACE FUSE
+200,0
+ELECSETATTR -K1 CAT=3RT2016-1AB01,MFG=Siemens,DESC1=Contactor 9A,LOC=+MCC1,RATING=9A
+ELECSETATTR -K2 CAT=3RT2016-1AB01,DESC1=Contactor NC,LOC=+MCC1
+ELECSETATTR -X1 TAG1=X1:1,CAT=UK2.5B
+ELECSETATTR -E1 RATING=TN-S
+ELECLIST
+ELECBOM @BOM@
+ELECWIRE
+0,0
+40,0
+40,20
+
+ELECWIRE
+20,0
+20,10
+
+ELECJUNCTIONS
+ELECNUMBER
+ELECLIST
+QSAVE

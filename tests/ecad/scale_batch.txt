@@ -1,0 +1,9 @@
+# Manifest-scale probe: does the `scale` column reach the inserted block?
+#   @LIB@  a one-symbol library whose manifest row is given by the runner
+# ELECINSERT does not read the scale column; ELECPLACE does. Both are checked
+# from the saved DXF (INSERT group codes 41/42/43).
+ELECLIB @LIB@
+ELECINSERT FUSE
+ELECPLACE FUSE
+60,0
+QSAVE

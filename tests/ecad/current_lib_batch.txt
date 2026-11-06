@@ -1,0 +1,8 @@
+# The rebuilt (current) binary on the generated starter library: load, place,
+# tag, list, save. Proves the shipped binary still consumes the same library.
+#   @LIB@  absolute path of the starter library
+ELECLIB @LIB@
+ELECINSERT CONTACT_NO
+ELECSETATTR -K1 CAT=3RT2016-1AB01,DESC1=Contactor 9A
+ELECLIST
+QSAVE
