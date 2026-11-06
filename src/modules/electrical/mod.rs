@@ -59,7 +59,7 @@ impl CadModule for ElectricalModule {
                         RibbonItem::Tool(ToolDef {
                             id: "ELECINSERT",
                             label: "Insert\nSymbol",
-                            icon: IconKind::Glyph("\\u{2795}"),
+                            icon: IconKind::Glyph("\u{2795}"),
                             event: ModuleEvent::Command("ELECINSERT".to_string()),
                         }),
                         RibbonItem::Tool(ToolDef {

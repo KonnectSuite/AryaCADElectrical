@@ -1,4 +1,4 @@
-//! Electrical (ECAD) commands.
+﻿//! Electrical (ECAD) commands.
 //!
 //! These are the host-side features of the electrical layer. They read placed symbols
 //! from the drawing, turn each block insert and its attributes into an `elec::Component`,
@@ -1666,10 +1666,19 @@ fn components_of(document: &codec::Document) -> Vec<Component> {
                             .find(|name| !name.starts_with('*'));
                         if let Some(block_name) = first {
                             if let Some(record) = document.block_records.get(&block_name) {
-                                let handle = record.block_entity_handle;
+                                // Block contents are owned by the block **record** (or listed
+                                // in its `entity_handles`); `block_entity_handle` is the BLOCK
+                                // entity marker itself. Filtering on the marker returns no
+                                // entities, so every symbol whose geometry lives in its block
+                                // definition loaded as "no geometry".
+                                let owner = record.handle;
+                                let owned = record.entity_handles.clone();
                                 entities = document
                                     .entities()
-                                    .filter(|entity| entity.common().owner_handle == handle)
+                                    .filter(|entity| {
+                                        entity.common().owner_handle == owner
+                                            || owned.contains(&entity.common().handle)
+                                    })
                                     .cloned()
                                     .collect();
                             }
@@ -4047,7 +4056,9 @@ fn components_of(document: &codec::Document) -> Vec<Component> {
             "ELECWIRELIST" => Some(self.elec_wirelist(i)),
             "ELECWIRENUMBER" => Some(self.elec_wirenumber(i)),
             "ELECTERMINALS" => Some(self.elec_terminals(i)),
-            "ELECTSIDES" => Some(self.elec_sides(i)),
+            // The registry used to advertise only `ELECSIDES`, so the typed name failed
+            // with "Unknown command"; accept both spellings and keep one implementation.
+            "ELECTSIDES" | "ELECSIDES" => Some(self.elec_sides(i)),
             "ELECIO" => Some(self.elec_io(i)),
             // The palette is UI, not a drawing edit: it opens the modal that lists the
             // loaded library, and a click in it runs this same ELECINSERT command.
@@ -4074,7 +4085,10 @@ fn components_of(document: &codec::Document) -> Vec<Component> {
                 }
                 None
             }
-            "ELECPALETTE" => {
+            // Bare ELECINSERT opens the palette; the argument form `ELECINSERT <block>`
+            // is handled at the bottom of this match. The ribbon's "Insert Symbol" button
+            // sends the bare form, which previously matched nothing at all.
+            "ELECPALETTE" | "ELECINSERT" => {
                 // The palette is useless without symbols, and the folder is remembered, so
                 // open it with the library already loaded when this session has not loaded
                 // one yet.
@@ -4317,7 +4331,11 @@ fn truncate(text: &str, width: usize) -> String {
 /// bill of material and numbered it as a device on the production sheets before this filter.
 fn is_setup_block(block_name: &str) -> bool {
     let name = block_name.trim().to_ascii_uppercase();
-    name == "WD_M" || name.starts_with("WD_")
+    // AutoCAD Electrical keeps its per-drawing settings on the `WD_M` block. Treating
+    // *every* `WD_`-prefixed block as setup swallowed third-party symbols that happen to
+    // follow that naming, so only the settings block is excluded here; other `WD_*`
+    // inserts are still filtered in practice because a component needs attributes.
+    name == "WD_M"
 }
 
 

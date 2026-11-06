@@ -10,7 +10,6 @@ use codec::EntityType;
 use glam::DVec3;
 
 use crate::command::{CadCommand, CmdResult};
-use crate::t;
 
 /// One attribute to write on the new instance: tag and value.
 #[derive(Debug, Clone)]
@@ -111,6 +110,8 @@ mod tests {
                     value: "3RT".to_string(),
                 },
             ],
+            2.5,
+            1.0,
         );
         match command.on_point(DVec3::new(10.0, 20.0, 0.0)) {
             CmdResult::CommitAndExit(EntityType::Insert(insert)) => {
@@ -122,16 +123,17 @@ mod tests {
                 assert_eq!(insert.attributes[0].value, "-K7");
                 assert_eq!(insert.attributes[1].tag, "CAT");
             }
-            other => panic!("expected an insert commit, got {other:?}"),
+            // `CmdResult` deliberately carries no `Debug` (it embeds large scene values),
+            // so the failure arm reports the variant by name instead of formatting it.
+            _ => panic!("expected a CommitAndExit(Insert) from a picked point"),
         }
         assert!(command.prompt().contains("placed"));
     }
 
     #[test]
     fn finishing_on_enter_leaves_the_command() {
-        let mut command = PlaceSymbolCommand::new("X".to_string(), Vec::new());
-        assert_eq!(command.on_enter(), CmdResult::Finished);
-
+        let mut command = PlaceSymbolCommand::new("X".to_string(), Vec::new(), 2.5, 1.0);
+        assert!(matches!(command.on_enter(), CmdResult::Done));
     }
 }
 

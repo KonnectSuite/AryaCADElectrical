@@ -1,4 +1,4 @@
-//! The wire tool: draw conductors, not decoration.
+﻿//! The wire tool: draw conductors, not decoration.
 //!
 //! A wire here is a line on the `WIRES` layer with a net number derived afterwards. The tool
 //! exists separately from `LINE` because a schematic wire is drawn differently: it chains
@@ -83,10 +83,10 @@ mod tests {
     #[test]
     fn the_first_pick_only_starts_the_wire() {
         let mut command = WireCommand::new();
-        assert_eq!(
+        assert!(matches!(
             command.on_point(DVec3::new(0.0, 0.0, 0.0)),
             CmdResult::NeedPoint
-        );
+        ));
         assert!(command.prompt().contains("next point"));
     }
 
@@ -100,7 +100,8 @@ mod tests {
                 assert_eq!(line.start.x, 0.0);
                 assert_eq!(line.end.x, 10.0);
             }
-            other => panic!("expected a line commit, got {other:?}"),
+            // `CmdResult` has no `Debug` impl, so name the shape instead of printing it.
+            _ => panic!("expected a CommitEntity(Line) from the second pick"),
         }
         // The next segment starts where the last one ended.
         match command.on_point(DVec3::new(10.0, 10.0, 0.0)) {
@@ -109,8 +110,8 @@ mod tests {
                 assert_eq!(line.start.y, 0.0);
                 assert_eq!(line.end.y, 10.0);
             }
-            other => panic!("expected a chained line, got {other:?}"),
+            _ => panic!("expected a chained CommitEntity(Line) from the third pick"),
         }
-        assert_eq!(command.on_enter(), CmdResult::Done);
+        assert!(matches!(command.on_enter(), CmdResult::Done));
     }
 }

@@ -117,6 +117,14 @@ objc2-foundation = { version = "0.2", features = ["NSArray", "NSURL", "NSString"
 iced_core = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
 iced_widget = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
 
+# `HakanSeven12/acadrust` no longer resolves (GitHub 404): the repository lives
+# on the `hakanaktt` account now, and the commit `opencaddocument` pin fb29ea0
+# asks for (d6d7e132...) exists there. Redirect the source here rather than
+# editing the transitive `opencaddocument` manifest. Drop this once the
+# `codec` pin moves to a revision that names the current repository.
+[patch."https://github.com/HakanSeven12/acadrust.git"]
+acadrust = { git = "https://github.com/hakanaktt/acadrust.git", rev = "d6d7e13224af4f3b6978cb3a3ccc8c4cce8b3b11" }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = "0.3"
 ocs_plugin_api = { path = "crates/ocs_plugin_api", features = ["host"] }
