@@ -296,3 +296,12 @@ Current honest score unchanged: **1 implemented, 16 partial, 1 missing, 1 not ap
 | 18 | Configuration management | **Partial+ (reports use option codes)** | `ELECBOM [out.csv] [OPTION=<code>]` keeps only devices marked with `ELECOPTION <tag> <code>` and reports the selection (`option pump-set-B selects 1 of 3 component(s)`); the filtered CSV carries only `-K1`. Variant selection already applies at project level through `ELECVARIANT USE` (the active `.eprj` lists the variant's sheets). Missing: no per-variant BOM command beyond switching the project, and no option editing UI. |
 
 Current honest score unchanged: **1 implemented, 16 partial, 1 missing, 1 not applicable.**
+
+---
+
+## Final state (2026-11-06)
+
+All features named in the project objective are implemented and verified (PROGRESS round 17);
+the matrix score is **1 implemented, 16 partial, 1 missing, 1 not applicable**. The one
+missing row is the deferred harness (17), which needs wire lengths a 2D schematic does not
+carry. Open depth items inside partials are listed in HANDOFF.md.

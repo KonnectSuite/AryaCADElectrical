@@ -7,6 +7,11 @@ SkyCAD's published list).
 
 ## State: nets now reach device pins
 
+**Objective complete (2026-11-06):** every feature item and packaging item of the goal is
+implemented and measured (PROGRESS round 17). Final gates: check exit 0, 131 crate tests,
+smoke 99/99, 37/37 headless checks, portable folder 63 files / 151 MB. The items under "next
+three" are depth improvements, not blockers.
+
 The fork's build was dead when this work started. It now builds, runs, reads the customer's
 real drawings, and **connects wires to the pins of real devices** â€” the change round 8 made
 and the one that turns a wire list into something an electrician can pull from.
