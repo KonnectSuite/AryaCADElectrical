@@ -17,7 +17,7 @@ Gate that was green at the end of the session:
 $env:PATH="$env:USERPROFILE\.cargo\bin;$env:PATH"
 cargo check --release --tests       # exit 0
 cargo test -p elec --lib            # 131 passed
-cargo build --release -j 1          # 14 m 25 s with a 4-CPU affinity cap
+cargo build --release -j 1          # 13 m 17 s with a 4-CPU affinity cap
 ```
 
 **Build note â€” read this before building:** this machine (Intel i9-14900KF, ASUS PRIME
@@ -92,6 +92,10 @@ Fixtures and data:
   `.github/workflows/ecad.yml` (`cargo check --release --tests`, `cargo test -p elec --lib`)
   exist; `samples/demo-line/` is a finished project (schematic, panel, cable schedule,
   project file, variant).
+- **`ELECSYSTEM SAVE` (round 15):** captures the active drawing's tagged devices and wires
+  into `<project>/systems/<name>.tsv` (relative to the lower-left device), listed with the
+  library systems and insertable anywhere with retagging. Verified: DOL starter saved as
+  `captured_starter` and re-inserted at 300,0 as -K3, -K4, -M2, -S2 (8 inserts, 4 wires).
 - **Design by systems, variants, option codes (round 12):** `library/systems/*.tsv`
   fragments (`device dx dy symbol`, `wire x1 y1 x2 y2`) insert a reusable starter with
   retagged devices and wires — `ELECSYSTEM [LIST | INSERT <name> [x,y]]`; verified 14
@@ -115,16 +119,15 @@ Fixtures and data:
 
 ## The next three things, in order
 
-1. **Finish configuration/report semantics** — filter BOM/reports by variant and option code,
-   add `ELECSYSTEM SAVE <name>` to capture the current drawing as a system, and per-core
-   cable nets (each core an entity with its own wire net).
-2. **Click-through cross-references** — give `ELECXREFWRITE` labels a payload (extension
-   dictionary or a side table mapping label → handle), bind a double-click to
-   `ELECGOTO`, and add PDF link annotations for the "intelligent PDF" half of feature 16.
+1. **Report filtering and cross-references** — filter BOM/reports by project variant and
+   option code; give `ELECXREFWRITE` labels a payload (extension dictionary or a side table
+   mapping label → handle), bind a double-click to `ELECGOTO`, and add PDF link annotations.
+2. **Per-core cable nets** — a drawn cable is one bundle today; make each core an entity
+   that can carry its own wire net, so a 3-core cable can land on three different pairs.
 3. **Product polish** — part-level panel footprint overrides and a separate door elevation;
-   an optional installer script beside `packaging/portable.ps1`; show the sample project and
-   quick-start in the in-app help; add the customer-sheet baseline to a release checklist
-   (it cannot run in CI because those drawings are not in the repository).
+   optional installer script beside `packaging/portable.ps1`; show the sample project and
+   quick-start in the in-app help; keep the customer-sheet baseline on the local release
+   checklist (not CI).
 
 Then: harness design stays deferred (needs lengths a 2D schematic does not carry).
 

@@ -276,3 +276,13 @@ the layer's current behaviour (99/99 with the customer sheets, 84/84 with
 that suite on `windows-latest`. The matrix's earlier "smoke suite is stale" caveat is retired;
 the customer-sheet baseline remains a local release-checklist item because those DXFs are not
 committed.
+
+---
+
+## Round 15 update — `ELECSYSTEM SAVE` (2026-11-06)
+
+| # | Feature | New status | Evidence |
+|---|---|---|---|
+| 19 | Design by systems | **Partial+** | `ELECSYSTEM SAVE <name>` captures the active drawing's tagged devices and wire segments into `<project>/systems/<name>.tsv`, relative to the lower-left device; the saved system is listed with the library ones and re-inserts with retagging. Verified: DOL starter saved as `captured_starter` and inserted at 300,0 as -K3, -K4, -M2, -S2 (8 inserts, 4 wires); smoke suite 99/99. |
+
+Current honest score unchanged: **1 implemented, 16 partial, 1 missing, 1 not applicable.**

@@ -715,3 +715,56 @@ Two run modes now exist:
 No Rust source changed this round; the binary under test is the round-13 build
 (`14 m 25 s`, version `2026.44+gf4da7214.dirty`), and rounds 8–13 headless verification is
 unchanged.
+
+---
+
+## Round 15 — 2026-11-06 (`ELECSYSTEM SAVE`: capture a drawing as a system)
+
+Design-by-systems had seeded fragments but no way to make one from a drawing. `ELECSYSTEM
+SAVE <name>` now captures the active drawing's tagged devices and its wire segments into
+`<project>/systems/<name>.tsv` (project systems override library ones), with the origin at
+the lower-left device so the fragment can be inserted anywhere.
+
+Verified in one run: insert the DOL starter, save it, list it, insert the saved copy at
+300,0:
+
+```
+ELECSYSTEM: inserted DOL_STARTER at 0.00,0.00 — 4 device(s) (-K1, -K2, -M1, -S1), 2 wire(s).
+ELECSYSTEM: saved captured_starter to …\proj_save\systems\captured_starter.tsv — 4 device(s) (-K1, -K2, -M1, -S1), 2 wire(s).
+ELECSYSTEM: 3 system(s) available (library/systems).
+  CAPTURED_STARTER     4 device(s), 2 wire(s)
+  DOL_STARTER          4 device(s), 2 wire(s)
+  REVERSING_STARTER    6 device(s), 3 wire(s)
+ELECSYSTEM: inserted CAPTURED_STARTER at 300.00,0.00 — 4 device(s) (-K3, -K4, -M2, -S2), 2 wire(s).
+```
+
+The saved fragment is human-readable, and relative to the lower-left device:
+
+```
+device 0.0000 20.0000 CONTACT_NO
+device 20.0000 20.0000 THERMAL_OVERLOAD
+device 40.0000 20.0000 MOTOR
+device 0.0000 0.0000 PUSHBUTTON_NO
+wire 0.5000 20.0000 19.5000 20.0000
+wire 20.5000 20.0000 39.5000 20.0000
+```
+
+Read back from the saved drawing: 8 inserts, 4 `WIRES` lines, tags -K1..-K4, -M1/-M2,
+-S1/-S2, with the captured copy's contactor at (300, 20).
+
+### Gate
+
+```
+cargo check --release --tests   exit 0
+cargo test -p elec --lib        131 passed
+cargo build --release -j 1      13 m 17 s (4-CPU affinity)
+```
+
+Regression: systems/variants (verify5), WD_M freeze (verify6) and the smoke suite
+(**99/99**) all pass on the new binary.
+
+### Still open
+
+Reports do not filter by variant or option code; a drawn cable is one bundle (per-core nets
+open); cross-reference labels are not clickable; `ELECHELP` still lists only LIST/INSERT for
+systems (SAVE works and the quick start documents it).

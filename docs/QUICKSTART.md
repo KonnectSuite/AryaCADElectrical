@@ -88,7 +88,7 @@ A cable is a drawn object, and the schedule is measured from it:
 | renumber across the project | `ELECPROJNUM` (preview) / `ELECPROJNUM apply` — honours `WD_M` `TAGMODE=R` |
 | revision snapshots | `ELECREV SNAPSHOT label`, `ELECREV LIST`, `ELECREV RESTORE id` |
 | built/assembled protection | `ELECBUILT ON` / `ELECBUILT OFF` |
-| reusable sub-circuits | `ELECSYSTEM LIST`, `ELECSYSTEM INSERT DOL_STARTER 0,0` |
+| reusable sub-circuits | `ELECSYSTEM LIST`, `ELECSYSTEM INSERT DOL_STARTER 0,0`, `ELECSYSTEM SAVE my_starter` |
 | alternative sheet sets | `ELECVARIANT NEW pumpset_b`, `ELECVARIANT LIST`, `ELECVARIANT USE pumpset_b` |
 | option codes | `ELECOPTION -K1 pump-set-B`, `ELECOPTION LIST` |
 
