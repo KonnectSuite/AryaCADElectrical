@@ -84,3 +84,18 @@ The pin-anchoring work was committed as `d161ed7` before attempting another
 build, so a reboot cannot lose source changes. The build product
 (`target\release\OpenCADStudio.exe`) still needs one successful build to verify
 the change; `cargo check --release --tests` passed and the 130 crate tests pass.
+
+## Outcome of the low-load build (2026-11-06)
+
+Two release builds were completed after the second bugcheck with the compiler pinned to
+four logical CPUs (`target\tmp\pinprobe\build_aff.ps1`: `-j 1`, affinity mask `0xF`):
+
+| build | duration | result |
+|---|---|---|
+| first (with the pin-anchoring change) | 14 m 35 s | succeeded, no crash |
+| second (with the declared-pin fix) | 12 m 47 s | succeeded, no crash |
+
+`cargo check --release --tests` and the crate tests (130) also pass. That is evidence the
+crash is load-related, and a workaround, not a fix: the BIOS/microcode/warranty steps above
+are still the real remedy. An unconstrained `cargo build --release` should be avoided until
+they are done.

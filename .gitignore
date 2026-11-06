@@ -48,6 +48,7 @@ import/
 
 # Scratch drawings and probe output written by the headless ECAD test batches
 tests/ecad/_probe*/
+tests/ecad/_work/
 reports/_tmp/
 
 # macOS Finder metadata

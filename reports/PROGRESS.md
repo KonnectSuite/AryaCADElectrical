@@ -240,3 +240,115 @@ exports `WireNumber,X,Y` as CSV for printing labels. Reachable from the ribbon
 
 Verified on `FC1000495-003`: `ELECWIRENUMBER: 57 net(s); 57 label(s) created, 0 updated`,
 then `ELECWIRELABELS: wrote 57 label(s) to labels.csv` with rows `1,4.220,22.534` etc.
+
+---
+
+## Round 8 — 2026-11-06 (pin-level anchoring: nets reach devices)
+
+The handoff's first item, and the one that unlocks pin-to-pin wire lists. Three changes,
+all measured on the same customer sheets the layer is judged on.
+
+### Correction first: the wire collector was counting drafting lines
+
+`ELECWIRELIST` took *every* `LINE` and `LWPOLYLINE` in the drawing as a wire — symbol
+strokes, the sheet frame, title-block rules and table borders included. On
+`FC1000495-003` that reported **132 wire segments and 57 nets**, and not one net had a
+device on it: those "nets" were graphics. The measured truth is the sheet keeps exactly
+**8** entities on its ACADE `WIRES` layer; a print that was flattened has no `WIRES` layer
+at all and its wires are layer-0 lines of 0.5 units or more (measured in
+[real-sheet-model.md](real-sheet-model.md) §4).
+
+The collector now follows that rule: the `WIRES` layer when the sheet has one, layer-0
+lines at least 0.5 units otherwise. `WIRENO` labels, symbol strokes and the frame are no
+longer wires.
+
+### Pins, not insertion points
+
+A device anchors where its **pins** are, not where its block origin is:
+
+* an ACADE wire-connection attribute (`X1TERM02`, `X4TERM01`) names its pin — the
+  attribute's insertion point is the pin, or its `x,y` value when the writer stored one
+  (this app's PLC modules do);
+* a symbol without pin attributes is read from its **block geometry**: the ends of its line
+  stubs and the cardinal points of its circles, transformed by the insert's position, scale
+  and rotation. That is what makes a symbol placed by `ELECINSERT` connect;
+* a device whose attributes were exploded keeps only its tag TEXT; the nearest reference
+  TEXT within 1.0 unit is taken as its tag;
+* the wire endpoint within **0.2** of a pin is the point the anchor sits on (the print files
+  stop wires 0.125 short of a contact pin), so the pin joins the net exactly.
+
+Two connectivity rules were missing and are now part of the geometry pass
+(`elec::geometry::NetlistHints`):
+
+* **terminal pass-through** — two wire ends on opposite sides of a `TERMINAL` block
+  (gap ≤ 0.14, midpoint within 0.09 of the block) are the same equipotential, so they are
+  bridged;
+* **junction dots** — a wire ending on another wire's interior only connects where a dot
+  marks it (`DOT`/`WDDOT` insert, or the `JUNCTIONS`-layer circle `ELECJUNCTIONS` draws).
+  A bare crossing stays two nets.
+
+Every connectivity command (`ELECWIRELIST`, `ELECWIRENUMBER`, `ELECJUNCTIONS`,
+`ELECTERMINALS`, `ELECSIDES`, `ELECIO`, `ELECREPORT`) now uses the same collector, so they
+cannot disagree about which segments and pins exist.
+
+### Measured
+
+`FC1000495-003` (keeps its `WIRES` layer and 4 attributed devices) — the old output was
+`132 wire segment(s), 4 component(s) -> 57 net(s)`, none anchored:
+
+```
+ELECWIRELIST: 8 wire segment(s), 10 pin(s) -> 4 net(s); 6 unconnected pin(s), 0 loose wire(s).
+  net 1: 2 wire(s) -> HYD. UNIT:3
+  net 3: 2 wire(s) -> HYD. UNIT:1
+  net 5: 2 wire(s) -> HYD. UNIT:2
+  net 7: 2 wire(s) -> M326:2
+  unconnected: HYD. UNIT:4, M326:1, M326:2, M326:1, M326:2, M326:1
+```
+
+`FC1000495-046` (flattened print; layer-0 wires; 6 contacts + 2 NC contacts keep their
+symbols but not their attributes):
+
+```
+ELECWIRELIST: 53 wire segment(s), 8 pin(s) -> 39 net(s); 0 unconnected pin(s), 0 loose wire(s).
+  net 32: 1 wire(s) -> 4218CR:1   (also 4220CR:1, 4222CR:1, and three XXXXCR:1)
+```
+
+39 nets is the number [real-sheet-model.md](real-sheet-model.md) §4.3 measured for this
+sheet (53 segments → 39 nets, largest 4). Unconditional T-junction merging had produced 22
+nets by treating the sheet's table rules as wires and their T's as junctions.
+
+A drawing the app makes itself (two symbols placed with `ELECINSERT`, one wire between
+their stubs):
+
+```
+ELECWIRELIST: 1 wire segment(s), 2 pin(s) -> 1 net(s); 0 unconnected pin(s), 0 loose wire(s).
+  net 1: 1 wire(s) -> -K1:1, -K2:1
+ELECWIRENUMBER: 1 net(s); 1 label(s) created, 0 updated.
+  1: net 1 (-K1:1, -K2:1)
+```
+
+That is the pin-to-pin wire list the feature matrix asked for.
+
+### Gate
+
+```
+cargo check --release --tests     exit 0
+cargo test -p elec --lib          130 passed (9 new tests: pins, bridges, dot gating, hop gap)
+cargo build --release -j 1        12 m 47 s (4-CPU affinity; see PC-STABILITY.md)
+```
+
+`tests/ecad/run_smoke.py` now reports **92/99**: 7 checks assert behaviour from before
+round 2 and are stale, not regressions — they expect `FC1000495-002` to yield "no
+components" (round 2's TEXT recovery finds 13) and a BOM of 2 rows (it is 4 now); the two
+`ELECLIST printed the placed components` / `ELECBOM wrote one row per symbol` checks failed
+identically against the 11/5 binary. The wire/net checks pass.
+
+### Still open after this round
+
+* a net's *pin columns* in the wire list CSV (the nets now know their pins; the report
+  writers do not use them yet);
+* pin numbers for geometry-derived pins are positional (`:1`, `:2` by x then y) because the
+  generated symbols carry no pin attributes — the local library should grow `X*TERM`
+  definitions;
+* cables drawn as schematic objects, navigation (highlight/jump), panel footprints,
+  configuration management, design-by-systems.

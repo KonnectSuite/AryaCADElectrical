@@ -173,3 +173,22 @@ Current honest score: **1 implemented, 13 partial, 4 missing, 1 not applicable.*
 Remaining true gaps: pin-level connectivity (nets do not reach devices), cables drawn as objects,
 navigation (highlight/jump), panel layout with footprints and cut-outs, configuration management,
 design-by-systems, and the `ELECPROJNUM` / `WD_M` interaction.
+
+---
+
+## Round 8 update — pin-level connectivity (2026-11-06)
+
+The audit's "Remaining true gaps" list named pin-level connectivity as the blocker for
+feature 12. It is closed: a net now attaches to a device at its **pin**, not at the
+symbol's insertion point, and every connectivity command shares one collector.
+
+| # | Feature | New status | Evidence |
+|---|---|---|---|
+| 12 | Wire processing | **Partial+ (pin-to-pin connectivity)** | `ELECWIRELIST` on `FC1000495-003`: `8 wire segment(s), 10 pin(s) -> 4 net(s)`, `net 7 -> M326:2`, 6 unconnected pins; on the flattened `-046`: `53 -> 39 nets` with six tagged contacts; on an app-drawn sheet: `net 1 -> -K1:1, -K2:1` and `ELECWIRENUMBER` labels it. Pins come from ACADE `X*TERM` attributes or the symbol block's geometry; terminal pass-throughs are bridged and T-junctions need dots. Still missing: wire colour/gauge/part fields, and the report writers do not yet emit From/To pin columns. |
+| 12 | (correction) | **the old "132 segments / 57 nets" on -003 was a measurement error** | the collector counted every `LINE` (symbol strokes, frame, table rules) as a wire; the sheet has 8 `WIRES`-layer segments. Round 8 reads the `WIRES` layer, or layer-0 lines ≥ 0.5 on flattened prints. |
+
+Current honest score is unchanged by this round — **1 implemented, 13 partial, 4 missing,
+1 not applicable** — but the largest caveat on feature 12 ("nets never reach devices") is
+gone. Remaining true gaps: cables drawn as objects, navigation/highlight/jump, panel layout
+with footprints and cut-outs, configuration management, design-by-systems, and the
+`ELECPROJNUM` / `WD_M` interaction.
