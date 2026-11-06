@@ -128,6 +128,28 @@ impl DisjointSet {
 /// `tolerance` is the distance below which two points are the same node. A typical drawing
 /// uses something around the snap grid (0.1 mm at 1:1, or 1 unit at schematic scale).
 pub fn netlist_from_geometry(wires: &[WireSeg], anchors: &[Anchor], tolerance: f64) -> GeoNetlist {
+    netlist_from_geometry_impl(wires, anchors, tolerance, false)
+}
+
+/// Like [`netlist_from_geometry`], but a run of wires with no component on it is still a net.
+///
+/// Electrically a connected wire run is an equipotential whether or not a symbol happens to
+/// sit on it, and a drawing whose symbols were exploded has nothing else to anchor to. The
+/// runs appear in `nets` with an empty `anchors` list; `loose_wires` stays empty.
+pub fn netlist_from_geometry_with_wire_runs(
+    wires: &[WireSeg],
+    anchors: &[Anchor],
+    tolerance: f64,
+) -> GeoNetlist {
+    netlist_from_geometry_impl(wires, anchors, tolerance, true)
+}
+
+fn netlist_from_geometry_impl(
+    wires: &[WireSeg],
+    anchors: &[Anchor],
+    tolerance: f64,
+    keep_wire_runs: bool,
+) -> GeoNetlist {
     let mut dsu = DisjointSet::new();
     for wire in wires {
         let a = cell(wire.from, tolerance);
@@ -167,9 +189,18 @@ pub fn netlist_from_geometry(wires: &[WireSeg], anchors: &[Anchor], tolerance: f
         }
         if anchor_ids.is_empty() {
             // Wires with no symbol on them still form a net electrically (a cable run
-            // between two sheets), but with nothing attached they are reported as loose
-            // so the drawing can show them as unconnected drafting.
-            loose_wires.extend(wire_ids);
+            // between two sheets). Callers that want the run as a net ask for it; the
+            // default keeps reporting them as loose drafting for the strict callers.
+            if keep_wire_runs {
+                let id = wire_ids.first().copied().unwrap_or(0);
+                nets.push(GeoNet {
+                    id,
+                    anchors: Vec::new(),
+                    wires: wire_ids,
+                });
+            } else {
+                loose_wires.extend(wire_ids);
+            }
             continue;
         }
         let id = wire_ids

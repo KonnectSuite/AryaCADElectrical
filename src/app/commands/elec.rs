@@ -961,7 +961,7 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// insertion point meets a wire endpoint. Points within `tolerance` are the same node,
     /// so a wire drawn to a symbol pin connects without pixel-perfect coordinates.
     pub(super) fn elec_wirelist(&mut self, i: usize) -> Task<Message> {
-        use ::elec::geometry::{netlist_from_geometry, Anchor, Point, WireSeg};
+        use ::elec::geometry::{netlist_from_geometry_with_wire_runs, Anchor, Point, WireSeg};
         use ::elec::infer_tag_prefix;
 
         const TOLERANCE: f64 = 0.05;
@@ -1039,7 +1039,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             return Task::none();
         }
 
-        let netlist = netlist_from_geometry(&wires, &anchors, TOLERANCE);
+        let netlist = netlist_from_geometry_with_wire_runs(&wires, &anchors, TOLERANCE);
         let summary = format!(
             "ELECWIRELIST: {} wire segment(s), {} component(s) -> {} net(s); {} unconnected component(s), {} loose wire(s).",
             wires.len(),
@@ -1097,7 +1097,7 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// wire on layer `WIRENO`. An existing label at the same point is updated rather than
     /// duplicated, so the command is safe to run again after a design change.
     pub(super) fn elec_wirenumber(&mut self, i: usize) -> Task<Message> {
-        use ::elec::geometry::{netlist_from_geometry, Anchor, Point, WireSeg};
+        use ::elec::geometry::{netlist_from_geometry_with_wire_runs, Anchor, Point, WireSeg};
         use ::elec::{reading_order_key, NumberingFormat};
 
         const TOLERANCE: f64 = 0.05;
@@ -1167,7 +1167,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             }
         }
 
-        let netlist = netlist_from_geometry(&wires, &anchors, TOLERANCE);
+        let netlist = netlist_from_geometry_with_wire_runs(&wires, &anchors, TOLERANCE);
         if netlist.nets.is_empty() {
             self.command_line
                 .push_output("ELECWIRENUMBER: no connected nets found.");
@@ -1353,13 +1353,13 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// Terminals are components tagged `strip:index` (`X1:12`). Each strip is listed in
     /// terminal order with the devices its terminals reach through their nets.
     pub(super) fn elec_terminals(&mut self, i: usize) -> Task<Message> {
-        use ::elec::geometry::netlist_from_geometry;
+        use ::elec::geometry::netlist_from_geometry_with_wire_runs;
         use ::elec::terminal_strips;
 
         const TOLERANCE: f64 = 0.05;
 
         let (wires, anchors) = self.elec_collect(i);
-        let netlist = netlist_from_geometry(&wires, &anchors, TOLERANCE);
+        let netlist = netlist_from_geometry_with_wire_runs(&wires, &anchors, TOLERANCE);
         let label_of = |id: u64| {
             anchors
                 .iter()
@@ -1704,7 +1704,7 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// material (enriched from the parts catalogue when one is loaded), the wire list, and
     /// the terminal strips.
     pub(super) fn elec_report(&mut self, i: usize, path: &str) -> Task<Message> {
-        use ::elec::geometry::netlist_from_geometry;
+        use ::elec::geometry::netlist_from_geometry_with_wire_runs;
         use ::elec::{bom_sheet, terminal_sheet, wire_rows, wire_sheet_from};
 
         const TOLERANCE: f64 = 0.05;
@@ -1720,7 +1720,7 @@ fn class_for_reference(tag: &str) -> &'static str {
         let rows = bill_of_materials(&components);
 
         let (wires, anchors) = self.elec_collect(i);
-        let netlist = netlist_from_geometry(&wires, &anchors, TOLERANCE);
+        let netlist = netlist_from_geometry_with_wire_runs(&wires, &anchors, TOLERANCE);
         let wire_rows = wire_rows(&wires, &netlist);
 
         let label_of = |id: u64| {
@@ -3458,7 +3458,7 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// `X1TERMnn`/`X2TERMnn` (the same idea as the reference products' terminal-position
     /// attributes), so this can follow the wire from the pin and name the devices on it.
     pub(super) fn elec_io(&mut self, i: usize) -> Task<Message> {
-        use ::elec::geometry::{netlist_from_geometry, wire_rows, Point};
+        use ::elec::geometry::{netlist_from_geometry_with_wire_runs, wire_rows, Point};
 
         const TOLERANCE: f64 = 0.05;
 

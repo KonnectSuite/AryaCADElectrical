@@ -185,3 +185,18 @@ New module [`src/app/commands/elec_ioimport.rs`](../src/app/commands/elec_ioimpo
 - `ELECINSERT` gives two consecutive placements the same `-K1` (the next-tag counter never advances), and its argument form places at the origin without asking for a point.
 - `ELECPROJNUM` still ignores the per-sheet `WD_M` freeze (it now respects `ELECBUILT`, not `TAGMODE=R`).
 - Two teammate reports (`parts-library.md`, `io-import.md`) were lost when the session was interrupted; the verification evidence lives in this file and in the code comments instead.
+
+---
+
+## Round 4 — 2026-11-06 (wire processing)
+
+### Wires are nets now, not "loose drafting"
+`crates/elec/src/geometry.rs` gained `netlist_from_geometry_with_wire_runs()`: a connected run of wires is an equipotential whether or not a symbol sits on it, so the run now appears in `nets` (with an empty anchor list) instead of being counted as loose. The strict `netlist_from_geometry()` is unchanged, so the existing 121 crate tests still pass (**verified: 121 passed, 0 failed**), and `ELECWIRELIST` / `ELECWIRENUMBER` / `ELECJUNCTIONS` / `ELECIO` use the lenient one.
+
+Measured on the customer sheets:
+- `FC1000495-046`: **77 wire segment(s) → 48 net(s)**, 0 loose wires (was "no wires found").
+- `FC1000495-003`: wire list reports nets plus `unconnected: HYD. UNIT, M326, M326, M326`; `ELECWIRENUMBER` now **numbers the nets** (it previously refused with "no connected nets found").
+- Nets are still mostly one segment each: end points that meet are merged (0.05), but a wire ending on the *middle* of another wire (a T-junction) is not yet merged, and symbol pins are not anchors because the customer sheets were exploded. That is the next refinement — the measured tolerances are in [`real-sheet-model.md`](real-sheet-model.md) (T-junction ≤ 0.02, terminal bridge 0.14).
+
+### A reported bug that turned out to be already fixed
+`ELECINSERT` giving the same tag to consecutive placements no longer reproduces: three consecutive inserts now report `-K1`, `-K2`, `-K3`. The cause was the same collector divergence — tags were counted in model space while the new symbols landed on a layout sheet, so the counter never saw them. The all-space collector fix closed it.
