@@ -750,6 +750,31 @@ pub(super) fn device_pin_points(document: &codec::Document) -> Vec<(f64, f64, St
         .collect()
 }
 
+/// The device tags a project marks with one option code (`option <tag> <code>` lines).
+fn project_option_tags(option: &str) -> BTreeSet<String> {
+    let mut tags: BTreeSet<String> = BTreeSet::new();
+    let Some(file) = project_file().read().ok().and_then(|guard| guard.clone()) else {
+        return tags;
+    };
+    let Ok(text) = std::fs::read_to_string(file) else {
+        return tags;
+    };
+    let wanted = option.trim();
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("option ") else {
+            continue;
+        };
+        let mut words = rest.split_whitespace();
+        let (Some(tag), Some(code)) = (words.next(), words.next()) else {
+            continue;
+        };
+        if code.eq_ignore_ascii_case(wanted) {
+            tags.insert(tag.trim().to_ascii_uppercase());
+        }
+    }
+    tags
+}
+
 /// Tagged symbol inserts with their positions, for `ELECSYSTEM SAVE`.
 pub(super) fn system_devices(document: &codec::Document) -> Vec<(String, String, f64, f64)> {
     let spaces = OpenCADStudio::drawing_spaces(document);
@@ -1179,7 +1204,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             (
                 "Reports",
                 &[
-                    "ELECBOM [out.csv]             bill of material",
+                    "ELECBOM [out.csv] [OPTION=<code>]  bill of material, optionally for one option code",
                     "ELECPANEL <out.dxf>           panel arrangement drawing",
                     "ELECREPORT <out.xlsx>         workbook report",
                     "ELECPART <parts.csv>          load a plain parts catalogue",
@@ -1347,13 +1372,40 @@ fn class_for_reference(tag: &str) -> &'static str {
     ///
     /// `ELECBOM <file.csv>` also writes the rows to a CSV file, using the column names
     /// the shipped report templates use, so a report can be produced without a GUI.
-    pub(super) fn elec_bom(&mut self, i: usize, path: Option<&str>) -> Task<Message> {
+    ///
+    /// `OPTION=<code>` filters the bill to the devices a project marks with that option code
+    /// (`ELECOPTION <tag> <code>`), which is how a variant-specific parts list is produced.
+    pub(super) fn elec_bom(
+        &mut self,
+        i: usize,
+        path: Option<&str>,
+        option: Option<&str>,
+    ) -> Task<Message> {
         let mut components = self.elec_components(i);
         if components.is_empty() {
             self.command_line.push_output(
                 "ELECBOM: no electrical components found (no block insert with attributes).",
             );
             return Task::none();
+        }
+        if let Some(option) = option.map(str::trim).filter(|code| !code.is_empty()) {
+            let total = components.len();
+            let tags = project_option_tags(option);
+            components.retain(|component| {
+                tags.contains(&component.tag.trim().to_ascii_uppercase())
+            });
+            if components.is_empty() {
+                let message = format!(
+                    "ELECBOM: no components assigned to option {option} (of {total} on this drawing)."
+                );
+                self.command_line.push_output(&message);
+                return Task::none();
+            }
+            let line = format!(
+                "ELECBOM: option {option} selects {} of {total} component(s).",
+                components.len()
+            );
+            self.command_line.push_output(&line);
         }
         // A loaded catalogue supplies the manufacturer and description the drawing does not
         // carry. Values on the drawing win, so this only fills gaps.
@@ -5407,7 +5459,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             return Some(task);
         }
         match cmd {
-            "ELECBOM" => Some(self.elec_bom(i, None)),
+            "ELECBOM" => Some(self.elec_bom(i, None, None)),
             "ELECLIST" => Some(self.elec_list(i)),
             "ELECSETUP" => Some(self.elec_setup(i)),
             "ELECHELP" => Some(self.elec_help()),
@@ -5529,9 +5581,21 @@ fn class_for_reference(tag: &str) -> &'static str {
                     return Some(self.elec_built(Some(argument)));
                 }
                 if let Some(argument) = cmd.strip_prefix("ELECBOM ") {
-                    let path = argument.trim();
-                    if !path.is_empty() {
-                        return Some(self.elec_bom(i, Some(path)));
+                    // `ELECBOM [out.csv] [OPTION=<code>]` in either order.
+                    let mut path: Option<&str> = None;
+                    let mut option: Option<&str> = None;
+                    for word in argument.split_whitespace() {
+                        if let Some(code) = word
+                            .strip_prefix("OPTION=")
+                            .or_else(|| word.strip_prefix("option="))
+                        {
+                            option = Some(code);
+                        } else if path.is_none() {
+                            path = Some(word);
+                        }
+                    }
+                    if path.is_some() || option.is_some() {
+                        return Some(self.elec_bom(i, path, option));
                     }
                 }
                 if let Some(argument) = cmd.strip_prefix("ELECPART ") {
