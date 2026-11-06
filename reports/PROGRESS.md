@@ -768,3 +768,43 @@ Regression: systems/variants (verify5), WD_M freeze (verify6) and the smoke suit
 Reports do not filter by variant or option code; a drawn cable is one bundle (per-core nets
 open); cross-reference labels are not clickable; `ELECHELP` still lists only LIST/INSERT for
 systems (SAVE works and the quick start documents it).
+
+---
+
+## Round 16 — 2026-11-06 (option-code filtered bills of material)
+
+Configuration management had option codes but no report used them. `ELECBOM` now takes
+`OPTION=<code>` (with or without an output path, in either order): it keeps only the devices
+a project marks with that code through `ELECOPTION <tag> <code>`, and says how many it
+selected.
+
+Verified on a drawing with three devices and two option codes:
+
+```
+ELECOPTION: -K1 = pump-set-B (1 option code(s) on -K1).
+ELECOPTION: -K2 = pump-set-A (1 option code(s) on -K2).
+ELECBOM: 3 component(s) -> 2 bill-of-material row(s).          (unfiltered; contactors grouped)
+ELECBOM: option pump-set-B selects 1 of 3 component(s).
+ELECBOM: 1 component(s) -> 1 bill-of-material row(s).          (where used: -K1)
+ELECBOM: option pump-set-A selects 1 of 3 component(s).        (where used: -K2)
+ELECBOM: no components assigned to option missing (of 3 on this drawing).
+```
+
+The filtered CSV contains only the marked device. Variant filtering already works at the
+project level: `ELECVARIANT USE <name>` switches the sheet set that `ELECPROJECT` and
+`ELECPROJNUM` read.
+
+### Gate
+
+```
+cargo check --release --tests   exit 0
+cargo test -p elec --lib        131 passed
+cargo build --release -j 1      12 m 16 s (4-CPU affinity)
+```
+
+Smoke suite **99/99** on the new binary; verify8 covers the option filter.
+
+### Still open
+
+Click-through cross-reference labels (payload + double-click + PDF links); per-core cable
+nets; part-level panel footprints and a door elevation; optional installer script.

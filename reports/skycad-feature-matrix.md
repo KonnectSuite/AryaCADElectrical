@@ -286,3 +286,13 @@ committed.
 | 19 | Design by systems | **Partial+** | `ELECSYSTEM SAVE <name>` captures the active drawing's tagged devices and wire segments into `<project>/systems/<name>.tsv`, relative to the lower-left device; the saved system is listed with the library ones and re-inserts with retagging. Verified: DOL starter saved as `captured_starter` and inserted at 300,0 as -K3, -K4, -M2, -S2 (8 inserts, 4 wires); smoke suite 99/99. |
 
 Current honest score unchanged: **1 implemented, 16 partial, 1 missing, 1 not applicable.**
+
+---
+
+## Round 16 update — option-filtered BOM (2026-11-06)
+
+| # | Feature | New status | Evidence |
+|---|---|---|---|
+| 18 | Configuration management | **Partial+ (reports use option codes)** | `ELECBOM [out.csv] [OPTION=<code>]` keeps only devices marked with `ELECOPTION <tag> <code>` and reports the selection (`option pump-set-B selects 1 of 3 component(s)`); the filtered CSV carries only `-K1`. Variant selection already applies at project level through `ELECVARIANT USE` (the active `.eprj` lists the variant's sheets). Missing: no per-variant BOM command beyond switching the project, and no option editing UI. |
+
+Current honest score unchanged: **1 implemented, 16 partial, 1 missing, 1 not applicable.**

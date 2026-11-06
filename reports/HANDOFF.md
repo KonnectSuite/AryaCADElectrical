@@ -17,7 +17,7 @@ Gate that was green at the end of the session:
 $env:PATH="$env:USERPROFILE\.cargo\bin;$env:PATH"
 cargo check --release --tests       # exit 0
 cargo test -p elec --lib            # 131 passed
-cargo build --release -j 1          # 13 m 17 s with a 4-CPU affinity cap
+cargo build --release -j 1          # 12 m 16 s with a 4-CPU affinity cap
 ```
 
 **Build note â€” read this before building:** this machine (Intel i9-14900KF, ASUS PRIME
@@ -92,6 +92,10 @@ Fixtures and data:
   `.github/workflows/ecad.yml` (`cargo check --release --tests`, `cargo test -p elec --lib`)
   exist; `samples/demo-line/` is a finished project (schematic, panel, cable schedule,
   project file, variant).
+- **Option-filtered BOMs (round 16):** `ELECBOM [out.csv] [OPTION=<code>]` filters the bill to
+  the devices a project marks with an option code (`ELECOPTION <tag> <code>`); verified
+  `option pump-set-B selects 1 of 3 component(s)` with a one-row CSV. Variant filtering works
+  at the project level via `ELECVARIANT USE <name>` (the project file lists that sheet set).
 - **`ELECSYSTEM SAVE` (round 15):** captures the active drawing's tagged devices and wires
   into `<project>/systems/<name>.tsv` (relative to the lower-left device), listed with the
   library systems and insertable anywhere with retagging. Verified: DOL starter saved as
@@ -119,9 +123,9 @@ Fixtures and data:
 
 ## The next three things, in order
 
-1. **Report filtering and cross-references** — filter BOM/reports by project variant and
-   option code; give `ELECXREFWRITE` labels a payload (extension dictionary or a side table
-   mapping label → handle), bind a double-click to `ELECGOTO`, and add PDF link annotations.
+1. **Click-through cross-references** — give `ELECXREFWRITE` labels a payload (extension
+   dictionary or a side table mapping label → handle), bind a double-click to `ELECGOTO`,
+   and add PDF link annotations for the "intelligent PDF" half of feature 16.
 2. **Per-core cable nets** — a drawn cable is one bundle today; make each core an entity
    that can carry its own wire net, so a 3-core cable can land on three different pairs.
 3. **Product polish** — part-level panel footprint overrides and a separate door elevation;
