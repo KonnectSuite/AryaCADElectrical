@@ -856,3 +856,46 @@ The depth items not required by the objective remain open and are listed in
 [`HANDOFF.md`](HANDOFF.md): click-through cross-reference labels and PDF links, per-core
 cable nets, part-level panel footprints and a separate door elevation, an optional installer
 script, and showing the sample/quick-start inside the in-app help.
+
+---
+
+## Round 18 — 2026-11-06 (IEC / NEC starting templates)
+
+New `templates\` folder with **12 starting sheets**, generated reproducibly by
+`tools/make_templates.py`:
+
+| standard | files | sizes |
+|---|---|---|
+| IEC (ISO 5457) | A4 landscape/portrait, A3 landscape/portrait, A2, A1, A0 | 297x210 to 1189x841 mm |
+| NEC (ASME Y14.1) | ANSI A (letter), B (tabloid), C, D, E | 279.4x215.9 to 1117.6x863.6 mm |
+
+Each template carries a paper edge, an inner frame with zone references (numbers and
+letters), the electrical layers with house colours, and a standard title block:
+
+* **IEC** — ISO 7200-style: company, drawing title, project, drawing number, revision,
+  scale, size, sheet, date, drawn/checked/approved, first-angle projection,
+  `IEC 61082 / ISO 5457`;
+* **NEC** — ASME Y14.1-style: company, title, project, drawing number, revision, scale,
+  size, sheet, date, drawn/checked/approved, third-angle projection, `ASME Y14.1 / NEC`.
+
+Every template also embeds a `WD_M` insert so the numbering contract travels with it. IEC
+uses `XREFFMT=%S.%N`, NEC `XREFFMT=%N`, both start unfrozen (`TAGMODE=S`, `WIREMODE=S`,
+`TAG-START=1`) with suffixes A..Y; `ELECSETUP` prints the values and the numbering commands
+obey them.
+
+Verified end to end for all twelve templates (`ELECNEW <template>` then save, read back):
+
+```
+PASS iec/A3_landscape.dxf  420.0x297.0 extent=True title=True wd_m=True setup=True
+...
+PASS nec/ANSI_E.dxf        1117.6x863.6 extent=True title=True wd_m=True setup=True
+12/12 templates verified
+```
+
+Checks per file: saved paper extent matches the size, the standard note and SCALE/SHEET
+fields are present, the `WD_M` attributes read back (`TAGFMT`, `XREFFMT`, `TAGMODE`), and
+`ELECSETUP` reports the block. `packaging/portable.ps1` now ships the templates; the guide is
+`templates/README.md`, and `docs/QUICKSTART.md` starts with them.
+
+No Rust source changed this round; the binary is unchanged and all prior gates stand
+(smoke 99/99, 37/37 headless checks).
