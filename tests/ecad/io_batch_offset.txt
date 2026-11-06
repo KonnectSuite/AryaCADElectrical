@@ -1,0 +1,8 @@
+# ELECIOIMPORT: the optional insertion point form.
+#
+# Same workbook as io_batch.txt, but the grid is placed at 120,40 instead of 0,0.
+# Run headless against a scratch copy of a drawing:
+#   target\release\OpenCADStudio.exe --each tests\ecad\io_batch_offset.txt <scratch>\io_offset.dxf
+ELECIOIMPORT C:\Users\KNPhu\AryaCode\KonnectSuite\AryaCADElectrical\tests\ecad\io_list_sample.xlsx 120,40
+ELECIO
+QSAVE

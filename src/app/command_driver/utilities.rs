@@ -1100,6 +1100,12 @@ impl OpenCADStudio {
             // ELECPROJNUM previewed and then applied).
             || tokens[0].eq_ignore_ascii_case("ELECSHEET")
             || tokens[0].eq_ignore_ascii_case("ELECPROJNUM")
+            || tokens[0].eq_ignore_ascii_case("ELECPARTS")
+            || tokens[0].eq_ignore_ascii_case("ELECPARTLIST")
+            || tokens[0].eq_ignore_ascii_case("ELECASSIGN")
+            || tokens[0].eq_ignore_ascii_case("ELECIOIMPORT")
+            || tokens[0].eq_ignore_ascii_case("ELECREV")
+            || tokens[0].eq_ignore_ascii_case("ELECBUILT")
             || tokens[0].eq_ignore_ascii_case("ELECPROJNEW")
             || tokens[0].eq_ignore_ascii_case("ELECPROJOPEN")
         {

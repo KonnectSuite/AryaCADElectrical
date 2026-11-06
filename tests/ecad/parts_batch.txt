@@ -1,0 +1,20 @@
+# Local parts catalogue smoke batch — the whole offline parts workflow, run headless.
+#
+# Run by tools/parts_check.py --smoke (and quoted verbatim in reports/parts-library.md) as:
+#     target\release\OpenCADStudio.exe --each tests\ecad\parts_batch.txt <copy of tests\fixtures\embedded-image-print.dxf>
+# from the workspace root. QSAVE at the end is what makes the result readable from the file.
+#
+# The library folders are relative to the workspace root (the process working directory);
+# the bill-of-material CSV is absolute so it cannot land in some other working directory.
+#
+# Deliberately no point line after ELECINSERT: ELECINSERT <block> places the symbol at the
+# next free position immediately. (ELECPLACE is the interactive "follow the cursor" form.)
+ELECLIB library\starter
+ELECPARTS library\parts
+ELECPARTLIST fuse
+ELECINSERT CONTACT_NO
+ELECASSIGN -K1 LPJ-100SP
+ELECASSIGN -K1
+ELECLIST
+ELECBOM C:\Users\KNPhu\AryaCode\KonnectSuite\AryaCADElectrical\tests\ecad\_work\parts\bom.csv
+QSAVE

@@ -265,6 +265,28 @@ fn read_setup(document: &codec::Document) -> ElecSetup {
     setup
 }
 
+/// True when the loaded project is flagged as already built and wired.
+fn project_is_built() -> bool {
+    let Some(file) = project_file().read().ok().and_then(|guard| guard.clone()) else {
+        return false;
+    };
+    let Ok(text) = std::fs::read_to_string(file) else {
+        return false;
+    };
+    text.lines().any(|line| {
+        let line = line.trim().to_ascii_lowercase();
+        let Some(rest) = line.strip_prefix("built ") else {
+            return false;
+        };
+        matches!(rest.trim(), "yes" | "on" | "true" | "1")
+    })
+}
+
+/// The loaded project's folder, for sibling command modules (revision control).
+pub(super) fn project_dir_for_revisions() -> Option<std::path::PathBuf> {
+    project_dir().read().ok().and_then(|guard| guard.clone())
+}
+
 impl OpenCADStudio {
     /// Turn every block insert in the active tab into a component.
     ///
@@ -462,6 +484,22 @@ fn looks_like_reference(text: &str) -> bool {
 /// layout sheet and then being told "no components found" is exactly the bolted-on
 /// behaviour this layer must not have; a null owner is accepted too, because some writers
 /// leave the `330` group out.
+/// Handles of every space an entity can live in: model space plus each layout's paper
+/// space. The collectors use this instead of comparing to model space alone, because a
+/// symbol drawn on a layout sheet is still part of the drawing.
+fn drawing_spaces(document: &codec::Document) -> Vec<codec::Handle> {
+    let mut spaces = vec![document.header.model_space_block_handle];
+    for record in document.block_records.iter() {
+        let name = record.name.to_ascii_lowercase();
+        if (name == "*model_space" || name.starts_with("*paper_space"))
+            && !spaces.contains(&record.handle)
+        {
+            spaces.push(record.handle);
+        }
+    }
+    spaces
+}
+
 fn in_drawing_space(document: &codec::Document, owner: codec::Handle) -> bool {
     if owner.is_null() {
         return true;
@@ -726,9 +764,10 @@ fn class_for_reference(tag: &str) -> &'static str {
         let mut items: Vec<Item> = Vec::new();
         {
             let doc = &self.tabs[i].scene.document;
-            let model_space = doc.header.model_space_block_handle;
+            let _model_space = doc.header.model_space_block_handle;
+            let spaces = Self::drawing_spaces(doc);
             for entity in doc.entities() {
-                if entity.common().owner_handle != model_space { continue; }
+                if !spaces.contains(&entity.common().owner_handle) { continue; }
                 let codec::EntityType::Insert(insert) = entity else {
                     continue;
                 };
@@ -837,7 +876,10 @@ fn class_for_reference(tag: &str) -> &'static str {
             // A drawing that came from AutoCAD Electrical says whether its references are
             // fixed. When they are, an existing tag must keep its number: renumbering the
             // customer's real `M326` to `M1` would silently rewrite a released drawing.
-            let freeze_existing = setup.present && setup.references_are_fixed();
+            // A project flagged as built is already assembled and wired on site:
+            // only new devices may be numbered, existing references are fixed.
+            let freeze_existing =
+                project_is_built() || (setup.present && setup.references_are_fixed());
             let numbered: Vec<Numbered> = device_list
                 .iter()
                 .enumerate()
@@ -930,11 +972,12 @@ fn class_for_reference(tag: &str) -> &'static str {
 
         {
             let doc = &self.tabs[i].scene.document;
-            let model_space = doc.header.model_space_block_handle;
+            let _model_space = doc.header.model_space_block_handle;
+            let spaces = Self::drawing_spaces(doc);
             let mut next_wire = 0u64;
             let mut next_anchor = 0u64;
             for entity in doc.entities() {
-                if entity.common().owner_handle != model_space { continue; }
+                if !spaces.contains(&entity.common().owner_handle) { continue; }
                 match entity {
                     codec::EntityType::Line(line) => {
                         next_wire += 1;
@@ -1066,11 +1109,12 @@ fn class_for_reference(tag: &str) -> &'static str {
         let mut existing: Vec<(codec::Handle, String, f64, f64)> = Vec::new();
         {
             let doc = &self.tabs[i].scene.document;
-            let model_space = doc.header.model_space_block_handle;
+            let _model_space = doc.header.model_space_block_handle;
+            let spaces = Self::drawing_spaces(doc);
             let mut next_wire = 0u64;
             let mut next_anchor = 0u64;
             for entity in doc.entities() {
-                if entity.common().owner_handle != model_space { continue; }
+                if !spaces.contains(&entity.common().owner_handle) { continue; }
                 match entity {
                     codec::EntityType::Line(line) => {
                         next_wire += 1;
@@ -1251,13 +1295,14 @@ fn class_for_reference(tag: &str) -> &'static str {
         // Model space only. `doc.entities()` also walks block definitions, and a drawing
         // with a symbol library loaded holds hundreds of block-geometry lines: counting
         // those as wires produced 24,950 "wire segments" on a three-wire drawing.
-        let model_space = doc.header.model_space_block_handle;
+        let _model_space = doc.header.model_space_block_handle;
+        let spaces = Self::drawing_spaces(doc);
         let mut wires = Vec::new();
         let mut anchors = Vec::new();
         let mut next_wire = 0u64;
         let mut next_anchor = 0u64;
         for entity in doc.entities() {
-            if entity.common().owner_handle != model_space {
+            if !spaces.contains(&entity.common().owner_handle) {
                 continue;
             }
             match entity {
@@ -1393,9 +1438,10 @@ fn class_for_reference(tag: &str) -> &'static str {
         let mut parts: Vec<PlacedPart> = Vec::new();
         {
             let doc = &self.tabs[i].scene.document;
-            let model_space = doc.header.model_space_block_handle;
+            let _model_space = doc.header.model_space_block_handle;
+            let spaces = Self::drawing_spaces(doc);
             for entity in doc.entities() {
-                if entity.common().owner_handle != model_space { continue; }
+                if !spaces.contains(&entity.common().owner_handle) { continue; }
                 let codec::EntityType::Insert(insert) = entity else {
                     continue;
                 };
@@ -1516,10 +1562,11 @@ fn class_for_reference(tag: &str) -> &'static str {
     fn elec_placed_parts(&self, i: usize) -> Vec<::elec::PlacedPart> {
         use ::elec::PlacedPart;
         let doc = &self.tabs[i].scene.document;
-        let model_space = doc.header.model_space_block_handle;
+        let _model_space = doc.header.model_space_block_handle;
+        let spaces = Self::drawing_spaces(doc);
         let mut parts = Vec::new();
         for entity in doc.entities() {
-            if entity.common().owner_handle != model_space { continue; }
+            if !spaces.contains(&entity.common().owner_handle) { continue; }
             let codec::EntityType::Insert(insert) = entity else {
                 continue;
             };
@@ -1576,9 +1623,10 @@ fn class_for_reference(tag: &str) -> &'static str {
         let mut existing: Vec<(codec::Handle, String, f64, f64)> = Vec::new();
         {
             let doc = &self.tabs[i].scene.document;
-            let model_space = doc.header.model_space_block_handle;
+            let _model_space = doc.header.model_space_block_handle;
+            let spaces = Self::drawing_spaces(doc);
             for entity in doc.entities() {
-                if entity.common().owner_handle != model_space { continue; }
+                if !spaces.contains(&entity.common().owner_handle) { continue; }
                 if let codec::EntityType::Text(text) = entity {
                     if text.common.layer.eq_ignore_ascii_case(LABEL_LAYER) {
                         existing.push((
@@ -1748,9 +1796,10 @@ fn class_for_reference(tag: &str) -> &'static str {
         let mut placed = 0usize;
         {
             let doc = &self.tabs[i].scene.document;
-            let model_space = doc.header.model_space_block_handle;
+            let _model_space = doc.header.model_space_block_handle;
+            let spaces = Self::drawing_spaces(doc);
             for entity in doc.entities() {
-                if entity.common().owner_handle != model_space { continue; }
+                if !spaces.contains(&entity.common().owner_handle) { continue; }
                 let codec::EntityType::Insert(insert) = entity else {
                     continue;
                 };
@@ -2922,10 +2971,10 @@ fn class_for_reference(tag: &str) -> &'static str {
                         layer_names.push(name);
                     }
 
-                    let template_model_space = document.header.model_space_block_handle;
+                    let template_spaces = Self::drawing_spaces(&document);
                     let mut copied = 0usize;
                     for entity in document.entities() {
-                        if entity.common().owner_handle != template_model_space {
+                        if !template_spaces.contains(&entity.common().owner_handle) {
                             continue;
                         }
                         let mut copy = entity.clone();
@@ -3485,9 +3534,10 @@ fn class_for_reference(tag: &str) -> &'static str {
 
         let modules: Vec<(String, Vec<(String, Option<(f64, f64)>)>)> = {
             let doc = &self.tabs[i].scene.document;
-            let model_space = doc.header.model_space_block_handle;
+            let _model_space = doc.header.model_space_block_handle;
+            let spaces = Self::drawing_spaces(doc);
             doc.entities()
-                .filter(|entity| entity.common().owner_handle == model_space)
+                .filter(|entity| spaces.contains(&entity.common().owner_handle))
                 .filter_map(|entity| match entity {
                     codec::EntityType::Insert(insert)
                         if insert.block_name.to_ascii_uppercase().starts_with("PLC-") =>
@@ -3776,6 +3826,70 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// A folder of DXFs is not a project: the order matters (sheet 1 before sheet 2), and
     /// numbering, cross references and reports all need to agree on which sheets belong
     /// together. The file is plain text so it can be read, edited and diffed.
+    /// `ELECBUILT [on|off]` reports or sets the project's "as built" flag.
+    ///
+    /// SkyCAD's built-project control: once a panel is assembled and wired, the references
+    /// that exist are physical labels on real hardware. Flagging the project built makes
+    /// automatic numbering leave them alone and only number what was added afterwards.
+    pub(super) fn elec_built(&mut self, argument: Option<&str>) -> Task<Message> {
+        let Some(file) = project_file().read().ok().and_then(|guard| guard.clone()) else {
+            self.command_line
+                .push_output("ELECBUILT: no project is loaded — ELECPROJNEW or ELECPROJOPEN first.");
+            return Task::none();
+        };
+        let current = project_is_built();
+        let Some(argument) = argument.map(str::trim).filter(|value| !value.is_empty()) else {
+            let state = if current { "built" } else { "in design" };
+            self.command_line.push_output(&format!(
+                "ELECBUILT: project is {state} — ELECBUILT ON|OFF changes it."
+            ));
+            return Task::none();
+        };
+        let wanted = match argument.to_ascii_uppercase().as_str() {
+            "ON" | "YES" | "TRUE" | "1" => true,
+            "OFF" | "NO" | "FALSE" | "0" => false,
+            _ => {
+                self.command_line
+                    .push_output("ELECBUILT: use ELECBUILT ON or ELECBUILT OFF.");
+                return Task::none();
+            }
+        };
+        let text = match std::fs::read_to_string(&file) {
+            Ok(text) => text,
+            Err(error) => {
+                let message = format!("ELECBUILT: cannot read {}: {error}", file.display());
+                self.command_line.push_output(&message);
+                return Task::none();
+            }
+        };
+        let mut lines: Vec<String> = text
+            .lines()
+            .filter(|line| !line.trim_start().to_ascii_lowercase().starts_with("built "))
+            .map(|line| line.to_string())
+            .collect();
+        if wanted {
+            lines.push("built yes".to_string());
+        }
+        let mut output = lines.join("\n");
+        output.push('\n');
+        match std::fs::write(&file, output) {
+            Ok(()) => {
+                let state = if wanted { "built" } else { "in design" };
+                let message = format!(
+                    "ELECBUILT: project marked {state} ({}). Existing references are {}. ",
+                    file.display(),
+                    if wanted { "now fixed" } else { "free again" }
+                );
+                self.command_line.push_output(message.trim_end());
+            }
+            Err(error) => {
+                let message = format!("ELECBUILT: cannot write {}: {error}", file.display());
+                self.command_line.push_output(&message);
+            }
+        }
+        Task::none()
+    }
+
     pub(super) fn elec_proj_new(&mut self, folder: &str, file: Option<&str>) -> Task<Message> {
         let directory = std::path::Path::new(folder);
         if !directory.is_dir() {
@@ -3820,6 +3934,12 @@ fn class_for_reference(tag: &str) -> &'static str {
                 if let Ok(mut guard) = project_file().write() {
                     *guard = Some(path.clone());
                 }
+                // A project is a folder as much as a file: remember the folder too, so the
+                // project-wide commands (ELECPROJNUM, ELECREV, reports) work immediately
+                // instead of answering "no project is loaded".
+                if let Ok(mut guard) = project_dir().write() {
+                    *guard = Some(directory.to_path_buf());
+                }
                 let message = format!(
                     "ELECPROJNEW: {} sheet(s) written to {}.",
                     sheets.len(),
@@ -3841,6 +3961,11 @@ fn class_for_reference(tag: &str) -> &'static str {
             Ok(sheets) => {
                 if let Ok(mut guard) = project_file().write() {
                     *guard = Some(std::path::PathBuf::from(path));
+                }
+                if let Some(folder) = std::path::Path::new(path).parent() {
+                    if let Ok(mut guard) = project_dir().write() {
+                        *guard = Some(folder.to_path_buf());
+                    }
                 }
                 let message = format!(
                     "ELECPROJOPEN: {path} - {} sheet(s).",
@@ -3991,6 +4116,15 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// project in order, assigns one number per device, and (only with `apply`) writes the
     /// tags back, copying each sheet to `.bak` first.
     pub(super) fn elec_proj_number(&mut self, dry_run: bool) -> Task<Message> {
+        // A built project has already been assembled and wired: its references are labels
+        // on real hardware. Refuse to renumber it until the flag is cleared.
+        if project_is_built() && !dry_run {
+            self.command_line.push_output(
+                "ELECPROJNUM: the project is flagged built — refusing to renumber it. \
+                 ELECBUILT OFF first if this is a design change.",
+            );
+            return Task::none();
+        }
         use ::elec::{default_prefix, infer_tag_prefix, NumberingFormat};
 
         let sheets = Self::project_sheet_list();
@@ -4038,10 +4172,11 @@ fn class_for_reference(tag: &str) -> &'static str {
             } else {
                 sheet.number.clone()
             };
-            let model_space = document.header.model_space_block_handle;
+            let _model_space = document.header.model_space_block_handle;
+            let spaces = Self::drawing_spaces(&document);
             let mut on_sheet: Vec<(String, String, f64, f64)> = Vec::new();
             for entity in document.entities() {
-                if entity.common().owner_handle != model_space {
+                if !spaces.contains(&entity.common().owner_handle) {
                     continue;
                 }
                 let codec::EntityType::Insert(insert) = entity else {
@@ -4150,10 +4285,11 @@ fn class_for_reference(tag: &str) -> &'static str {
                 failed += 1;
                 continue;
             };
-            let model_space = document.header.model_space_block_handle;
+            let _model_space = document.header.model_space_block_handle;
+            let spaces = Self::drawing_spaces(&document);
             let handles: Vec<codec::Handle> = document
                 .entities()
-                .filter(|entity| entity.common().owner_handle == model_space)
+                .filter(|entity| spaces.contains(&entity.common().owner_handle))
                 .filter_map(|entity| match entity {
                     codec::EntityType::Insert(insert)
                         if !insert.attributes.is_empty()
@@ -4246,7 +4382,8 @@ fn class_for_reference(tag: &str) -> &'static str {
         let mut max_y = f64::MIN;
         {
             let doc = &self.tabs[i].scene.document;
-            let model_space = doc.header.model_space_block_handle;
+            let _model_space = doc.header.model_space_block_handle;
+            let spaces = Self::drawing_spaces(doc);
             let mut take = |x: f64, y: f64| {
                 min_x = min_x.min(x);
                 min_y = min_y.min(y);
@@ -4254,7 +4391,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                 max_y = max_y.max(y);
             };
             for entity in doc.entities() {
-                if entity.common().owner_handle != model_space {
+                if !spaces.contains(&entity.common().owner_handle) {
                     continue;
                 }
                 // Ignore an existing frame, so running ELECSHEET twice refits rather than
@@ -4458,10 +4595,22 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// Command entry point. Returns `None` when the command is not ours so the shared
     /// dispatcher can try the next family.
     pub(super) fn dispatch_elec(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
+        // Command families that live in their own modules. Each returns `None` when the
+        // command is not one of its own, so the shared dispatcher keeps looking.
+        if let Some(task) = self.dispatch_elec_parts(cmd, i) {
+            return Some(task);
+        }
+        if let Some(task) = self.dispatch_elec_ioimport(cmd, i) {
+            return Some(task);
+        }
+        if let Some(task) = self.dispatch_elec_revision(cmd, i) {
+            return Some(task);
+        }
         match cmd {
             "ELECBOM" => Some(self.elec_bom(i, None)),
             "ELECLIST" => Some(self.elec_list(i)),
             "ELECSETUP" => Some(self.elec_setup(i)),
+            "ELECBUILT" => Some(self.elec_built(None)),
             "ELECWIRELIST" => Some(self.elec_wirelist(i)),
             "ELECWIRENUMBER" => Some(self.elec_wirenumber(i)),
             "ELECTERMINALS" => Some(self.elec_terminals(i)),
@@ -4543,6 +4692,9 @@ fn class_for_reference(tag: &str) -> &'static str {
             // mutates the drawing is worse than no preview at all.
             "ELECNUMBERPREVIEW" => Some(self.elec_number(i, true)),
             _ => {
+                if let Some(argument) = cmd.strip_prefix("ELECBUILT ") {
+                    return Some(self.elec_built(Some(argument)));
+                }
                 if let Some(argument) = cmd.strip_prefix("ELECBOM ") {
                     let path = argument.trim();
                     if !path.is_empty() {

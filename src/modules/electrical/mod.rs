@@ -102,6 +102,14 @@ mod icons {
     pub const XREF: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/elec_xref.svg"));
     pub const XREF_WRITE: IconKind =
         IconKind::Svg(include_bytes!("../../../assets/icons/elec_xref_write.svg"));
+    pub const PARTS: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/elec_parts.svg"));
+    pub const PART_ASSIGN: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_part_assign.svg"));
+    pub const REVISION: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_revision.svg"));
+    pub const BUILT: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/elec_built.svg"));
+    pub const IO_IMPORT: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_io_import.svg"));
 }
 
 pub struct ElectricalModule;
@@ -200,9 +208,25 @@ impl CadModule for ElectricalModule {
                                 menu_item("ELECIO", "I/O Cross-Refs", IO),
                                 menu_item("ELECPLC", "PLC Module", PLC),
                                 menu_item("ELECPLCNEXT", "PLC Next Module", PLC_NEXT),
+                                menu_item("ELECIOIMPORT", "Import I/O List", IO_IMPORT),
                             ],
                             default: "ELECIO",
                         },
+                    ],
+                },
+                // ── Parts (local library) ────────────────────────────────────
+                // The catalogue is local by design: a folder next to the project, no
+                // account and no network, so a project travels with what it needs.
+                RibbonGroup {
+                    title: "Parts",
+                    tools: vec![
+                        RibbonItem::LargeTool(elec_tool("ELECPARTS", "Parts\nLibrary", PARTS)),
+                        RibbonItem::LabeledTool(elec_tool("ELECPARTLIST", "Browse Parts", PART)),
+                        RibbonItem::LabeledTool(elec_tool(
+                            "ELECASSIGN",
+                            "Assign Part",
+                            PART_ASSIGN,
+                        )),
                     ],
                 },
                 // ── Terminals ────────────────────────────────────────────────
@@ -283,6 +307,16 @@ impl CadModule for ElectricalModule {
                                 menu_item("ELECSETUP", "Electrical Setup", SETUP),
                             ],
                             default: "ELECNEW",
+                        },
+                        RibbonItem::LabeledDropdown {
+                            id: "ELEC_REVISION_CONTROL",
+                            label: "Revisions",
+                            icon: REVISION,
+                            items: vec![
+                                menu_item("ELECREV", "Revision Control", REVISION),
+                                menu_item("ELECBUILT", "Built Project", BUILT),
+                            ],
+                            default: "ELECREV",
                         },
                     ],
                 },

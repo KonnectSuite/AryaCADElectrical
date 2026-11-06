@@ -1,0 +1,18 @@
+# ELECIOIMPORT: an Excel I/O list becomes PLC module drawings.
+#
+# Run headless against a scratch copy of a drawing:
+#   target\release\OpenCADStudio.exe --each tests\ecad\io_batch.txt <scratch>\io.dxf
+# then read the saved file back with:
+#   python tests\ecad\read_io.py <scratch>\io.dxf
+#
+# The workbook path is absolute on purpose: --each opens the drawing by path and the
+# importer takes a path, not a project-relative name. The command also accepts an
+# optional insertion point (`ELECIOIMPORT <xlsx> 120,40`); tests/ecad/io_batch_offset.txt
+# exercises that form.
+#
+# QSAVE at the end is what makes the generated modules readable from the file: the batch
+# runner closes each drawing without saving what the script did not save.
+ELECIOIMPORT C:\Users\KNPhu\AryaCode\KonnectSuite\AryaCADElectrical\tests\ecad\io_list_sample.xlsx
+ELECIO
+ELECLIST
+QSAVE

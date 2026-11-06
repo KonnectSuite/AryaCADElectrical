@@ -1,0 +1,12 @@
+# ELECIOIMPORT: what a refusal looks like.
+#
+# Three ways the import refuses without touching the drawing: a workbook that does not
+# exist, a file that is not a workbook, and no argument at all. Each prints one line and
+# leaves the drawing alone; the two errors make the headless run exit non-zero.
+#
+# Run headless against a scratch copy of a drawing:
+#   target\release\OpenCADStudio.exe --each tests\ecad\io_batch_refusals.txt <scratch>\io_refuse.dxf
+ELECIOIMPORT C:\Users\KNPhu\AryaCode\KonnectSuite\AryaCADElectrical\tests\ecad\missing_io_list.xlsx
+ELECIOIMPORT C:\Users\KNPhu\AryaCode\KonnectSuite\AryaCADElectrical\tests\ecad\io_batch_refusals.txt
+ELECIOIMPORT
+QSAVE

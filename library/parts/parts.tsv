@@ -1,0 +1,62 @@
+# AryaCAD local parts catalogue — tab-separated, one part per row.
+#
+# Columns, in order:
+#   part_number  manufacturer  description  class  symbol  rating  terminals  footprint  datasheet
+#
+# `symbol` names a symbol the loaded symbol library already draws (ELECLIB <folder>); leave it
+# empty when the library has no drawing for the part. `terminals` is a count, 0 for parts that
+# are not terminal-count devices (a PLC module, a drive). `datasheet` is free text — a URL or a
+# path relative to this folder. Empty optional cells are allowed, so a row may end with tabs.
+#
+# Lines starting with # are comments. A duplicate part number keeps the later row.
+#
+# Sources: the part numbers were observed in the customer's drawings (import/Prints). The
+# manufacturer, description and rating for those observed numbers are the catalogue's best
+# reading of them and are marked as inferred in reports/parts-library.md — verify against the
+# manufacturer's data before ordering.
+part_number	manufacturer	description	class	symbol	rating	terminals	footprint	datasheet
+
+# Fuses
+LPJ-100SP	Bussmann	Fuse, Class J, time-delay, 100 A, 600 V	Fuse	FUSE	100 A / 600 V	2	Class J holder	
+LPJ-30SP	Bussmann	Fuse, Class J, time-delay, 30 A, 600 V	Fuse	FUSE	30 A / 600 V	2	Class J holder	
+FRS-R-10	Bussmann	Fuse, Class RK5, time-delay, 10 A, 600 V	Fuse	FUSE	10 A / 600 V	2	Class RK5 holder	
+
+# Circuit breakers
+FAZ-C1/1-NA-SP	Eaton	Miniature circuit breaker, 1-pole, C-curve, 1 A	Circuit Breaker	MCB	1 A / 277 V AC	2	DIN 35 mm	
+FAZ-C4/1-NA-SP	Eaton	Miniature circuit breaker, 1-pole, C-curve, 4 A	Circuit Breaker	MCB	4 A / 277 V AC	2	DIN 35 mm	
+FAZ-C10/1-NA-SP	Eaton	Miniature circuit breaker, 1-pole, C-curve, 10 A	Circuit Breaker	MCB	10 A / 277 V AC	2	DIN 35 mm	
+FAZ-D20/2-NA-SP	Eaton	Miniature circuit breaker, 2-pole, D-curve, 20 A	Circuit Breaker	MCB	20 A / 480 V AC	4	DIN 35 mm	
+FAZ-C63A/3	Eaton	Miniature circuit breaker, 3-pole, C-curve, 63 A	Circuit Breaker	MCB	63 A / 400 V AC	6	DIN 35 mm	
+140M-C2E-B16	Allen-Bradley	Motor protection circuit breaker, 1.0-1.6 A	Circuit Breaker	MCB	1.0-1.6 A / 690 V AC	6	DIN 35 mm	
+140M-C2E-C10	Allen-Bradley	Motor protection circuit breaker, 6.3-10 A	Circuit Breaker	MCB	6.3-10 A / 690 V AC	6	DIN 35 mm	
+140M-F8E-C45	Allen-Bradley	Motor protection circuit breaker, 32-45 A	Circuit Breaker	MCB	32-45 A / 690 V AC	6	DIN 35 mm	
+
+# Contactors
+100-C09EJ300	Allen-Bradley	Contactor, 9 A, 3-pole, 24 V DC coil	Contactor	CONTACT_NO	9 A / 24 V DC coil	6	DIN 35 mm	
+100-C30EJ10	Allen-Bradley	Contactor, 30 A, 3-pole, 24 V DC coil	Contactor	CONTACT_NO	30 A / 24 V DC coil	6	DIN 35 mm	
+
+# Overload relays
+193-EC2DB	Allen-Bradley	E1 Plus electronic overload relay, 1.0-5.0 A	Overload	THERMAL_OVERLOAD	1.0-5.0 A	6	DIN 35 mm	
+193-EC3CB	Allen-Bradley	E1 Plus electronic overload relay, 5.0-25 A	Overload	THERMAL_OVERLOAD	5.0-25 A	6	DIN 35 mm	
+
+# Terminal blocks
+UK2.5B	Phoenix Contact	Feed-through terminal block, 2.5 mm2, 24 A, 800 V	Terminal	TERMINAL	2.5 mm2 / 24 A	2	DIN 35 mm	
+UK5N	Phoenix Contact	Feed-through terminal block, 5 mm2, 32 A, 800 V	Terminal	TERMINAL	5 mm2 / 32 A	2	DIN 35 mm	
+USLKG 5	Phoenix Contact	Earth terminal block, 5 mm2	Terminal	EARTH	5 mm2	2	DIN 35 mm	
+
+# PLC I/O and controllers
+5069-IB16	Allen-Bradley	CompactLogix 5069 digital input module, 16-point, 24 V DC	PLC Digital Input	PLC-DI	16 points / 24 V DC	0	DIN 35 mm	
+5069-OB16	Allen-Bradley	CompactLogix 5069 digital output module, 16-point, 24 V DC	PLC Digital Output	PLC-DO	16 points / 24 V DC	0	DIN 35 mm	
+5069-IF8	Allen-Bradley	CompactLogix 5069 analog input module, 8-channel, 4-20 mA	PLC Analog Input		8 channels / 4-20 mA	0	DIN 35 mm	
+1794-IB16	Allen-Bradley	Flex I/O digital input module, 16-point, 24 V DC	PLC Digital Input	PLC-DI	16 points / 24 V DC	0	DIN 35 mm	
+1794-OB16	Allen-Bradley	Flex I/O digital output module, 16-point, 24 V DC	PLC Digital Output	PLC-DO	16 points / 24 V DC	0	DIN 35 mm	
+
+# Power supplies, drives and transformers
+1606-XLS480E	Allen-Bradley	Power supply, 48 V DC, 10 A, 480 W	Power Supply	POWER_SUPPLY	48 V DC / 10 A	0	DIN 35 mm	
+20A-DG01	Allen-Bradley	PowerFlex 70 drive, 0.4 kW, 480 V AC	Drive	VFD	0.4 kW / 480 V AC	0	Panel	
+2002TR	Hammond Power Solutions	Transformer, 2.0 kVA, 480/120 V, single-phase	Transformer	TRANSFORMER	2.0 kVA / 480-120 V	4	Panel	
+
+# Operator interface
+10250T597LED24-71X	Eaton	Pushbutton, 30 mm, illuminated green, 24 V LED	Button	PUSHBUTTON_NO	24 V LED	2	30 mm panel	
+10250T397LLD24-53	Eaton	Pushbutton, 30 mm, illuminated red, 24 V LED	Button	PUSHBUTTON_NO	24 V LED	2	30 mm panel	
+700-HA33A1	Allen-Bradley	Relay, 3PDT, 10 A, 24 V DC coil	Relay	RELAY_COIL	10 A / 24 V DC	11	DIN 35 mm	

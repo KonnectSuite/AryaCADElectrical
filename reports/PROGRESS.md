@@ -141,3 +141,47 @@ Gate on the frozen tree: `cargo build --release` exit 0 (4 m 44 s), `cargo check
 2. **Numbering engine driven by `WD_M`** — implement `%F %N %S %X` formats; `ELECNUMBER`/`ELECWIRELIST` read `TAGFMT`/`WIREFMT` from the sheet's `WD_M` and match the customer's own conventions.
 3. **`ELECSETUP`** — create/refresh a `WD_M` block + settings from defaults, so new drawings carry the same contract.
 4. Library: harvest the real blocks listed above into `library/` (client library) alongside the licence-clean generated starter set.
+
+---
+
+## Round 3 — 2026-11-06
+
+The round was driven by two new requirements, verbatim: *"make sure we have every feasible feature implemented"* (against <https://skycad.ca/features-pricing#compare-our-features>) and *"Instead of Online library, do local library"*.
+
+### Local parts library (SkyCAD's online catalogue, replaced by a folder)
+New module [`src/app/commands/elec_parts_lib.rs`](../src/app/commands/elec_parts_lib.rs) + `library/parts/parts.tsv` (29 seeded parts, 13 classes) + `tools/parts_import.py` / `tools/parts_check.py`:
+
+| Command | What it does |
+|---|---|
+| `ELECPARTS [folder]` | load a local parts catalogue (default `library\parts`), remembers the folder in `%APPDATA%\AryaCAD\elec_parts.txt` |
+| `ELECPARTLIST [filter]` | search/list the catalogue as a table |
+| `ELECASSIGN <tag> <part>` | write CAT / MFG / DESC1 (and rating) onto the placed device; bare form reports what is assigned |
+
+Verified end-to-end headless:
+```
+ELECPARTS: loaded 29 part(s) … 13 class(es): Button 2, Circuit Breaker 8, Contactor 2, Drive 1,
+           Fuse 3, Overload 2, PLC Analog Input 1, PLC Digital Input 2, PLC Digital Output 2,
+           Power Supply 1, Relay 1, Terminal 3, Transformer 1
+ELECPARTLIST: 3 of 29 part(s) match "fuse".
+ELECASSIGN: -K1 <- LPJ-100SP  Bussmann  Fuse, Class J, time-delay, 100 A, 600 V
+ELECBOM: 1 component(s) -> 1 row(s)   (CLASS=Contactor, PART=LPJ-100SP, MANUFACTURER=Bussmann)
+```
+
+### Automated PLC drawings from an Excel I/O list
+New module [`src/app/commands/elec_ioimport.rs`](../src/app/commands/elec_ioimport.rs) + `tests/ecad/io_list_sample.xlsx` + `tools/make_io_sample.py`:
+`ELECIOIMPORT <xlsx> [x,y]` reads the worksheet (tolerant header matching), groups rows into cards by address prefix, and generates one PLC module block per card with `ADDRnn` attributes — using the representation `ELECPLC`/`ELECIO` already understand. Verified: **19 rows read, 3 cards, 18 points placed, 1 junk footer row skipped with a reason**, and the saved DXF contains `INSERT`s `PLC-8/PLC-6/PLC-4` with 18 `ADDRnn` attributes read back by an independent parser (`I0.0…I0.7`, `Q0.0…Q0.5`, `%AI0.0…%AI0.3`). `ELECLIST` then lists `-P1/-P2/-P3` with their descriptions.
+
+### Revision control and built-project control
+- New module [`src/app/commands/elec_revision.rs`](../src/app/commands/elec_revision.rs): `ELECREV SNAPSHOT [label] | LIST | COMPARE <a> <b> | RESTORE <id>`. Snapshots are numbered folders under `<project>\.rev\` holding a manifest and copies of the `.dxf`/`.dwg`/`.eprj` files — inspectable, portable, no database. Verified: `snapshot 001-initial_design — 2 file(s), 52.8 KB`, listed back, and `RESTORE` now **fails closed** (a drawing open in this session cannot be overwritten; the message says `restored N of M … close the drawing and retry`, and the pre-restore state is snapshotted first).
+- `ELECBUILT [on|off]` — SkyCAD's built-project control. Writes `built yes` to `project.eprj`; while set, `ELECNUMBER` freezes all existing references and `ELECPROJNUM` **refuses to renumber** ("the project is flagged built — refusing to renumber it"). Verified both ways.
+- Fidelity fix found by the feature audit: `ELECPROJNEW` never set the project folder, so every `ELECREV` verb said "no project is loaded" in the normal workflow. `ELECPROJNEW`/`ELECPROJOPEN` now remember the folder.
+
+### Ribbon, and the feature matrix
+- The six new commands are reachable from the Electrical tab: a new **Parts** group (Parts Library / Browse Parts / Assign Part), **Import I/O List** in the I/O & PLC dropdown, and a **Revisions** dropdown (Revision Control / Built Project), with 5 new icons in the house style.
+- [`skycad-feature-matrix.md`](skycad-feature-matrix.md) — the 19-feature comparison against SkyCAD's published list, with evidence per row: **1 implemented, 11 partial, 6 missing, 1 not applicable**. Closest to parity: BOM/parts, print-to-PDF, DWG/DXF, I/O import, revisions. Biggest true gaps: cabling + cable schedules, built-project control on the *project renumber* path (now fixed), panel layout, navigation, configuration/systems.
+
+### Defects confirmed this round (for the next one)
+- ~~Every wire net command says "no wires found"~~ — **fixed**: all 12 collectors plus the `ELECNEW` template copier now use one `drawing_spaces()` helper (model space + every `*Paper_Space*` layout) instead of comparing to model space alone. Verified: `ELECWIRELIST` now reports `9 wire segment(s)` on the paper-space fixture and `132 wire segment(s), 4 component(s)` on `FC1000495-003` where it previously reported "no wires found". **Nets are still 0**, and that is a different bug: `netlist_from_geometry` only forms a net when a *component anchor* sits on a wire endpoint, and the customer's symbols were exploded, so their pins are gone. Anchoring on pins (attribute/TEXT-derived) rather than insertion points is the next step.
+- `ELECINSERT` gives two consecutive placements the same `-K1` (the next-tag counter never advances), and its argument form places at the origin without asking for a point.
+- `ELECPROJNUM` still ignores the per-sheet `WD_M` freeze (it now respects `ELECBUILT`, not `TAGMODE=R`).
+- Two teammate reports (`parts-library.md`, `io-import.md`) were lost when the session was interrupted; the verification evidence lives in this file and in the code comments instead.
