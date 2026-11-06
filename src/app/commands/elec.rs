@@ -692,6 +692,74 @@ fn class_for_reference(tag: &str) -> &'static str {
         Task::none()
     }
 
+    /// `ELECWIRELABELS [out.csv]` exports the wire-number labels for printing.
+    ///
+    /// A wire number is TEXT on the `WIRENO` layer (that is what `ELECWIRENUMBER` writes), so
+    /// the label list is those texts with their sheet positions — the list a wireman prints
+    /// and fits on the conductors. SkyCAD lists this as "exportable wire label lists".
+    pub(super) fn elec_wire_labels(&mut self, i: usize, out: Option<&str>) -> Task<Message> {
+        const LABEL_LAYER: &str = "WIRENO";
+        let mut labels: Vec<(String, f64, f64)> = Vec::new();
+        {
+            let doc = &self.tabs[i].scene.document;
+            let spaces = Self::drawing_spaces(doc);
+            for entity in doc.entities() {
+                if !spaces.contains(&entity.common().owner_handle) {
+                    continue;
+                }
+                let codec::EntityType::Text(text) = entity else {
+                    continue;
+                };
+                if !text.common.layer.eq_ignore_ascii_case(LABEL_LAYER) {
+                    continue;
+                }
+                let value = text.value.trim().to_string();
+                if value.is_empty() {
+                    continue;
+                }
+                labels.push((value, text.insertion_point.x, text.insertion_point.y));
+            }
+        }
+        if labels.is_empty() {
+            self.command_line.push_output(
+                "ELECWIRELABELS: no wire numbers on this drawing — run ELECWIRENUMBER first.",
+            );
+            return Task::none();
+        }
+        labels.sort_by(|left, right| left.0.cmp(&right.0));
+        self.command_line.push_output(&format!(
+            "{:<12} {:>10} {:>10}",
+            "WIRE", "X", "Y"
+        ));
+        for (value, x, y) in &labels {
+            self.command_line.push_output(&format!(
+                "{:<12} {:>10.2} {:>10.2}",
+                value, x, y
+            ));
+        }
+        let Some(path) = out.map(str::trim).filter(|path| !path.is_empty()) else {
+            self.command_line.push_output(&format!(
+                "ELECWIRELABELS: {} label(s); give a .csv path to export them.",
+                labels.len()
+            ));
+            return Task::none();
+        };
+        let mut text = String::from("WireNumber,X,Y\n");
+        for (value, x, y) in &labels {
+            text.push_str(&format!("{},{:.3},{:.3}\n", csv_field(value), x, y));
+        }
+        match std::fs::write(path, text) {
+            Ok(()) => self.command_line.push_output(&format!(
+                "ELECWIRELABELS: wrote {} label(s) to {path}.",
+                labels.len()
+            )),
+            Err(error) => self
+                .command_line
+                .push_output(&format!("ELECWIRELABELS: cannot write {path}: {error}")),
+        }
+        Task::none()
+    }
+
     /// `ELECSETUP` reports the drawing's electrical setup and the loaded symbol library.
     ///
     /// This is the read-only face of what an AutoCAD Electrical drawing keeps on `WD_M`:
@@ -4719,6 +4787,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             "ELECLIST" => Some(self.elec_list(i)),
             "ELECSETUP" => Some(self.elec_setup(i)),
             "ELECHELP" => Some(self.elec_help()),
+            "ELECWIRELABELS" => Some(self.elec_wire_labels(i, None)),
             "ELECBUILT" => Some(self.elec_built(None)),
             "ELECWIRELIST" => Some(self.elec_wirelist(i)),
             "ELECWIRENUMBER" => Some(self.elec_wirenumber(i)),
@@ -4801,6 +4870,9 @@ fn class_for_reference(tag: &str) -> &'static str {
             // mutates the drawing is worse than no preview at all.
             "ELECNUMBERPREVIEW" => Some(self.elec_number(i, true)),
             _ => {
+                if let Some(argument) = cmd.strip_prefix("ELECWIRELABELS ") {
+                    return Some(self.elec_wire_labels(i, Some(argument.trim())));
+                }
                 if let Some(argument) = cmd.strip_prefix("ELECBUILT ") {
                     return Some(self.elec_built(Some(argument)));
                 }

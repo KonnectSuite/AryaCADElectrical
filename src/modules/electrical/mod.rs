@@ -272,6 +272,11 @@ impl CadModule for ElectricalModule {
                         RibbonItem::LargeTool(elec_tool("ELECBOM", "Bill of\nMaterial", BOM)),
                         RibbonItem::LargeTool(elec_tool("ELECWIRELIST", "Wire\nList", WIRE_LIST)),
                         RibbonItem::LabeledTool(elec_tool("ELECPANEL", "Panel Layout", PANEL)),
+                        RibbonItem::LabeledTool(elec_tool(
+                            "ELECWIRELABELS",
+                            "Wire Labels",
+                            WIRE_NUMBER,
+                        )),
                         RibbonItem::LabeledTool(elec_tool("ELECPART", "Parts Catalogue", PART)),
                         RibbonItem::LabeledDropdown {
                             id: "ELEC_CABLES",

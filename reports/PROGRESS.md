@@ -227,3 +227,16 @@ the ribbon too (Project & Sheet -> Drawing -> Command Reference), and every line
 command the dispatcher really handles, so the reference cannot drift silently.
 
 Verified headless: `ELECHELP` prints the full grouped reference.
+
+---
+
+## Round 7 — 2026-11-06 (exportable wire label lists)
+
+SkyCAD lists "generate exportable wire label lists" under wire processing; that now exists.
+`ELECWIRELABELS [out.csv]` reads the wire numbers written by `ELECWIRENUMBER` (TEXT on the
+`WIRENO` layer, in every drawing space) and prints them with their sheet positions, or
+exports `WireNumber,X,Y` as CSV for printing labels. Reachable from the ribbon
+(Reports -> Wire Labels).
+
+Verified on `FC1000495-003`: `ELECWIRENUMBER: 57 net(s); 57 label(s) created, 0 updated`,
+then `ELECWIRELABELS: wrote 57 label(s) to labels.csv` with rows `1,4.220,22.534` etc.
