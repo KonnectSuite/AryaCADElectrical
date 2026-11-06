@@ -1,0 +1,6 @@
+# AryaCAD electrical project variant pumpset_b
+# copied from project.eprj
+sheet sheet1.dxf
+sheet panel.dxf
+number P2
+title Panel layout

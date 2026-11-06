@@ -619,3 +619,67 @@ same stale seven.
 Variants select sheets but reports do not yet filter by variant or by option code, there is
 no `ELECSYSTEM SAVE` to capture the current drawing as a new system, and the harness design
 feature stays deferred.
+
+---
+
+## Round 13 — 2026-11-06 (WD_M-safe project numbering, packaging and a sample project)
+
+The last safety defect on the feature-matrix list, plus the first packaging of the suite.
+
+### `ELECPROJNUM` now honours `WD_M`
+
+The audit's D7: project renumbering ignored each sheet's `WD_M`, so a released set could be
+silently renumbered. Pass 1 now reads the setup of every sheet; a device on a sheet whose
+`TAGMODE=R` is **frozen**, keeps its reference, and its number is treated as taken so a
+genuinely new device gets the next free number. `TAG-START` seeds the sequence.
+
+Verified on a project made from the real `FC1000495-003` (copy, preview only):
+
+```
+ELECPROJNUM: 1 sheet(s), 2 device(s); would renumber 0. 2 device(s) frozen by WD_M (TAGMODE=R); existing references are left alone.
+  (preview only; run ELECPROJNUM apply to write)
+```
+
+and the file's SHA-256 was unchanged by the preview. On an app drawing with no `WD_M`, two
+devices retagged -K7/-K9 still renumber:
+
+```
+ELECPROJNUM: 1 sheet(s), 2 device(s); would renumber 2.
+    -K7 -> -K1  (on sheet)
+    -K9 -> -K2  (on sheet)
+```
+
+### Packaging
+
+* **`docs/QUICKSTART.md`** — the guided tour: run, first schematic, parts/BOM/reports, PLC
+  and I/O import, cables, panel, projects/revisions/systems/variants, AutoCAD Electrical
+  drawings, headless use, honest limits.
+* **`packaging/portable.ps1`** — builds one movable folder from the release binary, the
+  electrical library (symbols, parts, panel footprints, systems), the sample project,
+  the quick-start and the licence. Run: 63 file(s), 150.8 MB, `OpenCADStudio 2026.44+…`.
+* **`.github/workflows/ecad.yml`** — CI on `windows-latest`: `cargo check --release --tests`
+  and `cargo test -p elec --lib`.
+* **`samples/demo-line/`** — a finished sample project generated headlessly: one schematic
+  (DOL + reversing starter inserted as systems, 10 devices, 5 numbered wires, a drawn
+  shielded 3-core cable `W1`), the generated `panel.dxf` (420×380 mm, one rail, three door
+  cut-outs), `cables.tsv`, `project.eprj` (two sheets + option `-K1 pump-set-B`) and
+  `variant-pumpset_b.eprj`.
+
+### Gate
+
+```
+cargo check --release --tests   exit 0
+cargo test -p elec --lib        131 passed
+cargo build --release -j 1      14 m 25 s (4-CPU affinity)
+```
+
+Every headless verification script passes: real sheets (8/10/4 and 53/39 nets), declared
+library pins + pin columns, navigation, drawn cable, footprint panel, systems/variants, and
+the new WD_M freeze/loose cases. Smoke suite unchanged at 92/99 with the same seven
+pre-round-2 expectations — the remaining packaging item is replacing those checks.
+
+### Still open
+
+Reports do not filter by variant or option code yet; `ELECSYSTEM SAVE` is missing; a drawn
+cable is still one bundle (per-core nets open); cross-reference labels are not clickable;
+the smoke suite needs its stale expectations refreshed.

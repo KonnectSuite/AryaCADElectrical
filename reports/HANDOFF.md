@@ -17,7 +17,7 @@ Gate that was green at the end of the session:
 $env:PATH="$env:USERPROFILE\.cargo\bin;$env:PATH"
 cargo check --release --tests       # exit 0
 cargo test -p elec --lib            # 131 passed
-cargo build --release -j 1          # 14 m 09 s with a 4-CPU affinity cap
+cargo build --release -j 1          # 14 m 25 s with a 4-CPU affinity cap
 ```
 
 **Build note â€” read this before building:** this machine (Intel i9-14900KF, ASUS PRIME
@@ -57,6 +57,11 @@ Fixtures and data:
   attributed devices; `FC1000495-046` is flattened (53 layer-0 wires, 39 nets).
 - `library/` â€” 18 symbol DXFs harvested from those sheets + `library.tsv`
   (`symbol \t class \t attributes \t scale`). `library/starter/` â€” 27 generated IEC symbols.
+- `samples/demo-line/` — a finished sample project (schematic + panel + cable schedule +
+  project file + variant) for trying every command without drawing first; regenerate with
+  the batch in its README.
+- `docs/QUICKSTART.md` and `packaging/portable.ps1` — the user-facing tour and the
+  portable-folder build.
 - `library/systems/*.tsv` — reusable sub-circuits (`dol_starter`, `reversing_starter`);
   a project may override them with `<project>/systems/`.
 - `library/panel/footprints.tsv` — panel footprint per device class (width, height, mount
@@ -79,6 +84,14 @@ Fixtures and data:
   regenerated), `ELECWIRELIST <out.csv>` and the `ELECREPORT` XLSX wire sheet carry
   `From pin`/`To pin`, and `ELECHIGHLIGHT <tag>` / `ELECGOTO <tag>` live in a Navigation
   ribbon group.
+- **WD_M-safe project numbering, packaging, sample (round 13):** `ELECPROJNUM` now reads
+  every sheet's `WD_M`; `TAGMODE=R` freezes the existing references and their numbers are
+  treated as taken (verified: real sheet 003 previews `would renumber 0`, file hash
+  unchanged; an unfrozen drawing still renumbers -K7/-K9 to -K1/-K2). `docs/QUICKSTART.md`,
+  `packaging/portable.ps1` (one movable folder: binary + library + sample + docs) and
+  `.github/workflows/ecad.yml` (`cargo check --release --tests`, `cargo test -p elec --lib`)
+  exist; `samples/demo-line/` is a finished project (schematic, panel, cable schedule,
+  project file, variant).
 - **Design by systems, variants, option codes (round 12):** `library/systems/*.tsv`
   fragments (`device dx dy symbol`, `wire x1 y1 x2 y2`) insert a reusable starter with
   retagged devices and wires — `ELECSYSTEM [LIST | INSERT <name> [x,y]]`; verified 14
@@ -102,23 +115,19 @@ Fixtures and data:
 
 ## The next three things, in order
 
-1. **Package the suite** — installer/portable build, a shipped sample project (schematics +
-   panel + cable schedule + systems), a quick-start document, the refreshed
-   `tests/ecad/run_smoke.py` (seven pre-round-2 expectations to replace) and CI running
-   `cargo check --release --tests`, `cargo test -p elec --lib` and the headless verification
-   batches.
-2. **Finish configuration semantics** — filter BOM/reports by variant and option code,
-   add `ELECSYSTEM SAVE <name>` to capture the current drawing as a system, and
-   `ELECPROJNUM` should read each sheet's `WD_M` freeze (it respects `ELECBUILT` only).
-3. **Per-core cable nets and click-through cross-references** — a drawn cable is one bundle
-   today: its cores are not separate nets. Make each core an entity that can carry a wire
-   net, so a 3-core cable can land on three different pairs. In parallel, give
-   `ELECXREFWRITE` labels a payload (extension dictionary or side table mapping label →
-   handle) so `ELECHIGHLIGHT`/`ELECGOTO` can be bound to a double-click on the label and
-   the PDF can carry link annotations.
+1. **Refresh the smoke suite** — `tests/ecad/run_smoke.py` still asserts pre-round-2
+   behaviour (seven checks: `-002` yields "no components", BOM of 2 rows, class-name
+   listing). Replace them with the current expectations so 99/99 is meaningful again, and
+   wire the verification scripts into the CI job once the fixtures can ship.
+2. **Finish configuration/report semantics** — filter BOM/reports by variant and option code,
+   add `ELECSYSTEM SAVE <name>` to capture the current drawing as a system; per-core cable
+   nets (make each core an entity with its own wire net) and clickable cross-reference labels
+   (`ELECXREFWRITE` label payload + PDF link annotations).
+3. **Product polish** — part-level panel footprint overrides and a separate door elevation;
+   add the sample project + quick-start to the in-app help; run `packaging/portable.ps1` on
+   the release build as part of the release checklist.
 
-Then: harness design stays deferred (needs lengths a 2D schematic does not carry); panel
-layout still needs part-level footprint overrides and a separate door elevation.
+Then: harness design stays deferred (needs lengths a 2D schematic does not carry).
 
 ## Gotchas that cost time (do not relearn these)
 

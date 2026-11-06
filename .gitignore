@@ -59,3 +59,9 @@ reports/_tmp/
 # Plugin template has its own Cargo project (not part of the workspace build);
 # its lock file is a locally generated build artifact
 docs/plugin-template-v2/Cargo.lock
+
+# Portable build output (packaging/portable.ps1)
+dist/
+
+# App undo-backup files beside sample/demo drawings
+samples/*/*.bak

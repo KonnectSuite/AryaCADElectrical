@@ -1,0 +1,7 @@
+# AryaCAD electrical project
+# one sheet per line, in drawing order
+sheet sheet1.dxf
+sheet panel.dxf
+number P2
+title Panel layout
+option -K1 pump-set-B

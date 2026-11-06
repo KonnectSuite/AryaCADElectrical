@@ -253,3 +253,15 @@ least a partial implementation, with the caveats listed above. Inside partials t
 variant/option, `ELECSYSTEM SAVE`, per-core cable nets, clickable cross-reference labels,
 `ELECPROJNUM` honouring `WD_M`, and the packaging (installer, sample project, quick-start,
 refreshed smoke suite, CI).
+
+---
+
+## Round 13 update — WD_M-safe project numbering, packaging (2026-11-06)
+
+| # | Feature | New status | Evidence |
+|---|---|---|---|
+| 15 | Built project modification control | **Partial+ (WD_M honoured by project numbering)** | `ELECPROJNUM` pass 1 reads each sheet's `WD_M`; a device on a `TAGMODE=R` sheet is frozen and leaves its tag alone, while its number is reserved so new devices get the next free one (`TAG-START` seeds the sequence). Verified: real `FC1000495-003` project previews `would renumber 0. 2 device(s) frozen by WD_M` with the file unchanged; an unfrozen drawing still renumbers -K7/-K9 to -K1/-K2. `ELECBUILT` remains the project-level lock. |
+
+Packaging (not a feature row): `docs/QUICKSTART.md`, `packaging/portable.ps1` (63 files,
+150.8 MB portable folder), `.github/workflows/ecad.yml` and `samples/demo-line/`. Current
+honest score unchanged: **1 implemented, 16 partial, 1 missing, 1 not applicable.**
