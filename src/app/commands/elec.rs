@@ -4293,11 +4293,11 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// backplate and in what order. This is the smallest honest version: one box per device
     /// in a grid inside an enclosure, labelled with its tag and class, written to its own
     /// drawing so the schematic is not touched. Real footprints and dimensions come later.
+
     pub(super) fn elec_panel(&mut self, i: usize, path: &str) -> Task<Message> {
-        const CELL: f64 = 20.0;
-        const BOX_W: f64 = 14.0;
-        const BOX_H: f64 = 10.0;
-        const MARGIN: f64 = 10.0;
+        const EDGE: f64 = 40.0;
+        const RAIL_HEIGHT: f64 = 35.0;
+        const DOOR_INSET: f64 = 20.0;
 
         let mut devices: Vec<(String, String)> = Vec::new();
         for component in Self::components_of(&self.tabs[i].scene.document) {
@@ -4315,27 +4315,50 @@ fn class_for_reference(tag: &str) -> &'static str {
                 .push_output("ELECPANEL: no tagged devices on this drawing.");
             return Task::none();
         }
-        devices.sort();
 
-        let count = devices.len();
-        let columns = (count as f64).sqrt().ceil().max(1.0) as usize;
-        let rows = count.div_ceil(columns);
-        let width = columns as f64 * CELL + MARGIN * 2.0;
-        let height = rows as f64 * CELL + MARGIN * 2.0;
-
+        let table = read_panel_footprints();
+        let layout = panel_layout(&devices, &table);
         let mut document = codec::Document::new();
-        let _ = document.layers.add(codec::tables::Layer::new("PANEL"));
-        let _ = document.layers.add(codec::tables::Layer::new("PANEL-TEXT"));
+        for layer in [
+            "PANEL-ENCLOSURE",
+            "PANEL-DOOR",
+            "PANEL-RAIL",
+            "PANEL-DEVICE",
+            "PANEL-CUTOUT",
+            "PANEL-TEXT",
+        ] {
+            let _ = document.layers.add(codec::tables::Layer::new(layer));
+        }
 
-        let mut add_line = |document: &mut codec::Document, ax: f64, ay: f64, bx: f64, by: f64| {
+        let mut add_line = |document: &mut codec::Document,
+                            ax: f64,
+                            ay: f64,
+                            bx: f64,
+                            by: f64,
+                            layer: &str| {
             let mut line = codec::entities::Line::from_points(
                 codec::types::Vector3::new(ax, ay, 0.0),
                 codec::types::Vector3::new(bx, by, 0.0),
             );
-            line.common.layer = "PANEL".to_string();
+            line.common.layer = layer.to_string();
             let _ = document.add_entity(codec::EntityType::Line(line));
         };
-        let mut add_text = |document: &mut codec::Document, text: &str, x: f64, y: f64, height: f64| {
+        let mut add_rect = |document: &mut codec::Document,
+                            x: f64,
+                            y: f64,
+                            width: f64,
+                            height: f64,
+                            layer: &str| {
+            add_line(document, x, y, x + width, y, layer);
+            add_line(document, x + width, y, x + width, y + height, layer);
+            add_line(document, x + width, y + height, x, y + height, layer);
+            add_line(document, x, y + height, x, y, layer);
+        };
+        let mut add_text = |document: &mut codec::Document,
+                            text: &str,
+                            x: f64,
+                            y: f64,
+                            height: f64| {
             let mut entity = codec::entities::Text::new();
             entity.value = text.to_string();
             entity.height = height;
@@ -4344,38 +4367,111 @@ fn class_for_reference(tag: &str) -> &'static str {
             let _ = document.add_entity(codec::EntityType::Text(entity));
         };
 
-        // Enclosure
-        add_line(&mut document, 0.0, 0.0, width, 0.0);
-        add_line(&mut document, width, 0.0, width, height);
-        add_line(&mut document, width, height, 0.0, height);
-        add_line(&mut document, 0.0, height, 0.0, 0.0);
+        // Enclosure and door.
+        add_rect(&mut document, 0.0, 0.0, layout.width, layout.height, "PANEL-ENCLOSURE");
+        add_rect(
+            &mut document,
+            DOOR_INSET,
+            DOOR_INSET,
+            layout.width - DOOR_INSET * 2.0,
+            layout.height - DOOR_INSET * 2.0,
+            "PANEL-DOOR",
+        );
+        // Door handle, on the right of the door.
+        add_rect(
+            &mut document,
+            layout.width - DOOR_INSET - 12.0,
+            layout.height * 0.5 - 8.0,
+            6.0,
+            16.0,
+            "PANEL-DOOR",
+        );
 
-        for (index, (tag, class)) in devices.iter().enumerate() {
-            let column = index % columns;
-            let row = index / columns;
-            let x = MARGIN + column as f64 * CELL;
-            let y = MARGIN + (rows - 1 - row) as f64 * CELL;
-            // Box, drawn from its lower-left corner.
-            add_line(&mut document, x, y, x + BOX_W, y);
-            add_line(&mut document, x + BOX_W, y, x + BOX_W, y + BOX_H);
-            add_line(&mut document, x + BOX_W, y + BOX_H, x, y + BOX_H);
-            add_line(&mut document, x, y + BOX_H, x, y);
-            add_text(&mut document, tag, x + 1.0, y + BOX_H * 0.6, 2.0);
-            add_text(&mut document, class, x + 1.0, y + BOX_H * 0.25, 1.2);
+        // DIN rails on the mounting plate.
+        for rail in 0..layout.rails {
+            let y = EDGE + rail as f64 * 110.0;
+            add_line(&mut document, EDGE - 10.0, y, layout.width - EDGE + 10.0, y, "PANEL-RAIL");
+            add_line(
+                &mut document,
+                EDGE - 10.0,
+                y + RAIL_HEIGHT,
+                layout.width - EDGE + 10.0,
+                y + RAIL_HEIGHT,
+                "PANEL-RAIL",
+            );
+        }
+
+        // Footprints: a rectangle per device with its tag, class and size.
+        for placement in &layout.placements {
+            let footprint = placement.footprint;
+            add_rect(
+                &mut document,
+                placement.x,
+                placement.y,
+                footprint.width,
+                footprint.height,
+                "PANEL-DEVICE",
+            );
+            add_text(
+                &mut document,
+                &placement.tag,
+                placement.x + 1.5,
+                placement.y + footprint.height * 0.55,
+                3.5,
+            );
+            add_text(
+                &mut document,
+                &placement.class,
+                placement.x + 1.5,
+                placement.y + footprint.height * 0.25,
+                2.2,
+            );
+            add_text(
+                &mut document,
+                &format!("{:.0}x{:.0}", footprint.width, footprint.height),
+                placement.x + 1.5,
+                placement.y + 2.0,
+                1.8,
+            );
+            if footprint.mount == PanelMount::Door {
+                let mut circle = codec::entities::Circle::new();
+                circle.center = codec::types::Vector3::new(
+                    placement.x + footprint.width * 0.5,
+                    placement.y + footprint.height * 0.5,
+                    0.0,
+                );
+                circle.radius = footprint.width.min(footprint.height) * 0.5;
+                circle.common.layer = "PANEL-CUTOUT".to_string();
+                let _ = document.add_entity(codec::EntityType::Circle(circle));
+            }
         }
 
         add_text(
             &mut document,
-            &format!("PANEL LAYOUT - {count} device(s)"),
-            MARGIN,
-            height - MARGIN * 0.6,
-            2.5,
+            &format!(
+                "PANEL LAYOUT - {} device(s) - enclosure {:.0}x{:.0} mm",
+                layout.placements.len(),
+                layout.width,
+                layout.height
+            ),
+            10.0,
+            layout.height + 10.0,
+            6.0,
         );
 
         match crate::io::save(&document, std::path::Path::new(path)) {
             Ok(()) => {
+                // Register only once the drawing exists: the check resolves it on disk.
+                let registered = register_panel_sheet(path)
+                    .map(|text| format!("; {text}"))
+                    .unwrap_or_default();
                 let summary = format!(
-                    "ELECPANEL: {count} device(s) in {columns}x{rows} cells ({width:.0}x{height:.0}); wrote {path}."
+                    "ELECPANEL: {} device(s); enclosure {:.0}x{:.0} mm; {} rail(s), {} door cut-out(s); wrote {path}{registered}.",
+                    layout.placements.len(),
+                    layout.width,
+                    layout.height,
+                    layout.rails,
+                    layout.door_count
                 );
                 self.command_line.push_output(&summary);
             }
@@ -4386,6 +4482,7 @@ fn class_for_reference(tag: &str) -> &'static str {
         }
         Task::none()
     }
+
 
     /// `ELECPROJNEW <folder> [file.eprj]` writes a project file listing the drawings.
     ///
@@ -5458,6 +5555,296 @@ fn class_for_reference(tag: &str) -> &'static str {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// Panel layout: footprints, rails, door cut-outs
+// ---------------------------------------------------------------------------------------
+
+/// Where a device mounts on the panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanelMount {
+    Rail,
+    Door,
+    Plate,
+}
+
+impl PanelMount {
+    fn parse(text: &str) -> Self {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "door" => Self::Door,
+            "plate" => Self::Plate,
+            _ => Self::Rail,
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Rail => 0,
+            Self::Plate => 1,
+            Self::Door => 2,
+        }
+    }
+}
+
+/// The mounting-plate space one device class needs, in millimetres.
+#[derive(Debug, Clone, Copy)]
+struct PanelFootprint {
+    width: f64,
+    height: f64,
+    mount: PanelMount,
+}
+
+/// One device placed on the panel, lower-left corner in plate millimetres.
+struct PanelPlacement {
+    tag: String,
+    class: String,
+    footprint: PanelFootprint,
+    x: f64,
+    y: f64,
+}
+
+/// The finished panel: placements, enclosure size and the counts the summary reports.
+struct PanelLayout {
+    placements: Vec<PanelPlacement>,
+    width: f64,
+    height: f64,
+    rails: usize,
+    door_count: usize,
+}
+
+/// Read the footprint table: a project's own `footprints.tsv` wins over the library's.
+fn read_panel_footprints() -> BTreeMap<String, PanelFootprint> {
+    const LIBRARY_TABLE: &str = "panel/footprints.tsv";
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(folder) = project_dir_for_revisions() {
+        candidates.push(folder.join("footprints.tsv"));
+    }
+    if let Some(library) = library_dir().read().ok().and_then(|guard| guard.clone()) {
+        candidates.push(library.join(LIBRARY_TABLE));
+        if let Some(parent) = library.parent() {
+            candidates.push(parent.join(LIBRARY_TABLE));
+        }
+    }
+    candidates.push(std::path::PathBuf::from("library").join(LIBRARY_TABLE));
+
+    let mut map: BTreeMap<String, PanelFootprint> = BTreeMap::new();
+    for candidate in candidates {
+        let Ok(text) = std::fs::read_to_string(&candidate) else {
+            continue;
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut fields = line.split('\t');
+            let Some(key) = fields.next() else {
+                continue;
+            };
+            let Some(width) = fields
+                .next()
+                .and_then(|value| value.trim().parse::<f64>().ok())
+            else {
+                continue;
+            };
+            let Some(height) = fields
+                .next()
+                .and_then(|value| value.trim().parse::<f64>().ok())
+            else {
+                continue;
+            };
+            let mount = fields.next().map(PanelMount::parse).unwrap_or(PanelMount::Rail);
+            if width <= 0.0 || height <= 0.0 {
+                continue;
+            }
+            let key = key.trim().to_ascii_uppercase();
+            let key = key.strip_prefix("CLASS:").unwrap_or(&key).to_string();
+            map.insert(
+                key,
+                PanelFootprint {
+                    width,
+                    height,
+                    mount,
+                },
+            );
+        }
+    }
+    map
+}
+
+fn panel_footprint(class: &str, table: &BTreeMap<String, PanelFootprint>) -> PanelFootprint {
+    let key = class.trim().to_ascii_uppercase();
+    if let Some(footprint) = table.get(&key) {
+        return *footprint;
+    }
+    // A PLC module's class carries its point count (`PLC-8`, `PLC Digital Input`); the
+    // table's generic PLC row is the fallback for the family.
+    if key.starts_with("PLC") {
+        if let Some(footprint) = table.get("PLC") {
+            return *footprint;
+        }
+    }
+    table.get("DEFAULT").copied().unwrap_or(PanelFootprint {
+        width: 45.0,
+        height: 90.0,
+        mount: PanelMount::Rail,
+    })
+}
+
+/// Place the devices: rail rows first, then plate rows, then the door band.
+fn panel_layout(devices: &[(String, String)], table: &BTreeMap<String, PanelFootprint>) -> PanelLayout {
+    const GAP: f64 = 5.0;
+    const ROW_WIDTH: f64 = 560.0;
+    const RAIL_PITCH: f64 = 110.0;
+    const PLATE_PITCH: f64 = 70.0;
+    const DOOR_BAND: f64 = 80.0;
+    const EDGE: f64 = 40.0;
+
+    let mut items: Vec<(String, String, PanelFootprint)> = devices
+        .iter()
+        .map(|(tag, class)| (tag.clone(), class.clone(), panel_footprint(class, table)))
+        .collect();
+    items.sort_by(|left, right| {
+        left.2
+            .mount
+            .rank()
+            .cmp(&right.2.mount.rank())
+            .then(left.1.cmp(&right.1))
+            .then(left.0.cmp(&right.0))
+    });
+
+    let mut placements: Vec<PanelPlacement> = Vec::new();
+    let mut max_row = 0.0f64;
+
+    // Rail devices, placed left to right on 35 mm DIN rails.
+    let rail_items: Vec<&(String, String, PanelFootprint)> = items
+        .iter()
+        .filter(|item| item.2.mount == PanelMount::Rail)
+        .collect();
+    let mut rails = if rail_items.is_empty() { 0 } else { 1 };
+    let mut x = EDGE;
+    let mut y = EDGE;
+    for (tag, class, footprint) in &rail_items {
+        if x + footprint.width > EDGE + ROW_WIDTH && x > EDGE {
+            rails += 1;
+            x = EDGE;
+            y += RAIL_PITCH;
+        }
+        placements.push(PanelPlacement {
+            tag: tag.clone(),
+            class: class.clone(),
+            footprint: *footprint,
+            x,
+            y,
+        });
+        x += footprint.width + GAP;
+        max_row = max_row.max(x - GAP - EDGE);
+    }
+
+    // Plate devices: screwed straight to the plate, below the rails.
+    let plate_items: Vec<&(String, String, PanelFootprint)> = items
+        .iter()
+        .filter(|item| item.2.mount == PanelMount::Plate)
+        .collect();
+    let plate_top = EDGE + rails as f64 * RAIL_PITCH + 20.0;
+    let mut plate_rows = if plate_items.is_empty() { 0 } else { 1 };
+    let mut px = EDGE;
+    let mut py = plate_top;
+    for (tag, class, footprint) in &plate_items {
+        if px + footprint.width > EDGE + ROW_WIDTH && px > EDGE {
+            plate_rows += 1;
+            px = EDGE;
+            py += PLATE_PITCH;
+        }
+        placements.push(PanelPlacement {
+            tag: tag.clone(),
+            class: class.clone(),
+            footprint: *footprint,
+            x: px,
+            y: py,
+        });
+        px += footprint.width + GAP;
+        max_row = max_row.max(px - GAP - EDGE);
+    }
+
+    // Door devices: along the door band at the top, each with a round cut-out.
+    let door_items: Vec<&(String, String, PanelFootprint)> = items
+        .iter()
+        .filter(|item| item.2.mount == PanelMount::Door)
+        .collect();
+    let door_count = door_items.len();
+    let door_base = EDGE + rails as f64 * RAIL_PITCH + plate_rows as f64 * PLATE_PITCH + 40.0;
+    let mut dx = EDGE + 20.0;
+    for (tag, class, footprint) in &door_items {
+        placements.push(PanelPlacement {
+            tag: tag.clone(),
+            class: class.clone(),
+            footprint: *footprint,
+            x: dx,
+            y: door_base + 25.0,
+        });
+        dx += footprint.width.max(30.0) + 20.0;
+        max_row = max_row.max(dx - 20.0 - EDGE);
+    }
+
+    let width = (max_row + EDGE * 2.0).max(420.0);
+    let height = door_base + DOOR_BAND + EDGE;
+    PanelLayout {
+        placements,
+        width,
+        height,
+        rails,
+        door_count,
+    }
+}
+
+/// Add the panel drawing to the open project file, once. Returns what was done.
+fn register_panel_sheet(path: &str) -> Option<String> {
+    let file = project_file().read().ok().and_then(|guard| guard.clone())?;
+    let folder = file.parent()?.to_path_buf();
+    let canonical = std::path::Path::new(path).canonicalize().ok()?;
+    let existing = std::fs::read_to_string(&file).unwrap_or_default();
+    let already = existing.lines().any(|line| {
+        let Some(name) = line.strip_prefix("sheet ") else {
+            return false;
+        };
+        let candidate = std::path::Path::new(name.trim());
+        let resolved = if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            folder.join(candidate)
+        };
+        resolved.canonicalize().ok().as_deref() == Some(canonical.as_path())
+    });
+    if already {
+        return Some(format!("already a project sheet in {}", file.display()));
+    }
+    // The project's own sheets are written relative to it; `canonicalize` returns a
+    // verbatim (`\\?\`) path on Windows, which does not compare with the plain folder,
+    // so the relative name is computed from the requested path instead.
+    let requested = std::path::PathBuf::from(path);
+    let entry = requested
+        .strip_prefix(&folder)
+        .map(|relative| relative.to_path_buf())
+        .unwrap_or_else(|_| {
+            requested
+                .file_name()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| requested.clone())
+        });
+    let sheet_count = existing.lines().filter(|line| line.starts_with("sheet ")).count();
+    let mut text = existing;
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&format!(
+        "sheet {}\nnumber P{}\ntitle Panel layout\n",
+        entry.display(),
+        sheet_count + 1
+    ));
+    std::fs::write(&file, text).ok()?;
+    Some(format!("registered in {}", file.display()))
 }
 
 /// True when an attribute carries the device tag.

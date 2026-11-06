@@ -1,0 +1,42 @@
+# AryaCAD panel footprints — what a device occupies on a mounting plate.
+#
+# One row per device class. `match` is `CLASS:<class>` (case-insensitive, matched
+# against the component class the symbol library gives the device), or `DEFAULT`
+# for anything not listed. Width and height are millimetres of mounting plate the
+# device needs; `mount` is where it belongs:
+#   rail  — on a 35 mm DIN rail on the mounting plate (breakers, contactors, PLC)
+#   door  — on the enclosure door, needs a round cut-out (buttons, lamps)
+#   plate — screwed straight onto the plate (drives, sensors, earth)
+#
+# A project can keep its own copy: ELECPANEL reads library/panel/footprints.tsv
+# first, then <project>/footprints.tsv if it exists, and later rows win.
+#
+# match	width_mm	height_mm	mount
+CLASS:Circuit Breaker	18	90	rail
+CLASS:Contactor	45	90	rail
+CLASS:Overload	45	90	rail
+CLASS:Relay	18	90	rail
+CLASS:Fuse	18	90	rail
+CLASS:Power Distribution	45	90	rail
+CLASS:Power Supply	60	120	rail
+CLASS:PLC Digital Input	100	90	rail
+CLASS:PLC Digital Output	100	90	rail
+CLASS:PLC Analog Input	100	90	rail
+CLASS:PLC	100	90	rail
+CLASS:Terminal	8	50	rail
+CLASS:Earth	8	40	rail
+CLASS:Sensor	18	60	rail
+CLASS:Drive	120	120	rail
+CLASS:Transformer	90	90	rail
+CLASS:Button	30	30	door
+CLASS:Pushbutton	30	30	door
+CLASS:Selector	30	30	door
+CLASS:Lamp	22	22	door
+CLASS:Indicator	22	22	door
+CLASS:Connector	20	40	plate
+CLASS:Limit Switch	40	40	plate
+CLASS:Motor	90	90	plate
+CLASS:Assembly	45	90	plate
+CLASS:Other	45	90	plate
+CLASS:Wire Label	10	10	plate
+DEFAULT	45	90	rail
