@@ -115,17 +115,16 @@ Fixtures and data:
 
 ## The next three things, in order
 
-1. **Refresh the smoke suite** — `tests/ecad/run_smoke.py` still asserts pre-round-2
-   behaviour (seven checks: `-002` yields "no components", BOM of 2 rows, class-name
-   listing). Replace them with the current expectations so 99/99 is meaningful again, and
-   wire the verification scripts into the CI job once the fixtures can ship.
-2. **Finish configuration/report semantics** — filter BOM/reports by variant and option code,
-   add `ELECSYSTEM SAVE <name>` to capture the current drawing as a system; per-core cable
-   nets (make each core an entity with its own wire net) and clickable cross-reference labels
-   (`ELECXREFWRITE` label payload + PDF link annotations).
+1. **Finish configuration/report semantics** — filter BOM/reports by variant and option code,
+   add `ELECSYSTEM SAVE <name>` to capture the current drawing as a system, and per-core
+   cable nets (each core an entity with its own wire net).
+2. **Click-through cross-references** — give `ELECXREFWRITE` labels a payload (extension
+   dictionary or a side table mapping label → handle), bind a double-click to
+   `ELECGOTO`, and add PDF link annotations for the "intelligent PDF" half of feature 16.
 3. **Product polish** — part-level panel footprint overrides and a separate door elevation;
-   add the sample project + quick-start to the in-app help; run `packaging/portable.ps1` on
-   the release build as part of the release checklist.
+   an optional installer script beside `packaging/portable.ps1`; show the sample project and
+   quick-start in the in-app help; add the customer-sheet baseline to a release checklist
+   (it cannot run in CI because those drawings are not in the repository).
 
 Then: harness design stays deferred (needs lengths a 2D schematic does not carry).
 
@@ -151,6 +150,8 @@ Then: harness design stays deferred (needs lengths a 2D schematic does not carry
 - A T-junction only connects where a dot marks it; `ELECJUNCTIONS` draws those dots.
 - Do not run `ELECNUMBER`/`ELECPROJNUM` apply on the customer sheets without checking
   `ELECSETUP` first â€” the `WD_M` freeze protects tags, `ELECBUILT` blocks renumbering entirely.
-- `tests/ecad/run_smoke.py` is stale: 92/99 pass, and the 7 failures assert pre-round-2
-  behaviour (`-002` yields "no components", BOM of 2 rows, class-name listing). Fix the
-  expectations when next touching that file; the wire/net checks pass.
+- `tests/ecad/run_smoke.py` is current as of round 14: 99/99 with the customer sheets
+  present, 84/84 with `--no-real-sheets` (the customer DXFs are git-ignored; CI runs that
+  mode). Run it against a freshly built binary: `py -3.13 tests/ecad/run_smoke.py --baseline
+  target\release\OpenCADStudio.exe --current target\release\OpenCADStudio.exe`. It copies
+  the drawing and binary into `%TEMP%`, so it never locks `target\`.

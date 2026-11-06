@@ -265,3 +265,14 @@ refreshed smoke suite, CI).
 Packaging (not a feature row): `docs/QUICKSTART.md`, `packaging/portable.ps1` (63 files,
 150.8 MB portable folder), `.github/workflows/ecad.yml` and `samples/demo-line/`. Current
 honest score unchanged: **1 implemented, 16 partial, 1 missing, 1 not applicable.**
+
+---
+
+## Round 14 update — verification and CI (2026-11-06)
+
+Not a feature row, but the evidence base changed: `tests/ecad/run_smoke.py` was refreshed to
+the layer's current behaviour (99/99 with the customer sheets, 84/84 with
+`--no-real-sheets`), and `.github/workflows/ecad.yml` now builds the release binary and runs
+that suite on `windows-latest`. The matrix's earlier "smoke suite is stale" caveat is retired;
+the customer-sheet baseline remains a local release-checklist item because those DXFs are not
+committed.

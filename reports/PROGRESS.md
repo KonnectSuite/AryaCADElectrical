@@ -683,3 +683,35 @@ pre-round-2 expectations — the remaining packaging item is replacing those che
 Reports do not filter by variant or option code yet; `ELECSYSTEM SAVE` is missing; a drawn
 cable is still one bundle (per-core nets open); cross-reference labels are not clickable;
 the smoke suite needs its stale expectations refreshed.
+
+---
+
+## Round 14 — 2026-11-06 (the smoke suite is meaningful again, and CI runs it)
+
+Since round 2 the end-to-end suite had been drifting: seven of its 99 checks asserted
+pre-round-2 behaviour (an exploded sheet yielding "no components", a BOM with one row per
+symbol, class-name listing). The suite now expects what the layer actually does:
+
+* the synthetic drawing's listing is read by class (title case) and the BOM groups identical
+  class+part rows, so 6 placed symbols give 5 BOM rows;
+* the exploded customer sheet `FC1000495-002` must recover its tags from TEXT:
+  `ELECBOM: 13 component(s) -> 4 bill-of-material row(s)`, and its CSV must exist;
+* the attributed sheet `FC1000495-003` must count both attributed and recovered devices
+  (`ELECBOM: 10 component(s)`) with 4 BOM rows (was 2);
+* `ELECNUMBERPREVIEW` still reports no attributed inserts on the exploded sheet, which is a
+  property of that sheet, not a bug.
+
+Two run modes now exist:
+
+| mode | checks | use |
+|---|---|---|
+| full (`run_smoke.py`, customer sheets present) | **99/99** | developer machine, real-data regression |
+| CI (`--no-real-sheets`) | **84/84** | repository CI: the customer DXFs are git-ignored, so their baseline is skipped explicitly, not silently |
+
+`.github/workflows/ecad.yml` grew a release build and the headless suite step, so CI now runs
+`cargo check --release --tests`, `cargo test -p elec --lib`, `cargo build --release` and the
+84-check smoke suite on `windows-latest`.
+
+No Rust source changed this round; the binary under test is the round-13 build
+(`14 m 25 s`, version `2026.44+gf4da7214.dirty`), and rounds 8–13 headless verification is
+unchanged.
