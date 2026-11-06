@@ -421,3 +421,66 @@ cargo build --release -j 1      13 m 46 s (4-CPU affinity)
 
 Round-8 real-sheet results are unchanged (003: 8 wires / 10 pins / 4 nets; 046: 53 / 39),
 and `tests/ecad/run_smoke.py` stays at 92/99 with the same seven pre-round-2 expectations.
+
+---
+
+## Round 10 — 2026-11-06 (cables drawn as schematic objects)
+
+The cable schedule was typed data (`cables.tsv`); the drawing had no cable on it. A cable is
+now drawn, and the schedule is derived from what was drawn.
+
+### `ELECCABLEDRAW <tag> [CORES=] [PART=] [MFG=] [SHIELD=yes] [DESC=]`
+
+Starts a chained point command like `ELECWIRE`: each point extends the route, Enter ends it.
+The route goes on a `CABLES` layer (not `WIRES` — a cable bundle is not a conductor), the tag
+is written beside the first point, and `SHIELD=yes` draws the semicircle shield bracket over
+the first leg. The schedule record is upserted as every segment is committed, so the drawing
+and the schedule cannot disagree even if the command is interrupted.
+
+The record gained two columns (`route`, `shield`); older `cables.tsv` files still parse, and
+`ELECCABLE` (typed, no geometry) keeps a route drawn earlier for the same tag.
+
+### The schedule is measured, not typed
+
+`ELECCABLELIST` measures the drawn route and resolves each end to the device pin the pin
+pass (round 8) knows about. One drawn shielded 3-core cable between two placed symbols:
+
+```
+CABLE      CORES  PART NUMBER        MANUFACTURER       LENGTH SHIELD  FROM           TO              DESCRIPTION
+W1         3      LIYCY-3X1.5        -                   43.83 yes     -K1:2          -K2:1           Motor feeder
+ELECCABLELIST: wrote 1 row(s) to cables.csv.
+
+Cable,Description,Part Number,Manufacturer,Length,Conductor,Shield,From,To
+W1,Motor feeder,LIYCY-3X1.5,,43.83,3,yes,-K1:2,-K2:1
+```
+
+The measured route length (43.829 on the drawing: two 21.9-unit legs) matches the schedule.
+`ELECREPORT` now writes a fourth sheet, `Cables`, with the same columns and the resolved
+From/To pins: `… terminals 0 row(s), cables 1 row(s)`.
+
+### Verified in the saved drawing
+
+```
+CABLES layer: 2 line(s), 1 text(s), 1 arc(s) ['W1']
+route length on drawing: 43.829
+cables.tsv: W1  3  LIYCY-3X1.5  -  -  Motor feeder  0.5000,0.0000 20.0000,10.0000 39.5000,0.0000  yes
+```
+
+### Gate
+
+```
+cargo check --release --tests   exit 0
+cargo test -p elec --lib        131 passed
+cargo build --release -j 1      14 m 09 s (4-CPU affinity)
+```
+
+Round-8/9 verification is unchanged (003: 8 wires / 10 pins / 4 nets; 046: 53 -> 39;
+declared library pins, wire-list columns and navigation all still pass), and the smoke suite
+stays at 92/99 with the same stale seven.
+
+### Still open on cabling
+
+A cable is one drawn bundle: its individual **conductors are not separate nets** and the
+shield bracket is a graphic, not a connectivity object. Per-core nets (a 3-core cable whose
+cores land on three different wire pairs) needs cores as entities; that is the next depth
+step, after panel layout.

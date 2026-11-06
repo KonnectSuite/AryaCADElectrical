@@ -209,3 +209,17 @@ Remaining true gaps: cables drawn as schematic objects (the schedule data exists
 geometry does not), panel layout with footprints and cut-outs, configuration management /
 variants, design-by-systems, clickable cross-reference labels in drawing and PDF, and the
 `ELECPROJNUM` / `WD_M` interaction. Harness design stays deferred.
+
+---
+
+## Round 10 update — cables drawn on the schematic (2026-11-06)
+
+| # | Feature | New status | Evidence |
+|---|---|---|---|
+| 14 | Cabling and cable schedules | **Partial+ (cable drawn as an object)** | `ELECCABLEDRAW <tag> [CORES=] [SHIELD=yes] [PART=] [DESC=]` chains a route onto the `CABLES` layer, writes the tag beside the first point and a semicircle shield bracket when shielded; the record is upserted per segment into `cables.tsv` (now `tag cores part manufacturer length description route shield`). `ELECCABLELIST` measures the route and resolves both ends to device pins: `W1 3 LIYCY-3X1.5 - 43.83 yes -K1:2 -K2:1`; `ELECREPORT` writes a fourth `Cables` sheet. Verified in the saved drawing: 2 `CABLES` lines, tag `W1`, 1 shield arc, route length 43.829. Missing: per-core conductor nets (the cable is one bundle), and shield connectivity is a graphic, not a net. |
+| 2 | BOMs and parts-lists | **Partial+** | `ELECREPORT` now exports four sheets — BOM, Wire List (with From/To pin columns), Terminals, Cables — so the cable schedule travels with the other lists. |
+
+Current honest score: **1 implemented, 14 partial, 3 missing, 1 not applicable.** Remaining
+true gaps: panel layout with footprints and cut-outs, configuration management / variants,
+design-by-systems (plus the harness deferred), and inside the partial features the per-core
+cable nets, clickable cross-reference labels, and the `ELECPROJNUM` / `WD_M` interaction.

@@ -17,7 +17,7 @@ Gate that was green at the end of the session:
 $env:PATH="$env:USERPROFILE\.cargo\bin;$env:PATH"
 cargo check --release --tests       # exit 0
 cargo test -p elec --lib            # 131 passed
-cargo build --release -j 1          # 13 m 46 s with a 4-CPU affinity cap
+cargo build --release -j 1          # 14 m 09 s with a 4-CPU affinity cap
 ```
 
 **Build note â€” read this before building:** this machine (Intel i9-14900KF, ASUS PRIME
@@ -75,6 +75,11 @@ Fixtures and data:
   regenerated), `ELECWIRELIST <out.csv>` and the `ELECREPORT` XLSX wire sheet carry
   `From pin`/`To pin`, and `ELECHIGHLIGHT <tag>` / `ELECGOTO <tag>` live in a Navigation
   ribbon group.
+- **Cables drawn as schematic objects (round 10):** `ELECCABLEDRAW <tag> [CORES=]
+  [SHIELD=yes] [PART=] [DESC=]` chains a route onto the `CABLES` layer, writes the tag and
+  the shield bracket, and upserts the schedule record as each segment is drawn.
+  `ELECCABLELIST` measures the route (43.83 on the test cable) and resolves each end to a
+  device pin (`-K1:2 -> -K2:1`); `ELECREPORT` writes a fourth `Cables` sheet.
 - Local library + palette, local parts catalogue, `ELECASSIGN`, BOM/parts/wire/cable/
   terminal/I/O reports, Excel I/O import â†’ PLC modules with `ADDRnn` attributes, revision
   snapshots, built-project protection, `ELECHELP`, native Electrical ribbon (9 groups,
@@ -82,19 +87,20 @@ Fixtures and data:
 
 ## The next three things, in order
 
-1. **Draw a cable as a schematic object** â€” `cables.tsv` holds the schedule (tag, cores,
-   part, length, description); drawing the cable and storing its conductors would let the
-   schedule be derived from geometry instead of typed. Start from the `ELECPLACE`/insert
-   machinery; `ELECCABLELIST` already has the column set, and the pin-anchoring pass gives
-   the net each core lands on.
-2. **Panel layout with real footprints and cut-outs** â€” `ELECPANEL` still draws fixed
-   14Ã—10 boxes on a grid. Add `footprint` columns to `library/parts/parts.tsv`, place the
+1. **Panel layout with real footprints and cut-outs** — `ELECPANEL` still draws fixed
+   14×10 boxes on a grid. Add `footprint` columns to `library/parts/parts.tsv`, place the
    footprint blocks on DIN-rail rows, size the enclosure from the union of footprints, and
    register the panel drawing in the project.
-3. **Configuration management / design-by-systems** â€” extend `.eprj` with `variant <name>`
+2. **Configuration management / design-by-systems** — extend `.eprj` with `variant <name>`
    blocks (sheet list + excluded tags) and add `library/systems/` fragments with
    instantiate-and-retag, so a motor starter drawn once can be dropped into a new project.
    Then `ELECPROJNUM` should read each sheet's `WD_M` freeze (it respects `ELECBUILT` only).
+3. **Per-core cable nets and click-through cross-references** — a drawn cable is one bundle
+   today: its cores are not separate nets. Make each core an entity that can carry a wire
+   net, so a 3-core cable can land on three different pairs. In parallel, give
+   `ELECXREFWRITE` labels a payload (extension dictionary or side table mapping label →
+   handle) so `ELECHIGHLIGHT`/`ELECGOTO` can be bound to a double-click on the label and
+   the PDF can carry link annotations.
 
 Then: harness design stays deferred (needs lengths a 2D schematic does not carry), and the
 refreshed smoke suite should replace the seven pre-round-2 expectations.
@@ -105,6 +111,11 @@ refreshed smoke suite should replace the seven pre-round-2 expectations.
   a source file to 1.56 GB in an earlier session. The `edit` tool strips UTF-8 BOMs â€” re-add
   them with a tiny python script that writes bytes once.
 - The app writes relative output paths into its **working directory**; pass absolute paths.
+- `ELECPROJNEW <folder>` indexes the `.dxf` drawings already in that folder; it does not
+  create the folder or the drawing. Save the sheet first, then make the project.
+- `cables.tsv` has 8 columns now (`tag cores part manufacturer length description route
+  shield`); older 6-column files still parse. A drawn cable's route is the source of its
+  length and its From/To pins; the `CABLES` layer is not a wire layer.
 - `--each` does **not** save automatically; add `SAVE`/`QSAVE`.
 - Block contents are owned by the block **record**; `block_entity_handle` is the BLOCK marker.
 - Collectors must use `drawing_spaces()` (model + every `*Paper_Space*`), not model space alone.
