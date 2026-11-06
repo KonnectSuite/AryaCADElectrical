@@ -1,0 +1,421 @@
+//! Where the ribbon offers a command, so a command started from the command
+//! line, an alias, a shortcut or Repeat lights the same button a click on it
+//! would. Seeing which button runs a typed command is how its place in the
+//! ribbon is learned.
+
+use crate::modules::{IconKind, ModuleEvent, RibbonGroup, RibbonItem, ToolDef};
+
+use super::{draw_panel, extras, Ribbon};
+
+/// One button of a group: the id its highlight is keyed on, and the command
+/// line it dispatches (`None` for a button that raises a non-command event).
+type Entry<'a> = (&'static str, Option<&'a str>);
+
+fn tool_entry(t: &ToolDef) -> Entry<'_> {
+    match &t.event {
+        ModuleEvent::Command(cmd) => (t.id, Some(cmd.as_str())),
+        _ => (t.id, None),
+    }
+}
+
+/// The buttons one ribbon item shows: itself, the items of a dropdown, or the
+/// small tools under a combo. A dropdown item is keyed on the command it
+/// dispatches, which is what the dropdown's highlight looks for.
+fn item_entries(item: &RibbonItem) -> Vec<Entry<'_>> {
+    match item {
+        RibbonItem::Tool(t) | RibbonItem::LabeledTool(t) | RibbonItem::LargeTool(t) => {
+            vec![tool_entry(t)]
+        }
+        RibbonItem::PropertiesGroup { match_prop } => vec![tool_entry(match_prop)],
+        RibbonItem::Dropdown { items, .. }
+        | RibbonItem::LabeledDropdown { items, .. }
+        | RibbonItem::LargeDropdown { items, .. } => {
+            items.iter().map(|(cmd, _, _)| (*cmd, Some(*cmd))).collect()
+        }
+        RibbonItem::ToolGrid { columns } | RibbonItem::StyleComboGroup { rows: columns, .. } => {
+            columns.iter().flatten().map(tool_entry).collect()
+        }
+        RibbonItem::LayerComboGroup { row2, row3 } => {
+            row2.iter().chain(row3).map(tool_entry).collect()
+        }
+    }
+}
+
+/// Every button `group`, the panel `key`, offers: its items' buttons and the
+/// tools of its title slide-out, keyed like dropdown items on the command they
+/// dispatch.
+pub(super) fn group_entries<'g>(key: &str, group: &'g RibbonGroup) -> Vec<Entry<'g>> {
+    let mut out: Vec<_> = group.tools.iter().flat_map(item_entries).collect();
+    out.extend(draw_panel::slide_out_commands(key).map(|cmd| (cmd, Some(cmd))));
+    out
+}
+
+/// Whether `group`, the panel `key`, holds the button keyed `id`.
+pub(super) fn group_holds(key: &str, group: &RibbonGroup, id: &str) -> bool {
+    group_entries(key, group)
+        .iter()
+        .any(|(entry, _)| *entry == id)
+}
+
+/// The label and icon `item` shows for the command line or dropdown id
+/// `want` (ignoring case), if it offers it.
+fn item_face(item: &RibbonItem, want: &str) -> Option<(&'static str, IconKind)> {
+    let tool_face = |tool: &ToolDef| {
+        let runs = match &tool.event {
+            ModuleEvent::Command(cmd) => cmd.eq_ignore_ascii_case(want),
+            _ => false,
+        };
+        (runs || tool.id.eq_ignore_ascii_case(want)).then(|| (tool.label, tool.icon))
+    };
+    match item {
+        RibbonItem::Tool(t) | RibbonItem::LabeledTool(t) | RibbonItem::LargeTool(t) => tool_face(t),
+        RibbonItem::PropertiesGroup { match_prop } => tool_face(match_prop),
+        RibbonItem::ToolGrid { columns } | RibbonItem::StyleComboGroup { rows: columns, .. } => {
+            columns.iter().flatten().find_map(tool_face)
+        }
+        RibbonItem::LayerComboGroup { row2, row3 } => row2.iter().chain(row3).find_map(tool_face),
+        RibbonItem::Dropdown {
+            id,
+            icon,
+            items,
+            default,
+        } => {
+            if id.eq_ignore_ascii_case(want) {
+                let label = items
+                    .iter()
+                    .find(|(cmd, _, _)| cmd == default)
+                    .map_or(*id, |(_, label, _)| *label);
+                return Some((label, *icon));
+            }
+            dropdown_item_face(items, want)
+        }
+        RibbonItem::LabeledDropdown {
+            id,
+            label,
+            icon,
+            items,
+            ..
+        }
+        | RibbonItem::LargeDropdown {
+            id,
+            label,
+            icon,
+            items,
+            ..
+        } => {
+            if id.eq_ignore_ascii_case(want) {
+                return Some((label, *icon));
+            }
+            dropdown_item_face(items, want)
+        }
+    }
+}
+
+fn dropdown_item_face(
+    items: &[(&'static str, &'static str, IconKind)],
+    want: &str,
+) -> Option<(&'static str, IconKind)> {
+    items
+        .iter()
+        .find(|(cmd, _, _)| cmd.eq_ignore_ascii_case(want))
+        .map(|(_, label, icon)| (*label, *icon))
+}
+
+impl Ribbon {
+    /// The label and icon of the ribbon button that runs the command line
+    /// (or opens the dropdown) `want`, on any tab, shown or not: its own
+    /// tools, dropdown items and slide-out tools.
+    pub(super) fn ribbon_face(&self, want: &str) -> Option<(&'static str, IconKind)> {
+        let want = want.trim();
+        self.modules.iter().find_map(|module| {
+            module.ribbon_groups().iter().find_map(|group| {
+                group
+                    .tools
+                    .iter()
+                    .find_map(|item| item_face(item, want))
+                    .or_else(|| {
+                        let key = extras::panel_key(module.id(), group.title);
+                        extras::for_panel(&key)?.tools().find_map(|more| {
+                            if more.command().eq_ignore_ascii_case(want) {
+                                return Some((more.tool.label, more.tool.icon));
+                            }
+                            more.options
+                                .iter()
+                                .find(|(cmd, _)| cmd.eq_ignore_ascii_case(want))
+                                .map(|(_, label)| (*label, more.tool.icon))
+                        })
+                    })
+            })
+        })
+    }
+
+    /// The ribbon dropdown `id` (ignoring case), on any tab: its id, label,
+    /// items and default item.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn ribbon_dropdown(
+        &self,
+        id: &str,
+    ) -> Option<(
+        &'static str,
+        &'static str,
+        &[(&'static str, &'static str, IconKind)],
+        &'static str,
+    )> {
+        let id = id.trim();
+        self.modules.iter().find_map(|module| {
+            module
+                .ribbon_groups()
+                .iter()
+                .flat_map(|group| &group.tools)
+                .find_map(|item| match item {
+                    RibbonItem::Dropdown {
+                        id: dd,
+                        items,
+                        default,
+                        ..
+                    } if dd.eq_ignore_ascii_case(id) => {
+                        let label = items
+                            .iter()
+                            .find(|(cmd, _, _)| cmd == default)
+                            .map_or(*dd, |(_, label, _)| *label);
+                        Some((*dd, label, items.as_slice(), *default))
+                    }
+                    RibbonItem::LabeledDropdown {
+                        id: dd,
+                        label,
+                        items,
+                        default,
+                        ..
+                    }
+                    | RibbonItem::LargeDropdown {
+                        id: dd,
+                        label,
+                        items,
+                        default,
+                        ..
+                    } if dd.eq_ignore_ascii_case(id) => {
+                        Some((*dd, *label, items.as_slice(), *default))
+                    }
+                    _ => None,
+                })
+        })
+    }
+
+    /// Every button of every tab, with the index of the tab it is on. The
+    /// tab on show comes first, so a command offered on two tabs lights the
+    /// button the user can already see.
+    fn entries(&self) -> impl Iterator<Item = (usize, Entry<'_>)> {
+        let order = std::iter::once(self.active)
+            .chain((0..self.modules.len()).filter(move |i| *i != self.active));
+        order.flat_map(|i| {
+            let module_id = self.modules[i].id();
+            self.shown_groups(i)
+                .flat_map(move |group| {
+                    group_entries(&extras::panel_key(module_id, group.title), group)
+                })
+                .map(move |entry| (i, entry))
+        })
+    }
+
+    /// The button id that runs the command line `cmd`: an exact match first,
+    /// then a button that runs its bare verb (`OFFSET 5` → Offset).
+    pub(super) fn tool_for_command(&self, cmd: &str) -> Option<&'static str> {
+        let cmd = cmd.trim();
+        let verb = cmd.split_whitespace().next().unwrap_or(cmd);
+        [cmd, verb].into_iter().find_map(|want| {
+            self.entries()
+                .find(|(_, (_, runs))| runs.is_some_and(|runs| runs.eq_ignore_ascii_case(want)))
+                .map(|(_, (id, _))| id)
+        })
+    }
+
+    /// Light the ribbon button of the command line `cmd` that is starting,
+    /// however it was started. A button the user just clicked to run `cmd`
+    /// stays lit, so a command offered on two tabs keeps the clicked one; a
+    /// command with no button clears the previous command's highlight.
+    pub fn show_command(&mut self, cmd: &str) {
+        let clicked = self.active_tool.as_deref().is_some_and(|current| {
+            self.entries().any(|(_, (id, runs))| {
+                id == current && runs.is_some_and(|runs| runs.eq_ignore_ascii_case(cmd.trim()))
+            })
+        });
+        if !clicked {
+            self.active_tool = self.tool_for_command(cmd).map(str::to_string);
+        }
+    }
+
+    /// The tab holding the lit button, when it is not the tab on show: its
+    /// header lights instead, pointing at where the button lives. The Layout
+    /// module has no tab (its tools are on the side toolbar).
+    pub(super) fn tab_holding_active_tool(&self) -> Option<usize> {
+        let id = self.active_tool.as_deref()?;
+        let holds = |i: usize| {
+            let module_id = self.modules[i].id();
+            self.shown_groups(i)
+                .any(|group| group_holds(&extras::panel_key(module_id, group.title), group, id))
+        };
+        if self
+            .modules
+            .get(self.active)
+            .is_some_and(|_| holds(self.active))
+        {
+            return None;
+        }
+        (0..self.modules.len())
+            .find(|i| self.modules[*i].id() != "layout" && !self.tab_hidden(*i) && holds(*i))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modules::{CadModule, IconKind};
+
+    struct TestTab {
+        id: &'static str,
+        groups: Vec<RibbonGroup>,
+    }
+
+    impl CadModule for TestTab {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+        fn title(&self) -> &'static str {
+            self.id
+        }
+        fn ribbon_groups(&self) -> &[RibbonGroup] {
+            &self.groups
+        }
+    }
+
+    fn tool(id: &'static str, cmd: &str) -> ToolDef {
+        ToolDef {
+            id,
+            label: id,
+            icon: IconKind::Glyph("x"),
+            event: ModuleEvent::Command(cmd.to_string()),
+        }
+    }
+
+    /// Home: OFFSET (button id differs from its command), a CIRCLE dropdown,
+    /// LAYERS (a non-command event). View: ZOOM EXTENTS and a second OFFSET.
+    fn ribbon() -> Ribbon {
+        let mut layers = tool("LAYERS", "");
+        layers.event = ModuleEvent::ToggleLayers;
+        let home = TestTab {
+            id: "home",
+            groups: vec![RibbonGroup {
+                title: "Modify",
+                tools: vec![
+                    RibbonItem::LargeTool(tool("OFFSET_TOOL", "OFFSET")),
+                    RibbonItem::Dropdown {
+                        id: "circle_dd",
+                        icon: IconKind::Glyph("o"),
+                        items: vec![
+                            ("CIRCLE", "Center, Radius", IconKind::Glyph("o")),
+                            ("CIRCLE_2P", "2-Point", IconKind::Glyph("o")),
+                        ],
+                        default: "CIRCLE",
+                    },
+                    RibbonItem::Tool(layers),
+                ],
+            }],
+        };
+        let view = TestTab {
+            id: "view",
+            groups: vec![RibbonGroup {
+                title: "Navigate",
+                tools: vec![
+                    RibbonItem::Tool(tool("ZOOM_EXTENTS", "ZOOM EXTENTS")),
+                    RibbonItem::Tool(tool("OFFSET_VIEW", "OFFSET")),
+                ],
+            }],
+        };
+        let mut ribbon = Ribbon::default();
+        ribbon.set_modules(vec![Box::new(home), Box::new(view)]);
+        ribbon
+    }
+
+    #[test]
+    fn a_command_lights_the_button_that_runs_it_not_one_named_like_it() {
+        let mut r = ribbon();
+        r.show_command("OFFSET");
+        assert_eq!(r.active_tool.as_deref(), Some("OFFSET_TOOL"));
+        assert_eq!(r.tab_holding_active_tool(), None);
+    }
+
+    #[test]
+    fn a_dropdown_item_is_keyed_on_its_command_so_the_dropdown_lights() {
+        let mut r = ribbon();
+        r.show_command("circle_2p");
+        assert_eq!(r.active_tool.as_deref(), Some("CIRCLE_2P"));
+    }
+
+    #[test]
+    fn a_button_on_another_tab_lights_that_tab() {
+        let mut r = ribbon();
+        r.show_command("ZOOM EXTENTS");
+        assert_eq!(r.active_tool.as_deref(), Some("ZOOM_EXTENTS"));
+        assert_eq!(r.tab_holding_active_tool(), Some(1));
+        r.select(1);
+        assert_eq!(r.tab_holding_active_tool(), None);
+    }
+
+    #[test]
+    fn a_command_on_two_tabs_prefers_the_tab_on_show_then_the_clicked_one() {
+        let mut r = ribbon();
+        r.select(1);
+        r.show_command("OFFSET");
+        assert_eq!(r.active_tool.as_deref(), Some("OFFSET_VIEW"));
+        // A clicked button keeps its highlight when its command dispatches,
+        // even though another button for the same command comes first.
+        r.select(0);
+        r.activate_tool("OFFSET_VIEW");
+        r.show_command("OFFSET");
+        assert_eq!(r.active_tool.as_deref(), Some("OFFSET_VIEW"));
+    }
+
+    #[test]
+    fn arguments_fall_back_to_the_bare_verb() {
+        let mut r = ribbon();
+        r.show_command("OFFSET 5");
+        assert_eq!(r.active_tool.as_deref(), Some("OFFSET_TOOL"));
+    }
+
+    #[test]
+    fn a_command_without_a_button_clears_the_previous_highlight() {
+        let mut r = ribbon();
+        r.show_command("OFFSET");
+        r.show_command("DIST");
+        assert_eq!(r.active_tool, None);
+        assert_eq!(r.tab_holding_active_tool(), None);
+        // A non-command button has no command line to match.
+        r.show_command("LAYERS");
+        assert_eq!(r.active_tool, None);
+    }
+
+    #[test]
+    fn slide_out_tools_and_their_options_belong_to_their_group() {
+        // The Draw group's title slide-out holds SPLINE; the Modify one holds
+        // the draw-order submenu.
+        let draw = RibbonGroup {
+            title: "Draw",
+            tools: vec![],
+        };
+        assert!(group_holds("draw/Draw", &draw, "SPLINE"));
+        let modify = RibbonGroup {
+            title: "Modify",
+            tools: vec![],
+        };
+        assert!(group_holds("draw/Modify", &modify, "DRAWORDER_BACK"));
+    }
+
+    #[test]
+    fn the_shipped_ribbon_resolves_its_own_commands() {
+        let mut r = Ribbon::default();
+        for cmd in ["LINE", "OFFSET", "SPLINE", "ZOOM EXTENTS"] {
+            r.show_command(cmd);
+            assert!(r.active_tool.is_some(), "{cmd} has no ribbon button");
+        }
+    }
+}

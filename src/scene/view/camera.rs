@@ -1,0 +1,1363 @@
+// Arcball orbit camera — quaternion-based rotation, no gimbal lock.
+//
+// The camera orbits around a `target` point using a unit quaternion (`rotation`)
+// that maps the canonical "camera looks down -Z" pose to the current view.
+//
+// Pan:       translates `target` in the view-plane (no rotation change).
+// Orbit:     updates `rotation` via arcball delta — converts screen drag delta
+//            to a rotation axis/angle, then pre-multiplies the current quaternion.
+// Zoom:      adjusts `distance` (exponential feel).
+// Snap:      directly assigns yaw+pitch encoded as a quaternion (for ViewCube).
+//
+// Coordinate convention: Z-up world space (same as the rest of OpenCADStudio).
+
+use glam::camera::rh::proj::directx::{orthographic, perspective};
+use glam::camera::rh::view::look_at_mat4;
+use glam::{DVec3, Mat4, Quat, Vec3};
+use iced::{Point, Rectangle};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Projection {
+    Orthographic,
+    Perspective,
+}
+
+/// Pixels Zoom Extents, All and Object add to the limiting axis of the view
+/// (3 on each side), in the view's own pixels.
+pub const EXTENTS_BORDER_PX: f32 = 6.0;
+
+#[derive(Clone)]
+pub struct Camera {
+    /// World-space pivot point the camera orbits around. Kept in f64 so a far
+    /// pan (large offset-relative coordinate) doesn't lose precision in the
+    /// pivot itself — the eventual relative-to-eye render path needs an exact
+    /// eye, which derives from this target.
+    pub target: DVec3,
+    /// Arcball rotation: maps canonical pose to current orientation.
+    pub rotation: Quat,
+    /// Distance from eye to target.
+    pub distance: f32,
+    /// Vertical field of view in radians (perspective only).
+    pub fov_y: f32,
+    /// The camera lens length in millimetres (LENSLENGTH): the perspective
+    /// field of view across the view's diagonal is that of a 42 mm diagonal.
+    pub lens: f32,
+    pub projection: Projection,
+
+    // --- Legacy yaw/pitch exposed only for ViewCube hit-test compatibility ---
+    // Kept in sync with `rotation` whenever orbit() or snap_angles() is called.
+    pub yaw: f32,
+    pub pitch: f32,
+
+    /// Half-depth of the orthographic frustum in **world units**, sized from the
+    /// drawing's extent (set by `fit_to_bounds`). The ortho near/far are placed
+    /// at `distance ± depth_half_range`, so depth-buffer precision stays fixed
+    /// as the user zooms. `0.0` means "unset" — the projection falls back to a
+    /// distance-scaled range, whose precision collapses when zoomed out and
+    /// makes coincident solids / meshes / wires flip draw order.
+    ///
+    /// Only a fallback now: when `model_bounds` is set, the near/far depth is
+    /// derived from it per frame (see [`Camera::ortho_depth_range`]).
+    pub depth_half_range: f32,
+
+    /// Cached model AABB in world space, used to recompute the ortho near/far
+    /// depth for the CURRENT eye direction every frame. A frozen scalar range
+    /// (`depth_half_range`) is only correct for the orientation it was fitted
+    /// in: a 3-D drawing fitted straight-down (top view) has a shallow depth
+    /// span, but once orbited its width loads onto the eye axis and overruns
+    /// that span, clipping the drawing (#473). Re-projecting the box each frame
+    /// keeps near/far exactly as deep as the current view needs. `None` falls
+    /// back to `depth_half_range`.
+    pub model_bounds: Option<(DVec3, DVec3)>,
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        // Default: look straight down at the XY drawing plane (top view, Z-up).
+        // yaw = 0, pitch = PI/2  →  eye is directly above target.
+        let yaw = 0.0_f32;
+        let pitch = std::f32::consts::FRAC_PI_2;
+        Self {
+            target: DVec3::ZERO,
+            rotation: yaw_pitch_to_quat(yaw, pitch, 0.0),
+            distance: 60.36,
+            fov_y: 45.0_f32.to_radians(),
+            lens: 50.0,
+            projection: Projection::Orthographic,
+            yaw,
+            pitch,
+            depth_half_range: 0.0,
+            model_bounds: None,
+        }
+    }
+}
+
+impl Camera {
+    // ── Eye position ───────────────────────────────────────────────────────
+
+    /// Eye position in full f64 precision (world space). The whole pipeline is
+    /// relative-to-eye, so this is the canonical eye; direction-only callers
+    /// (view-matrix basis, ray casts) take `.as_vec3()`.
+    pub fn eye(&self) -> DVec3 {
+        let eye_dir = (self.rotation * Vec3::Z).as_dvec3();
+        self.target + eye_dir * self.distance as f64
+    }
+
+    /// Half-height of the orthographic frustum in world units.
+    pub fn ortho_size(&self) -> f32 {
+        self.distance * (self.fov_y * 0.5).tan()
+    }
+
+    /// The vertical field of view the lens gives a view of `aspect` (width
+    /// over height): the half-angle across the diagonal has the tangent
+    /// 21 / lens (a 42 mm diagonal), shared out by the view's proportions.
+    pub fn lens_fov_y(&self, aspect: f32) -> f32 {
+        let aspect = aspect.max(0.01);
+        let tan_diagonal = 21.0 / self.lens.max(1.0);
+        2.0 * (tan_diagonal / (1.0 + aspect * aspect).sqrt()).atan()
+    }
+
+    /// Change projection while keeping the fitted model's screen-space frame.
+    ///
+    /// `distance` is both the orthographic zoom scale and the perspective eye
+    /// distance. Reusing it unchanged only preserves scale on the target plane;
+    /// geometry closer to the eye can grow dramatically. Match the maximum
+    /// projected extent of the model box instead, leaving target, rotation and
+    /// field of view untouched.
+    pub fn set_projection_preserving_frame(&mut self, projection: Projection, aspect: f32) {
+        if self.projection == projection {
+            return;
+        }
+
+        let Some((min, max)) = self.model_bounds else {
+            self.projection = projection;
+            return;
+        };
+
+        let aspect = aspect.max(0.01);
+        let tan_half_fov = (self.fov_y * 0.5).tan();
+        if !tan_half_fov.is_finite() || tan_half_fov <= 1e-6 {
+            self.projection = projection;
+            return;
+        }
+
+        let corners = self.bounds_in_view(min, max);
+        let radius = |corner: &Vec3| corner.y.abs().max(corner.x.abs() / aspect);
+        let max_radius = corners.iter().map(radius).fold(0.0_f32, f32::max);
+        let min_z = corners
+            .iter()
+            .map(|corner| corner.z)
+            .fold(f32::INFINITY, f32::min);
+        let max_z = corners
+            .iter()
+            .map(|corner| corner.z)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let depth_margin = ((max_z - min_z).abs() * 0.001).max(0.001);
+        let near_safe = if max_z > 0.0 {
+            (max_z / (1.0 - 0.001)) * 1.001
+        } else {
+            0.001
+        };
+        let far_safe = if min_z < 0.0 {
+            (-min_z / (1000.0 - 1.0)) * 1.001
+        } else {
+            0.001
+        };
+        let depth_safe_distance = (max_z + depth_margin)
+            .max(near_safe)
+            .max(far_safe)
+            .max(0.001);
+        if !max_radius.is_finite() || max_radius <= 1e-6 {
+            if projection == Projection::Perspective && depth_safe_distance.is_finite() {
+                self.distance = self.distance.max(depth_safe_distance);
+            }
+            self.projection = projection;
+            return;
+        }
+
+        // Extent is the model box's largest absolute NDC X/Y displacement.
+        // When an existing perspective eye is already inside the box, its
+        // projected envelope is undefined; fall back to its target-plane scale
+        // so switching back to orthographic still recovers a usable view.
+        let old_extent = match self.projection {
+            Projection::Orthographic => max_radius / self.ortho_size().max(1e-6),
+            Projection::Perspective => {
+                let near = (self.distance * 0.001).max(1e-6);
+                let mut extent = 0.0_f32;
+                let mut all_in_front = true;
+                for corner in &corners {
+                    let depth = self.distance - corner.z;
+                    if depth <= near {
+                        all_in_front = false;
+                        break;
+                    }
+                    extent = extent.max(radius(corner) / (depth * tan_half_fov));
+                }
+                if all_in_front {
+                    extent
+                } else {
+                    max_radius / (self.distance.max(0.001) * tan_half_fov)
+                }
+            }
+        };
+
+        if !old_extent.is_finite() || old_extent <= 1e-6 {
+            if projection == Projection::Perspective && depth_safe_distance.is_finite() {
+                self.distance = self.distance.max(depth_safe_distance);
+            }
+            self.projection = projection;
+            return;
+        }
+
+        match projection {
+            Projection::Orthographic => {
+                let distance = max_radius / (old_extent * tan_half_fov);
+                if distance.is_finite() {
+                    self.distance = distance.max(0.001);
+                }
+            }
+            Projection::Perspective => {
+                // The perspective view sees what the camera lens sees.
+                self.fov_y = self.lens_fov_y(aspect);
+                // For every corner, radius / ((distance - z) * tan(fov/2))
+                // must be no larger than the old screen extent. The maximum
+                // required distance gives the tightest perspective frame with
+                // at least one corner touching the old envelope.
+                let extent_at_depth = old_extent * (self.fov_y * 0.5).tan();
+                let mut distance = f32::NEG_INFINITY;
+                for corner in &corners {
+                    distance = distance.max(corner.z + radius(corner) / extent_at_depth);
+                }
+
+                // Keep the complete box ahead of the perspective near plane,
+                // and its far plane, including corners whose X/Y radius does
+                // not constrain framing.
+                distance = distance.max(depth_safe_distance);
+                if distance.is_finite() {
+                    self.distance = distance.max(0.001);
+                }
+            }
+        }
+
+        self.projection = projection;
+    }
+
+    // ── Projection matrices ────────────────────────────────────────────────
+
+    /// Orthographic near/far that CENTRE the target plane at ndc-z ≈ 0.5.
+    ///
+    /// A symmetric range gives draw-order offsets headroom on each side and
+    /// keeps the target away from both clipping planes. The shared shader
+    /// bounds those offsets near either plane; ortho permits a negative near.
+    fn ortho_depth_range(&self) -> (f32, f32) {
+        // Generous headroom based on the current screen size so that rotating any
+        // geometry visible on screen in 3D never penetrates the near/far planes.
+        let view_extent = (self.ortho_size() * 3.0).max(10.0);
+
+        let r = if let Some((min, max)) = self.model_bounds {
+            self.depth_extent_in_view(min, max).max(view_extent)
+        } else if self.depth_half_range > 0.0 {
+            self.depth_half_range.max(view_extent)
+        } else {
+            (self.distance * 1000.0).max(view_extent).max(10.0)
+        };
+        (self.distance - r, self.distance + r)
+    }
+
+    /// Relative-to-eye view-projection: identical projection, but the view
+    /// matrix carries rotation only (translation zeroed). Positions fed to it
+    /// must already be expressed relative to the eye (done per-vertex with
+    /// double-single precision in the shader), so the large eye translation
+    /// never enters the f32 matrix and large-coordinate jitter disappears.
+    pub fn view_proj_rte(&self, bounds: Rectangle) -> Mat4 {
+        let aspect = bounds.width / bounds.height;
+        let up_dir = self.rotation * Vec3::Y;
+
+        // The basis, from the rotation alone. Zeroing the translation column
+        // afterwards is not enough: `look_at` builds the basis out of
+        // `target - eye`, and handing it two absolute positions cast to f32
+        // rounds both to the f32 grid first. At UTM that grid is half a metre
+        // across, so the difference — and with it the whole view basis —
+        // jitters as the camera moves, which is the shimmer a survey-placed
+        // drawing showed.
+        //
+        // It never needed them. `eye` is `target + rotation·Z·distance`, so
+        // the direction between the two is the rotation's own Z, a unit
+        // vector that carries no coordinate at all.
+        let mut view = look_at_mat4(Vec3::ZERO, -(self.rotation * Vec3::Z), up_dir);
+        // Already zero, since the eye is the origin here; kept so the invariant
+        // survives someone reworking the line above.
+        view.w_axis = glam::vec4(0.0, 0.0, 0.0, 1.0);
+
+        let proj = match self.projection {
+            Projection::Perspective => perspective(
+                self.fov_y,
+                aspect,
+                self.distance * 0.001,
+                self.distance * 1000.0,
+            ),
+            Projection::Orthographic => {
+                let h = self.ortho_size();
+                let w = h * aspect;
+                let (near, far) = self.ortho_depth_range();
+                orthographic(-w, w, -h, h, near, far)
+            }
+        };
+        // The DirectX projection functions already produce WebGPU's [0, 1]
+        // depth range. An OpenGL remap here would compress it to [0.5, 1].
+        proj * view
+    }
+
+    /// Project a world point to screen pixels with full f64 precision: the
+    /// point is made eye-relative in f64 (small numbers near the view) before
+    /// the rotation-only projection, so it stays exact at large absolute
+    /// coordinates — the CPU equivalent of the GPU's relative-to-eye path.
+    /// Returns `None` for points at/behind the perspective eye plane.
+    pub fn project(&self, p: glam::DVec3, bounds: Rectangle) -> Option<glam::Vec2> {
+        self.projector(bounds)(p)
+    }
+
+    /// [`Self::project`] with the view matrix built once, for projecting
+    /// many points under one view.
+    pub fn projector(
+        &self,
+        bounds: Rectangle,
+    ) -> impl Fn(glam::DVec3) -> Option<glam::Vec2> + Copy {
+        let view_rot = self.view_proj_rte(bounds);
+        let eye = self.eye();
+        move |p| {
+            let screen =
+                crate::scene::view::projection::project_screen(view_rot, eye, bounds, p)?;
+            Some(glam::vec2(screen.x, screen.y))
+        }
+    }
+
+    /// Unproject in f64, with the kernel intersection relative to the plane
+    /// origin so rendering precision never becomes a geometry elevation.
+    pub fn unproject_on_plane(
+        &self,
+        screen: Point,
+        bounds: Rectangle,
+        plane_normal: Vec3,
+        plane_point: glam::DVec3,
+    ) -> glam::DVec3 {
+        let eye = self.eye();
+        let ndc_x = (screen.x as f64 / bounds.width as f64) * 2.0 - 1.0;
+        let ndc_y = 1.0 - (screen.y as f64 / bounds.height as f64) * 2.0;
+        let inv = self.view_proj_rte(bounds).as_dmat4().inverse();
+        // Ray origin / direction in eye-relative space.
+        let (ray_origin, ray_dir) = match self.projection {
+            Projection::Perspective => {
+                let near_pt = inv.project_point3(DVec3::new(ndc_x, ndc_y, 0.0));
+                let far_pt = inv.project_point3(DVec3::new(ndc_x, ndc_y, 1.0));
+                (near_pt, (far_pt - near_pt).normalize())
+            }
+            Projection::Orthographic => {
+                let origin = inv.project_point3(DVec3::new(ndc_x, ndc_y, 0.0));
+                let forward = (self.rotation * Vec3::NEG_Z).as_dvec3();
+                (origin, forward)
+            }
+        };
+        kernel::space::plane::intersect_line_plane(
+            (ray_origin - (plane_point - eye)).to_array(),
+            ray_dir.to_array(),
+            [0.0; 3],
+            plane_normal.as_dvec3().to_array(),
+            1e-6,
+        )
+        .map(|point| plane_point + DVec3::from_array(point))
+        .unwrap_or(plane_point)
+    }
+
+    /// Eye position split into two f32 (high + low) emulating f64, for the
+    /// double-single relative-to-eye shaders. `high + low ≈ eye` to ~f64
+    /// precision; the shader subtracts these from each vertex's own high/low.
+    pub fn eye_high_low(&self) -> ([f32; 3], [f32; 3]) {
+        let e = self.eye();
+        let high = [e.x as f32, e.y as f32, e.z as f32];
+        let low = [
+            (e.x - high[0] as f64) as f32,
+            (e.y - high[1] as f64) as f32,
+            (e.z - high[2] as f64) as f32,
+        ];
+        (high, low)
+    }
+
+    /// Project a screen point onto an arbitrary world-space plane.
+    ///
+    /// The plane is defined by `plane_normal` (unit vector) and a `plane_point`
+    /// that lies on it. Returns the ray–plane intersection (falling back to
+    /// `plane_point` when nearly parallel), eye-relative in f64 so the cursor
+    /// stays precise at UTM-scale coordinates.
+    pub fn pick_on_plane(
+        &self,
+        screen: Point,
+        bounds: Rectangle,
+        plane_normal: Vec3,
+        plane_point: glam::DVec3,
+    ) -> glam::DVec3 {
+        self.unproject_on_plane(screen, bounds, plane_normal, plane_point)
+    }
+
+    /// Project a screen point onto the plane through the orbit target.
+    pub fn pick_on_target_plane(&self, screen: Point, bounds: Rectangle) -> glam::DVec3 {
+        let forward = self.rotation * Vec3::NEG_Z;
+        self.unproject_on_plane(screen, bounds, forward, self.target)
+    }
+
+    // ── ViewCube rotation matrix ───────────────────────────────────────────
+
+    /// Returns the rotation matrix for the ViewCube.
+    ///
+    /// The camera quaternion maps canonical pose (+Z eye) → current view.
+    /// The ViewCube needs the inverse so the cube stays world-aligned.
+    /// Inverse of a unit quaternion = its conjugate.
+    pub fn view_rotation_mat(&self) -> Mat4 {
+        Mat4::from_quat(self.rotation.conjugate())
+    }
+
+    /// Carry the camera through a rigid model-space transform. BEDIT uses this
+    /// when a transient UCS is baked into block-local geometry: the contents
+    /// retain their on-screen framing while their canonical coordinates change.
+    pub fn apply_rigid_transform(&mut self, transform: &codec::types::Transform) {
+        let point = codec::types::Vector3::new(self.target.x, self.target.y, self.target.z);
+        let point = transform.apply(point);
+        self.target = DVec3::new(point.x, point.y, point.z);
+
+        let matrix = &transform.matrix.m;
+        let rotation = glam::Mat3::from_cols(
+            Vec3::new(
+                matrix[0][0] as f32,
+                matrix[1][0] as f32,
+                matrix[2][0] as f32,
+            ),
+            Vec3::new(
+                matrix[0][1] as f32,
+                matrix[1][1] as f32,
+                matrix[2][1] as f32,
+            ),
+            Vec3::new(
+                matrix[0][2] as f32,
+                matrix[1][2] as f32,
+                matrix[2][2] as f32,
+            ),
+        );
+        self.rotation = (Quat::from_mat3(&rotation) * self.rotation).normalize();
+        self.sync_yaw_pitch();
+
+        if let Some((min, max)) = self.model_bounds {
+            let corners = [
+                DVec3::new(min.x, min.y, min.z),
+                DVec3::new(max.x, min.y, min.z),
+                DVec3::new(min.x, max.y, min.z),
+                DVec3::new(max.x, max.y, min.z),
+                DVec3::new(min.x, min.y, max.z),
+                DVec3::new(max.x, min.y, max.z),
+                DVec3::new(min.x, max.y, max.z),
+                DVec3::new(max.x, max.y, max.z),
+            ];
+            let mut new_min = DVec3::splat(f64::INFINITY);
+            let mut new_max = DVec3::splat(f64::NEG_INFINITY);
+            for corner in corners {
+                let transformed =
+                    transform.apply(codec::types::Vector3::new(corner.x, corner.y, corner.z));
+                let transformed = DVec3::new(transformed.x, transformed.y, transformed.z);
+                new_min = new_min.min(transformed);
+                new_max = new_max.max(transformed);
+            }
+            self.model_bounds = Some((new_min, new_max));
+        }
+    }
+
+    /// The camera's rotation about its view axis.
+    pub fn roll(&self) -> f32 {
+        let q_yp = yaw_pitch_to_quat(self.yaw, self.pitch, 0.0);
+        let q_roll = q_yp.conjugate() * self.rotation;
+        // q_roll is (nominally) a rotation about Z; extract its angle.
+        2.0 * q_roll.z.atan2(q_roll.w)
+    }
+
+    // ── Navigation ────────────────────────────────────────────────────────
+
+    /// Arcball orbit: drag delta (dx, dy) in screen pixels.
+    /// Orbit the view by a screen drag, turntable-style: horizontal drag yaws
+    /// about world +Z, vertical drag pitches about the camera's (always
+    /// horizontal) right axis — so the horizon never banks. `pivot` is the world
+    /// point to revolve around (selection or model centre); `None` keeps the
+    /// current target as the centre. (#229)
+    pub fn orbit(&mut self, delta_x: f32, delta_y: f32, pivot: Option<DVec3>) {
+        if delta_x.abs() < 1e-6 && delta_y.abs() < 1e-6 {
+            return;
+        }
+        if !(delta_x.is_finite() && delta_y.is_finite()) {
+            return;
+        }
+        let old_rot = self.rotation;
+        let speed = 0.005_f32;
+
+        let yaw = Quat::from_rotation_z(-delta_x * speed);
+        self.rotation = (yaw * self.rotation).normalize();
+        let cam_right = self.rotation * Vec3::X;
+        self.rotation =
+            (Quat::from_axis_angle(cam_right, -delta_y * speed) * self.rotation).normalize();
+
+        // Revolve the target around the pivot by the same rotation delta so the
+        // view orbits the chosen centre instead of the fixed file centre (#229).
+        // Do it in f64: casting `self.target - p` to f32 first quantizes the
+        // offset to the drawing's extent scale (a large model at ANY origin, not
+        // just UTM), so every orbit step nudged the whole view by a visible
+        // fraction of a unit — the "jump" when starting a rotate on big files.
+        if let Some(p) = pivot {
+            let delta = self.rotation * old_rot.conjugate();
+            let delta = glam::DQuat::from_xyzw(
+                delta.x as f64,
+                delta.y as f64,
+                delta.z as f64,
+                delta.w as f64,
+            );
+            self.target = p + delta * (self.target - p);
+        }
+
+        // Sync legacy yaw/pitch for hit-test functions.
+        self.sync_yaw_pitch();
+    }
+
+    /// The ratio one zoom step applies to `distance`. A wheel notch is one
+    /// step at the default `ZOOMFACTOR` of 60, so the default notch still
+    /// moves the view a tenth closer, exactly as it always has.
+    pub const ZOOM_STEP: f32 = 0.9;
+
+    /// How near and how far `zoom` may take the eye. The floor has always
+    /// been here; the ceiling matters because the perspective far plane is
+    /// `distance * 1000` ([`Camera::view_proj_rte`]), so a distance past
+    /// ~3.4e35 renders an infinite matrix and the viewport goes black.
+    /// Zooming out multiplies, so with a fast wheel that ceiling is only a
+    /// couple of seconds of scrolling away.
+    const DISTANCE_MIN: f32 = 0.001;
+    const DISTANCE_MAX: f32 = 1e15;
+
+    /// Zoom by `delta` steps: a notch of the wheel, a pinch, a drag of ZOOM
+    /// Dynamic. Positive moves the eye in.
+    ///
+    /// Each step multiplies `distance` by [`Camera::ZOOM_STEP`], which is
+    /// strictly positive for every real `delta` and exactly reciprocal
+    /// between in and out — a notch in and a notch out land back where they
+    /// started, where the subtraction this replaced (`1 - delta * 0.1`) lost
+    /// a percent of the view each round trip. That subtraction agreed with
+    /// this only at one notch of the default `ZOOMFACTOR`: it reached zero at
+    /// `delta` 10 and went negative past it, inverting the view through its
+    /// target — reachable from a high `ZOOMFACTOR` and from a fast ZOOM
+    /// Dynamic drag alike.
+    pub fn zoom(&mut self, delta: f32) {
+        let distance = (self.distance * Self::ZOOM_STEP.powf(delta))
+            .clamp(Self::DISTANCE_MIN, Self::DISTANCE_MAX);
+        // `clamp` passes NaN through; keep the last usable zoom instead.
+        if distance.is_finite() {
+            self.distance = distance;
+        }
+    }
+
+    /// The `delta` `zoom` needs in order to scale `distance` by `ratio`:
+    /// `zoom(zoom_steps_for_ratio(r))` multiplies the distance by exactly
+    /// `r`.
+    ///
+    /// A caller that owes the user a particular ratio — a trackpad pinch
+    /// tracks the fingers 1:1 — asks for its step here rather than inverting
+    /// the zoom law on its own, so the two cannot drift apart. A ratio that
+    /// is not a positive, finite number means nothing to invert, and stands
+    /// for no zoom at all.
+    pub fn zoom_steps_for_ratio(ratio: f32) -> f32 {
+        if !(ratio.is_finite() && ratio > 0.0) {
+            return 0.0;
+        }
+        ratio.ln() / Self::ZOOM_STEP.ln()
+    }
+
+    /// World-space offset from `target` to the point under `screen` on the
+    /// target plane. Computed in the camera frame (small numbers) and rotated
+    /// to world — it never touches the large absolute target, so it stays
+    /// precise at UTM-scale coordinates. For perspective this is the offset
+    /// evaluated at the target plane (the correct pivot for zoom-to-cursor).
+    fn cursor_offset_on_target_plane(&self, screen: Point, bounds: Rectangle) -> Vec3 {
+        let ndc_x = (screen.x / bounds.width) * 2.0 - 1.0;
+        let ndc_y = 1.0 - (screen.y / bounds.height) * 2.0;
+        let aspect = bounds.width / bounds.height;
+        let half_h = self.ortho_size();
+        let half_w = half_h * aspect;
+        let cam_right = self.rotation * Vec3::X;
+        let cam_up = self.rotation * Vec3::Y;
+        cam_right * (ndc_x * half_w) + cam_up * (ndc_y * half_h)
+    }
+
+    pub fn zoom_about_point(&mut self, screen: Point, bounds: Rectangle, delta: f32) {
+        if bounds.width <= 0.0 || bounds.height <= 0.0 {
+            self.zoom(delta);
+            return;
+        }
+
+        // Keep the point under the cursor fixed by working with its offset
+        // *relative to target* before and after the zoom. Both offsets are
+        // small (camera-frame) numbers, so their difference is exact even at
+        // UTM coordinates — the old absolute view_proj.inverse() picks each
+        // carried ~0.5 m of f32 error that didn't cancel, making the whole
+        // scene jump on every zoom step.
+        let before = self.cursor_offset_on_target_plane(screen, bounds);
+        self.zoom(delta);
+        let after = self.cursor_offset_on_target_plane(screen, bounds);
+        self.target += (before - after).as_dvec3();
+    }
+
+    /// Pan so the world point under the cursor tracks it: screen pixels are
+    /// converted to world units via the ortho world-per-pixel scale of a
+    /// viewport `viewport_height` pixels tall. Used by tiled panes where the
+    /// pane height differs from the full canvas.
+    pub fn pan_screen(&mut self, delta_x: f32, delta_y: f32, viewport_height: f32) {
+        let wpp = if viewport_height > 0.0 {
+            (2.0 * self.ortho_size()) / viewport_height
+        } else {
+            0.0
+        };
+        let cam_right = self.rotation * Vec3::X;
+        let cam_up = self.rotation * Vec3::Y;
+        let step = (cam_up * delta_y * wpp - cam_right * delta_x * wpp).as_dvec3();
+        // A non-finite step would park the view nowhere for good.
+        if step.is_finite() {
+            self.target += step;
+        }
+    }
+
+    /// The 8 corners of `min..max`, expressed in camera space relative to the
+    /// current target: `x`/`y` span the screen plane, `z` runs along the eye
+    /// direction. The offset is taken in f64 before the cast, so a corner at
+    /// UTM scale doesn't lose the difference to cancellation.
+    fn bounds_in_view(&self, min: DVec3, max: DVec3) -> [Vec3; 8] {
+        let inv = self.rotation.inverse();
+        let mut out = [Vec3::ZERO; 8];
+        for (i, slot) in out.iter_mut().enumerate() {
+            let corner = DVec3::new(
+                if i & 1 == 0 { min.x } else { max.x },
+                if i & 2 == 0 { min.y } else { max.y },
+                if i & 4 == 0 { min.z } else { max.z },
+            );
+            *slot = inv * (corner - self.target).as_vec3();
+        }
+        out
+    }
+
+    /// Half-extent of `min..max` along the current eye direction (with the
+    /// same 5% margin `ortho_depth_range` needs), measured from the target.
+    /// This is exactly what `distance ± r` has to contain to avoid clipping.
+    fn depth_extent_in_view(&self, min: DVec3, max: DVec3) -> f32 {
+        let depth_r = self
+            .bounds_in_view(min, max)
+            .iter()
+            .fold(0.0_f32, |m, c| m.max(c.z.abs()));
+        let diag = (max - min).length() as f32;
+        // Generous headroom (1.5x depth extent + 25% of model diagonal + minimum clearance)
+        // so wide strokes, lineweights, camera orbit dynamics, and draw-order depth bias
+        // never penetrate the near clipping plane in orthographic 3D view.
+        (depth_r * 1.5 + diag * 0.25).max(10.0)
+    }
+
+    /// Fit the camera to `min..max` — pose and depth both.
+    ///
+    /// Zoom and clipping are sized from DIFFERENT axes on purpose. The zoom must
+    /// frame what the view actually shows (the extent across the screen plane),
+    /// while near/far must span what lies along the eye direction. Sizing both
+    /// from the 3-D diagonal — as this did — makes one far-off Z drag the
+    /// horizontal zoom out with it: a 140-unit drawing carrying a single entity
+    /// 800 km below its plane zoomed out to 800 km and became a dot. The two
+    /// agree on a flat drawing, which is why it went unnoticed.
+    pub fn fit_to_bounds(&mut self, min: Vec3, max: Vec3, aspect: f32) {
+        self.fit_to_bounds_f64(min.as_dvec3(), max.as_dvec3(), aspect);
+    }
+
+    /// Edge to edge, as Zoom Window frames its box.
+    pub fn fit_to_bounds_f64(&mut self, min: DVec3, max: DVec3, aspect: f32) {
+        self.fit_to_bounds_bordered(min, max, aspect, None);
+    }
+
+    /// f32 form of [`Self::fit_to_bounds_bordered`].
+    pub fn fit_to_bounds_bordered_f32(
+        &mut self,
+        min: Vec3,
+        max: Vec3,
+        aspect: f32,
+        pixels: Option<(f32, f32)>,
+    ) {
+        self.fit_to_bounds_bordered(min.as_dvec3(), max.as_dvec3(), aspect, pixels);
+    }
+
+    /// Fit with the border Zoom Extents, All and Object leave: the box grows
+    /// on each axis by [`EXTENTS_BORDER_PX`] over that axis' pixel length, so
+    /// the limiting axis keeps 3 px on each side. `pixels` is the view's size
+    /// in pixels; `None` fits edge to edge.
+    pub fn fit_to_bounds_bordered(
+        &mut self,
+        min: DVec3,
+        max: DVec3,
+        aspect: f32,
+        pixels: Option<(f32, f32)>,
+    ) {
+        if !(min.is_finite() && max.is_finite()) {
+            return;
+        }
+        let grow = |px: f32| {
+            if px.is_finite() && px > 0.0 {
+                1.0 + EXTENTS_BORDER_PX / px
+            } else {
+                1.0
+            }
+        };
+        if self.projection == Projection::Perspective {
+            self.fit_perspective(min, max, aspect);
+            return;
+        }
+        let (grow_x, grow_y) = pixels.map_or((1.0, 1.0), |(w, h)| (grow(w), grow(h)));
+        self.target = (min + max) * 0.5;
+        let corners = self.bounds_in_view(min, max);
+        // Half-height the view needs so the box fits BOTH axes at the given
+        // viewport aspect. The old circumscribed-radius rule fitted the box's
+        // DIAGONAL into the height regardless of shape, which left a wide
+        // drawing filling only a small central patch of the window (#364).
+        let a = aspect.max(0.01);
+        let half_h = corners
+            .iter()
+            .fold(0.0_f32, |m, c| {
+                m.max(c.y.abs() * grow_y).max(c.x.abs() * grow_x / a)
+            })
+            .max(1e-6);
+        // `ortho_size` (the half-height) is `distance * tan(fov/2)`, so invert
+        // that to get the distance which just contains `half_h`.
+        self.distance = (half_h / (self.fov_y * 0.5).tan()).max(1e-3);
+        self.fit_depth_to_bounds_f64(min, max);
+    }
+
+    /// Perspective Zoom Extents: the eye that frames the box's corners as
+    /// the reference does. On each screen axis the eye sits sideways where
+    /// the two outermost corners subtend equal angles and as far back as
+    /// they need to touch the view's edges; the axis that needs more depth
+    /// sets it, edge to edge with no border. The target is the point of the
+    /// line of sight nearest the box centre.
+    fn fit_perspective(&mut self, min: DVec3, max: DVec3, aspect: f32) {
+        self.fov_y = self.lens_fov_y(aspect);
+        let tan_v = (self.fov_y as f64 * 0.5).tan();
+        let tan_h = tan_v * aspect.max(0.01) as f64;
+        let centre = (min + max) * 0.5;
+        let right = (self.rotation * Vec3::X).as_dvec3();
+        let up = (self.rotation * Vec3::Y).as_dvec3();
+        let back = (self.rotation * Vec3::Z).as_dvec3();
+        let corners: Vec<DVec3> = (0..8)
+            .map(|i| {
+                DVec3::new(
+                    if i & 1 == 0 { min.x } else { max.x },
+                    if i & 2 == 0 { min.y } else { max.y },
+                    if i & 4 == 0 { min.z } else { max.z },
+                ) - centre
+            })
+            .collect();
+        // Sideways position and depth (along `back`) of the eye on one axis.
+        let axis = |dir: DVec3, tan: f64| {
+            let reach = |sign: f64| {
+                corners
+                    .iter()
+                    .map(|c| tan * c.dot(back) + sign * c.dot(dir))
+                    .fold(f64::NEG_INFINITY, f64::max)
+            };
+            let (p, q) = (reach(1.0), reach(-1.0));
+            ((p - q) * 0.5, (p + q) / (2.0 * tan))
+        };
+        let (side_x, depth_x) = axis(right, tan_h);
+        let (side_y, depth_y) = axis(up, tan_v);
+        let depth = depth_x.max(depth_y);
+        if !depth.is_finite() || depth <= 0.0 {
+            return;
+        }
+        self.target = centre + right * side_x + up * side_y;
+        self.distance = (depth as f32).max(1e-3);
+        self.fit_depth_to_bounds_f64(min, max);
+    }
+
+    /// Size only the near/far span to `min..max`, leaving the pose alone.
+    ///
+    /// Split out of [`fit_to_bounds`] for the camera restored from a file's
+    /// saved view: that pose must not move, but its depth range still has to
+    /// cover the model or geometry outside it is silently clipped away.
+    pub fn fit_depth_to_bounds_f64(&mut self, min: DVec3, max: DVec3) {
+        // Cache the box so `ortho_depth_range` re-derives the near/far depth for
+        // the live eye direction every frame — orbiting off the fitted pose then
+        // never clips the drawing (#473). Keeping it tied to the model (not to
+        // `distance`) also holds depth-buffer precision constant across zoom, so
+        // coincident solids / meshes / wires never flip draw order.
+        self.model_bounds = Some((min, max));
+        // Also seed the scalar fallback for the fitted orientation, in case a
+        // later reader consults it before the next projection.
+        self.depth_half_range = self.depth_extent_in_view(min, max);
+    }
+
+    /// Drop a fitted depth range after the drawing changes. Keeping either the
+    /// old box or its scalar fallback can clip newly-created geometry until the
+    /// next Zoom Extents. The unset projection uses its conservative fallback
+    /// until the scene refreshes the current model bounds.
+    pub(crate) fn invalidate_model_bounds(&mut self) {
+        self.model_bounds = None;
+        self.depth_half_range = 0.0;
+    }
+
+    pub(crate) fn fitted_model_bounds(&self) -> Option<(DVec3, DVec3)> {
+        self.model_bounds
+    }
+
+    // ── ViewCube snap ─────────────────────────────────────────────────────
+
+    /// Snap to a canonical view direction (called by ViewCubeSnap).
+    /// `eye_dir` is the unit vector from the target toward the camera.
+    ///
+    /// Deterministic horizon: when looking close to ±Z (top/bottom) the
+    /// up is north (+Y), otherwise world up (+Z), projected onto the
+    /// plane ⊥ `new_eye`. This matches the turntable `orbit` (which never
+    /// banks) so a cube corner always lands with the same roll and the
+    /// base never appears rotated. The sign is flipped only if the
+    /// current view is intentionally upside-down, preserving that sense.
+    pub fn snap_to_direction(&mut self, eye_dir: Vec3, ucs: glam::Mat4) {
+        let new_eye = eye_dir.normalize_or(Vec3::Z);
+        let uy = ucs.transform_vector3(Vec3::Y).normalize_or(Vec3::Y);
+        let uz = ucs.transform_vector3(Vec3::Z).normalize_or(Vec3::Z);
+        // Deterministic horizon: top/bottom views (eye ≈ ±Z) use north (+Y)
+        // as up; every other direction uses world up (+Z). This keeps the
+        // cube's "Top Front Right" etc. repeatable and aligned with the
+        // turntable orbit (which never banks), and avoids the previous
+        // adaptive choice that picked the nearest cardinal to the current
+        // up — from a top view that was +Y, so an oblique top corner kept
+        // Y as up and tilted the base (roll) instead of keeping the horizon
+        // level. Preserve the sign only to keep an intentionally inverted
+        // (upside-down) view inverted.
+        let cur_up = self.rotation * Vec3::Y;
+        let raw_ref = if new_eye.dot(uz).abs() > 0.9 { uy } else { uz };
+        let up_ref = if cur_up.dot(raw_ref) < 0.0 {
+            -raw_ref
+        } else {
+            raw_ref
+        };
+        let projected = up_ref - new_eye * up_ref.dot(new_eye);
+        let new_up = projected.normalize_or(if new_eye.dot(uz).abs() < 0.99 {
+            (uz - new_eye * uz.dot(new_eye)).normalize()
+        } else {
+            (uy - new_eye * uy.dot(new_eye)).normalize()
+        });
+        let new_right = new_up.cross(new_eye).normalize();
+        // Camera rotation columns: [cam_x | cam_y | cam_z] where
+        // cam_z = eye_dir (canonical "+Z is toward eye"), cam_y = up.
+        let mat = glam::Mat3::from_cols(new_right, new_up, new_eye);
+        self.rotation = Quat::from_mat3(&mat).normalize();
+        self.sync_yaw_pitch();
+    }
+
+    /// Snap to a canonical face view: looks along `eye_dir` with a fixed
+    /// upright orientation — north (UCS +Y) up for top/bottom, world (UCS +Z)
+    /// up for the side elevations. Unlike [`snap_to_direction`] this ignores
+    /// the current up-sense, so a face click always lands square and never
+    /// upside-down, even when the drawing opened with a twisted view.
+    pub fn snap_to_face(&mut self, eye_dir: Vec3, ucs: glam::Mat4) {
+        let new_eye = eye_dir.normalize_or(Vec3::Z);
+        let uy = ucs.transform_vector3(Vec3::Y).normalize_or(Vec3::Y);
+        let uz = ucs.transform_vector3(Vec3::Z).normalize_or(Vec3::Z);
+        // Looking along the UCS Z axis (top/bottom) has no "world up" to use,
+        // so fall back to north (+Y); every side view uses world up.
+        let up_ref = if new_eye.dot(uz).abs() > 0.9 { uy } else { uz };
+        let projected = up_ref - new_eye * up_ref.dot(new_eye);
+        let new_up = projected.normalize_or(uy);
+        let new_right = new_up.cross(new_eye).normalize();
+        let mat = glam::Mat3::from_cols(new_right, new_up, new_eye);
+        self.rotation = Quat::from_mat3(&mat).normalize();
+        self.sync_yaw_pitch();
+    }
+
+    /// Jump to the default "home" view — a canonical top-down view (north up),
+    /// expressed in the active UCS. Doubles as a "reset" for a twisted view.
+    pub fn home_view(&mut self, ucs: glam::Mat4) {
+        let dir = ucs.transform_vector3(Vec3::Z);
+        self.snap_to_face(dir, ucs);
+    }
+
+    /// Free (arcball) rotation by a screen drag about the view target: the
+    /// model follows the pointer, about an axis in the screen plane, with no
+    /// fixed up direction.
+    pub fn trackball(&mut self, delta_x: f32, delta_y: f32) {
+        let length = delta_x.hypot(delta_y);
+        if !(length > 1e-6) || !length.is_finite() {
+            return;
+        }
+        let axis = Vec3::new(-delta_y, -delta_x, 0.0) / length;
+        self.rotation =
+            (self.rotation * Quat::from_axis_angle(axis, length * 0.005)).normalize();
+        self.sync_yaw_pitch();
+    }
+
+    /// Roll the camera about its own view axis by `angle` radians. The gaze
+    /// direction is unchanged; only the up-sense twists.
+    pub fn roll_by(&mut self, angle: f32) {
+        self.rotation = (self.rotation * Quat::from_rotation_z(angle)).normalize();
+        self.sync_yaw_pitch();
+    }
+
+    /// Tip / spin the view 90° about a screen axis. `horizontal = false` tips
+    /// up/down (rotation about the camera's right axis); `true` spins
+    /// left/right (about the camera's up axis).
+    pub fn nudge_90(&mut self, horizontal: bool, positive: bool) {
+        let axis = if horizontal {
+            self.rotation * Vec3::Y
+        } else {
+            self.rotation * Vec3::X
+        };
+        let ang = if positive {
+            std::f32::consts::FRAC_PI_2
+        } else {
+            -std::f32::consts::FRAC_PI_2
+        };
+        let delta = Quat::from_axis_angle(axis, ang);
+        self.rotation = (delta * self.rotation).normalize();
+        self.sync_yaw_pitch();
+    }
+
+    // ── Internal helpers ───────────────────────────────────────────────────
+
+    /// Derive yaw and pitch from the current quaternion.
+    pub(crate) fn sync_yaw_pitch(&mut self) {
+        let eye_dir = self.rotation * Vec3::Z;
+        self.pitch = eye_dir.z.clamp(-1.0, 1.0).asin();
+        self.yaw = if eye_dir.x.abs() < 1e-6 && eye_dir.y.abs() < 1e-6 {
+            0.0
+        } else {
+            eye_dir.x.atan2(-eye_dir.y)
+        };
+    }
+}
+
+// ── Free helpers ───────────────────────────────────────────────────────────
+
+/// Build a rotation quaternion from yaw (rotation around Z) and pitch
+/// (tilt toward Z). Matches the coordinate convention of the ViewCube
+/// so snap angles continue to work unchanged.
+///
+/// Convention (Z-up, Y-forward):
+///   yaw   = 0          → camera looks along -Y axis (front view)
+///   pitch = PI/2       → camera looks down -Z (top view)
+///   pitch = 0          → camera in the XY plane
+/// Build a rotation quaternion from yaw, pitch and roll.
+/// Positive yaw rotates the view direction clockwise when seen from above (Z-up).
+/// Roll rotates the camera around its own view axis (post-multiplied so it
+/// composes after the yaw/pitch gaze direction is set).
+pub fn yaw_pitch_to_quat(yaw: f32, pitch: f32, roll: f32) -> Quat {
+    // +yaw keeps the ViewCube faces aligned with the camera direction.
+    let q_yaw = Quat::from_rotation_z(yaw);
+    let q_pitch = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2 - pitch);
+    let q_roll = Quat::from_rotation_z(roll);
+    (q_yaw * q_pitch * q_roll).normalize()
+}
+
+/// [`yaw_pitch_to_quat`] in f64, for placing points far along the view axes.
+pub fn yaw_pitch_to_dquat(yaw: f64, pitch: f64, roll: f64) -> glam::DQuat {
+    let q_yaw = glam::DQuat::from_rotation_z(yaw);
+    let q_pitch = glam::DQuat::from_rotation_x(std::f64::consts::FRAC_PI_2 - pitch);
+    let q_roll = glam::DQuat::from_rotation_z(roll);
+    (q_yaw * q_pitch * q_roll).normalize()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One wheel notch, at each ZOOMFACTOR the application can hold (the
+    /// step is the factor over the default 60). Every one has to bring the
+    /// eye nearer, a higher setting has to bring it nearer still, and none
+    /// may reach zero or cross it — the subtraction this replaced hit zero at
+    /// ten steps and inverted the view beyond that.
+    #[test]
+    fn a_notch_zooms_in_at_every_zoom_factor_without_collapsing() {
+        let mut previous = f32::INFINITY;
+        for factor in [3.0_f32, 60.0, 100.0, 250.0, 500.0] {
+            let mut camera = Camera::default();
+            let before = camera.distance;
+            camera.zoom(factor / 60.0);
+            assert!(
+                camera.distance > 0.0 && camera.distance < before,
+                "ZOOMFACTOR {factor} left distance at {}",
+                camera.distance
+            );
+            assert!(
+                camera.distance < previous,
+                "ZOOMFACTOR {factor} did not reach further than the one below it"
+            );
+            previous = camera.distance;
+        }
+    }
+
+    /// The default notch is still a tenth of the distance, which is what the
+    /// subtraction gave at `ZOOMFACTOR = 60` and the reason the base is 0.9.
+    #[test]
+    fn the_default_notch_is_what_it_always_was() {
+        let mut camera = Camera::default();
+        let before = camera.distance;
+        camera.zoom(1.0);
+        assert!((camera.distance - before * 0.9).abs() < 1e-4);
+        // And a scroll that resolves to nothing moves nothing at all.
+        let held = camera.distance;
+        camera.zoom(0.0);
+        assert_eq!(camera.distance, held);
+    }
+
+    /// A notch in and a notch out land back where they started. The
+    /// subtraction lost a percent of the view on every round trip (0.9 × 1.1
+    /// = 0.99), which is the drift people felt as the view creeping closer
+    /// while they scrolled back and forth.
+    #[test]
+    fn a_notch_in_and_a_notch_out_cancel() {
+        for factor in [3.0_f32, 60.0, 100.0, 500.0] {
+            let mut camera = Camera::default();
+            let before = camera.distance;
+            camera.zoom(factor / 60.0);
+            camera.zoom(-factor / 60.0);
+            assert!(
+                (camera.distance - before).abs() < 1e-3,
+                "ZOOMFACTOR {factor}: {} not {before}",
+                camera.distance
+            );
+        }
+    }
+
+    /// Zooming out multiplies, so a held wheel at the top of the range used
+    /// to run the distance past what an f32 far plane (`distance * 1000`) can
+    /// hold in about ninety notches, and the viewport went black on an
+    /// infinite projection. The ceiling has to keep the matrix finite however
+    /// long the wheel is turned.
+    #[test]
+    fn a_long_scroll_out_keeps_the_projection_finite() {
+        let bounds = Rectangle::with_size(iced::Size::new(800., 600.));
+        for projection in [Projection::Orthographic, Projection::Perspective] {
+            let mut camera = Camera {
+                projection,
+                rotation: Quat::IDENTITY,
+                ..Camera::default()
+            };
+            for _ in 0..500 {
+                camera.zoom(-500.0 / 60.0);
+            }
+            assert!(
+                camera.distance.is_finite() && camera.distance > 0.0,
+                "{projection:?} ran to {}",
+                camera.distance
+            );
+            assert!(
+                (camera.distance * 1000.0).is_finite(),
+                "{projection:?} far plane is not finite"
+            );
+            assert!(
+                camera.view_proj_rte(bounds).is_finite(),
+                "{projection:?} projection is not finite"
+            );
+        }
+        // The floor is still a floor, however long the wheel turns inward.
+        let mut camera = Camera::default();
+        for _ in 0..500 {
+            camera.zoom(500.0 / 60.0);
+        }
+        assert!(camera.distance > 0.0, "the eye reached the target");
+    }
+
+    /// The published inverse has to be exactly that: ask for a ratio, get the
+    /// step that applies it. Every caller that owes the user an exact ratio
+    /// depends on this, so that none of them inverts the zoom law itself.
+    #[test]
+    fn zoom_steps_for_ratio_inverts_zoom() {
+        for ratio in [0.1_f32, 0.5, 0.95, 1.0, 1.05, 2.0, 10.0] {
+            let mut camera = Camera::default();
+            let before = camera.distance;
+            camera.zoom(Camera::zoom_steps_for_ratio(ratio));
+            let want = before * ratio;
+            assert!(
+                (camera.distance - want).abs() < 1e-4 * want,
+                "ratio {ratio}: {} not {want}",
+                camera.distance
+            );
+        }
+        // Nothing to invert means no zoom, rather than a step into infinity.
+        for ratio in [0.0_f32, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(Camera::zoom_steps_for_ratio(ratio), 0.0, "ratio {ratio}");
+        }
+    }
+
+    #[test]
+    fn projection_uses_the_webgpu_depth_range_once() {
+        let bounds = Rectangle::with_size(iced::Size::new(800., 600.));
+        for projection in [Projection::Orthographic, Projection::Perspective] {
+            let camera = Camera {
+                projection,
+                rotation: Quat::IDENTITY,
+                ..Camera::default()
+            };
+            let (near, far) = match projection {
+                Projection::Perspective => (camera.distance * 0.001, camera.distance * 1000.),
+                Projection::Orthographic => camera.ortho_depth_range(),
+            };
+            let matrix = camera.view_proj_rte(bounds);
+            let depth = |distance: f32| {
+                let clip = matrix * glam::vec4(0., 0., -distance, 1.);
+                clip.z / clip.w
+            };
+            assert!(
+                depth(near).abs() < 1e-5,
+                "{projection:?}: near must map to 0"
+            );
+            assert!(
+                (depth(far) - 1.).abs() < 1e-5,
+                "{projection:?}: far must map to 1"
+            );
+            assert!(
+                depth(near - (far - near) * 1e-7) < 0.,
+                "near clipping boundary moved"
+            );
+            assert!(depth(far * 2.) > 1., "far clipping boundary moved");
+            if projection == Projection::Orthographic {
+                assert!((depth(camera.distance) - 0.5).abs() < 1e-5);
+            }
+        }
+    }
+
+    /// A point behind a perspective eye has a negative clip W, not a near-zero
+    /// one: dividing by it mirrors the point onto the screen. `project` must
+    /// reject it, whatever its distance.
+    #[test]
+    fn project_rejects_points_behind_the_eye() {
+        let bounds = Rectangle::with_size(iced::Size::new(800., 600.));
+        let camera = Camera {
+            projection: Projection::Perspective,
+            rotation: Quat::IDENTITY,
+            target: DVec3::ZERO,
+            distance: 10.0,
+            ..Camera::default()
+        };
+        assert!(camera.project(DVec3::new(0., 0., 5.), bounds).is_some());
+        assert!(camera.project(DVec3::new(0., 0., 15.), bounds).is_none());
+        assert!(camera.project(DVec3::new(0., 0., 1_000.), bounds).is_none());
+    }
+
+    /// A drawing 140 units wide carrying one entity 800 km below its plane must
+    /// still zoom to the 140 units — the outlier belongs to the depth range, not
+    /// to the zoom. (Sizing both from the 3-D diagonal made the drawing a dot.)
+    #[test]
+    fn a_far_off_plane_outlier_does_not_drag_the_zoom_out() {
+        let flat_min = Vec3::new(-1200100.0, -800081.5, 0.0);
+        let flat_max = Vec3::new(-1199960.0, -800000.0, 10.0);
+
+        let mut flat = Camera::default();
+        flat.fit_to_bounds(flat_min, flat_max, 1.0);
+
+        // Same drawing, plus the benchmark's entity 800 km down.
+        let mut deep = Camera::default();
+        deep.fit_to_bounds(Vec3::new(flat_min.x, flat_min.y, -800017.5), flat_max, 1.0);
+
+        // Top view: the outlier is along the eye direction, so the on-screen
+        // framing must barely move.
+        let ratio = deep.distance / flat.distance;
+        assert!(
+            (0.5..2.0).contains(&ratio),
+            "zoom moved {ratio}x because of a depth-only outlier \
+             (flat={}, deep={})",
+            flat.distance,
+            deep.distance
+        );
+    }
+
+    /// …and that same outlier must be inside near/far, or it is clipped away.
+    #[test]
+    fn the_outlier_lands_inside_the_depth_range() {
+        let min = Vec3::new(-1200100.0, -800081.5, -800017.5);
+        let max = Vec3::new(-1199960.0, -800000.0, 10.0);
+        let mut cam = Camera::default();
+        cam.fit_to_bounds(min, max, 1.0);
+
+        let (near, far) = cam.ortho_depth_range();
+        // Depth of a point from the eye, along the view direction. Top view, so
+        // the outlier at z=-800015 sits `distance + 800015`-ish away.
+        let outlier = Vec3::new(-1200082.1, -800015.4, -800015.4);
+        let local = cam.rotation.inverse() * (outlier.as_dvec3() - cam.target).as_vec3();
+        let depth = cam.distance - local.z;
+        assert!(
+            depth > near && depth < far,
+            "outlier at depth {depth} is outside near/far ({near}, {far})"
+        );
+    }
+
+    /// A flat drawing must be unaffected: the 3-D diagonal and the screen-plane
+    /// extent agree there, so the framing has to match the old behaviour.
+    #[test]
+    fn a_flat_drawing_frames_about_as_before() {
+        let min = Vec3::new(-70.0, -40.0, 0.0);
+        let max = Vec3::new(70.0, 40.0, 0.0);
+        let mut cam = Camera::default();
+        cam.fit_to_bounds(min, max, 1.0);
+        // Old rule: distance = 3-D diagonal * 1.5.
+        let old = (max - min).length() * 1.5;
+        let ratio = cam.distance / old;
+        assert!(
+            (0.6..1.25).contains(&ratio),
+            "flat framing drifted {ratio}x from the old rule (was {old}, now {})",
+            cam.distance
+        );
+        // And the whole drawing still fits the half-height.
+        let half_h = cam.ortho_size();
+        assert!(
+            half_h >= 40.0,
+            "half-height {half_h} no longer contains the drawing"
+        );
+    }
+
+    #[test]
+    fn orbit_crosses_a_pole_without_stalling() {
+        let mut cam = Camera::default();
+        for step in 0..200 {
+            let before = cam.rotation;
+            cam.orbit(0.0, 5.0, None);
+            assert!(
+                before.dot(cam.rotation).abs() < 0.999_999,
+                "vertical orbit stalled at step {step}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalidating_model_bounds_also_drops_the_stale_scalar_range() {
+        let mut cam = Camera::default();
+        cam.fit_depth_to_bounds_f64(DVec3::splat(-1.0), DVec3::splat(1.0));
+        assert!(cam.model_bounds.is_some());
+        assert!(cam.depth_half_range > 0.0);
+
+        cam.invalidate_model_bounds();
+
+        assert!(cam.model_bounds.is_none());
+        assert_eq!(cam.depth_half_range, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod rte_tests {
+    use super::*;
+    use iced::Rectangle;
+
+    #[test]
+    fn cursor_picking_preserves_the_requested_plane() {
+        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(800.0, 600.0));
+        for projection in [Projection::Orthographic, Projection::Perspective] {
+            for distance in [0.01, 60.36, 71.08106, 100_000.0] {
+                for origin in [
+                    DVec3::ZERO,
+                    DVec3::new(639_792.184_2, 4_517_057.531_7, 12.5),
+                ] {
+                    let camera = Camera {
+                        target: origin,
+                        distance,
+                        projection,
+                        ..Camera::default()
+                    };
+                    for cursor in [Point::new(400.0, 300.0), Point::new(530.0, 215.0)] {
+                        let point = camera.pick_on_target_plane(cursor, bounds);
+                        assert_eq!(
+                            point.z, origin.z,
+                            "{projection:?}, distance={distance}, {point:?}"
+                        );
+                        let normal = Vec3::new(0.2, -0.3, 1.0).normalize();
+                        let point = camera.pick_on_plane(cursor, bounds, normal, origin);
+                        let residual = (point - origin).dot(normal.as_dvec3());
+                        assert!(
+                            residual.abs() < 1e-9,
+                            "plane residual={residual}, {projection:?}, distance={distance}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn target_plane_picking_is_translation_invariant() {
+        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(800.0, 600.0));
+        let cursor = Point::new(530.0, 215.0);
+        for projection in [Projection::Orthographic, Projection::Perspective] {
+            let camera = Camera {
+                rotation: Quat::from_rotation_z(0.7) * Quat::from_rotation_x(0.4),
+                projection,
+                distance: 0.01,
+                ..Camera::default()
+            };
+            let offset = DVec3::new(639_792.184_2, 4_517_057.531_7, 12.5);
+            let translated = Camera {
+                target: offset,
+                ..camera.clone()
+            };
+            let here = camera.pick_on_target_plane(cursor, bounds);
+            let there = translated.pick_on_target_plane(cursor, bounds) - offset;
+            assert!(
+                here.distance(there) < 1e-9,
+                "{projection:?}: {here:?} vs {there:?}"
+            );
+        }
+    }
+
+    /// The relative-to-eye view carries rotation and nothing else, so where the
+    /// camera stands must not reach it at all.
+    ///
+    /// It used to. The basis came from `look_at(eye, target)` with both cast to
+    /// f32, and at survey coordinates that grid is half a metre across — so the
+    /// difference between them, and the whole basis, jittered as the camera
+    /// moved. A drawing placed at UTM shimmered.
+    #[test]
+    fn the_view_basis_does_not_depend_on_where_the_camera_stands() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 1600.0,
+            height: 900.0,
+        };
+        let mut at_origin = Camera::default();
+        at_origin.target = glam::DVec3::ZERO;
+
+        let mut at_utm = at_origin.clone();
+        at_utm.target = glam::DVec3::new(639_792.184_2, 4_517_057.531_7, 12.5);
+
+        let here = at_origin.view_proj_rte(bounds);
+        let there = at_utm.view_proj_rte(bounds);
+        for (a, b) in here
+            .to_cols_array()
+            .iter()
+            .zip(there.to_cols_array().iter())
+        {
+            assert_eq!(a, b, "the camera's position reached the view matrix");
+        }
+    }
+
+    /// And it is the same basis as before, which the origin proves: there the
+    /// old construction had no large coordinates to lose, so the two must
+    /// agree exactly. Anything else would mean the refactor turned the view
+    /// round rather than just keeping the coordinates out of it.
+    #[test]
+    fn the_basis_matches_what_two_positions_gave_where_they_were_exact() {
+        for (yaw, pitch) in [(0.0, 1.2), (0.7, 0.3), (-2.1, -0.9)] {
+            let mut camera = Camera::default();
+            camera.target = glam::DVec3::ZERO;
+            camera.rotation = Quat::from_rotation_z(yaw) * Quat::from_rotation_x(pitch);
+            let up_dir = camera.rotation * Vec3::Y;
+
+            let mut old = look_at_mat4(camera.eye().as_vec3(), camera.target.as_vec3(), up_dir);
+            old.w_axis = glam::vec4(0.0, 0.0, 0.0, 1.0);
+            let new = {
+                let mut view = look_at_mat4(Vec3::ZERO, -(camera.rotation * Vec3::Z), up_dir);
+                view.w_axis = glam::vec4(0.0, 0.0, 0.0, 1.0);
+                view
+            };
+            for (a, b) in old.to_cols_array().iter().zip(new.to_cols_array().iter()) {
+                assert!((a - b).abs() < 1e-6, "yaw {yaw} pitch {pitch}: {a} vs {b}");
+            }
+        }
+    }
+}

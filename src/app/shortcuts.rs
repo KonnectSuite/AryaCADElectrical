@@ -1,0 +1,464 @@
+//! Editable keyboard shortcut table shared by the CUI dialog and key events.
+
+use super::{Message, OpenCADStudio};
+use iced::Task;
+use rustc_hash::FxHashMap;
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// True when the live `SPACE` binding resolves to something other than
+/// `COMMANDSPACE`. The view's key-dispatch closure must stay a non-capturing fn
+/// pointer, so instead of reading the binding map it reads this flag when a
+/// text field reports a Captured space. When SPACE is default-bound to
+/// COMMANDSPACE the flag is false and the text field keeps the space for
+/// typing; when SPACE is rebound (e.g. to FINALIZE) the flag is true so the
+/// Captured space still fires its shortcut. (#1710)
+pub(crate) static SPACE_REBOUND_OFF_COMMANDSPACE: AtomicBool = AtomicBool::new(false);
+
+/// Recompute the SPACE-dispatch flag from the current binding map. Call after
+/// every change to `shortcut_bindings`. (#1710)
+pub(super) fn sync_space_dispatch_flag(bindings: &FxHashMap<String, String>) {
+    SPACE_REBOUND_OFF_COMMANDSPACE
+        .store(space_rebound_off_commandspace(bindings), Ordering::Relaxed);
+}
+
+/// Whether `SPACE` is bound to something other than `COMMANDSPACE`. (#1710)
+pub(crate) fn space_rebound_off_commandspace(bindings: &FxHashMap<String, String>) -> bool {
+    matches!(bindings.get("SPACE"), Some(cmd) if cmd != "COMMANDSPACE")
+}
+
+#[cfg(target_os = "macos")]
+const ACCEL: &str = "CMD";
+#[cfg(not(target_os = "macos"))]
+const ACCEL: &str = "CTRL";
+
+/// Every active binding shipped with a fresh configuration. Values are command
+/// names where possible; the small set of input actions is resolved below.
+pub(super) fn default_bindings() -> BTreeMap<String, String> {
+    [
+        ("F1".to_string(), "HELP"),
+        ("F2".to_string(), "COMMANDHISTORY"),
+        ("F3".to_string(), "TOGGLEOSNAP"),
+        ("F4".to_string(), "TOGGLE3DOSNAP"),
+        ("F5".to_string(), "ISOPLANE"),
+        ("F6".to_string(), "TOGGLEDUCS"),
+        ("F7".to_string(), "GRID"),
+        ("F8".to_string(), "ORTHO"),
+        ("F9".to_string(), "SNAP"),
+        ("F10".to_string(), "POLAR"),
+        ("F11".to_string(), "OTRACK"),
+        ("F12".to_string(), "DYNINPUT"),
+        // F12 itself is Dynamic Input (as in the commercial solutions this
+        // application mirrors), so the quad's master toggle rides the
+        // nearest free seat beside it: Shift+F12.
+        ("SHIFT+F12".to_string(), "QUADTOGGLE"),
+        (format!("{ACCEL}+0"), "CLEANSCREEN"),
+        (format!("{ACCEL}+1"), "PROPERTIES"),
+        (format!("{ACCEL}+K"), "HYPERLINK"),
+        (format!("{ACCEL}+N"), "QNEW"),
+        (format!("{ACCEL}+O"), "OPEN"),
+        (format!("{ACCEL}+P"), "PLOT"),
+        (format!("{ACCEL}+W"), "TOGGLESELECTIONCYCLING"),
+        (format!("{ACCEL}+R"), "NEXTVIEWPORT"),
+        (format!("{ACCEL}+Q"), "QUIT"),
+        (format!("{ACCEL}+S"), "SAVE"),
+        (format!("{ACCEL}+SHIFT+S"), "SAVEAS"),
+        (format!("{ACCEL}+Z"), "UNDO"),
+        (format!("{ACCEL}+SHIFT+Z"), "REDO"),
+        (format!("{ACCEL}+Y"), "REDO"),
+        (format!("{ACCEL}+F"), "FIND"),
+        (format!("{ACCEL}+H"), "FIND"),
+        (format!("{ACCEL}+A"), "SELECTALL"),
+        (format!("{ACCEL}+C"), "COPYCLIP"),
+        (format!("{ACCEL}+SHIFT+C"), "COPYBASE"),
+        (format!("{ACCEL}+X"), "CUTCLIP"),
+        (format!("{ACCEL}+V"), "PASTECLIP"),
+        (format!("{ACCEL}+SHIFT+V"), "PASTEBLOCK"),
+        ("ENTER".to_string(), "FINALIZE"),
+        ("SPACE".to_string(), "COMMANDSPACE"),
+        ("ESCAPE".to_string(), "CANCEL"),
+        ("DELETE".to_string(), "DELETESELECTED"),
+        ("BACKSPACE".to_string(), "BACKSPACE"),
+        ("TAB".to_string(), "DYNTAB"),
+        ("SHIFT+TAB".to_string(), "DYNTABPREV"),
+        ("UP".to_string(), "HISTORYPREV"),
+        ("DOWN".to_string(), "HISTORYNEXT"),
+        ("LEFT".to_string(), "CARETLEFT"),
+        ("RIGHT".to_string(), "CARETRIGHT"),
+    ]
+    .into_iter()
+    .chain(PLATFORM_BINDINGS.iter().map(|(key, action)| (key.to_string(), *action)))
+    .map(|(key, action)| (key, action.to_string()))
+    .collect()
+}
+
+/// Bindings a platform expects of every application.
+#[cfg(target_os = "macos")]
+pub(super) const PLATFORM_BINDINGS: &[(&str, &str)] = &[("CMD+,", "OPTIONS")];
+#[cfg(not(target_os = "macos"))]
+pub(super) const PLATFORM_BINDINGS: &[(&str, &str)] = &[];
+
+/// Canonical form used by the editor, command interface, config and key event
+/// resolver. Modifier order is stable so equivalent user input shares one row.
+pub(super) fn normalize_key(value: &str) -> String {
+    let mut ctrl = false;
+    let mut cmd = false;
+    let mut alt = false;
+    let mut shift = false;
+    let mut key = String::new();
+
+    for part in value
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        match part.to_uppercase().as_str() {
+            "CTRL" | "CONTROL" => ctrl = true,
+            "CMD" | "COMMAND" | "META" | "SUPER" => cmd = true,
+            "ALT" | "OPTION" => alt = true,
+            "SHIFT" => shift = true,
+            "ESC" => key = "ESCAPE".to_string(),
+            "RETURN" => key = "ENTER".to_string(),
+            "ARROWUP" => key = "UP".to_string(),
+            "ARROWDOWN" => key = "DOWN".to_string(),
+            "ARROWLEFT" => key = "LEFT".to_string(),
+            "ARROWRIGHT" => key = "RIGHT".to_string(),
+            other => key = other.to_string(),
+        }
+    }
+
+    let mut parts = Vec::with_capacity(5);
+    if ctrl {
+        parts.push("CTRL");
+    }
+    if cmd {
+        parts.push("CMD");
+    }
+    if alt {
+        parts.push("ALT");
+    }
+    if shift {
+        parts.push("SHIFT");
+    }
+    if !key.is_empty() {
+        parts.push(&key);
+    }
+    parts.join("+")
+}
+
+/// Keys that used to bypass focused widgets. Clipboard and selection commands
+/// intentionally stay out so text fields retain their native shortcuts.
+pub(super) fn is_global_key(key: &str) -> bool {
+    let base = key.rsplit('+').next().unwrap_or(key);
+    base.strip_prefix('F')
+        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit()))
+        || matches!(base, "ESCAPE")
+        || (key.starts_with(ACCEL)
+            && !matches!(key.rsplit('+').next(), Some("A" | "C" | "V" | "X")))
+}
+
+fn is_named_key(key: &str) -> bool {
+    matches!(
+        key,
+        "ENTER"
+            | "SPACE"
+            | "ESCAPE"
+            | "DELETE"
+            | "BACKSPACE"
+            | "TAB"
+            | "UP"
+            | "DOWN"
+            | "LEFT"
+            | "RIGHT"
+            | "HOME"
+            | "END"
+            | "PAGEUP"
+            | "PAGEDOWN"
+            | "INSERT"
+    ) || key
+        .strip_prefix('F')
+        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit()))
+}
+
+/// Input actions `run_shortcut` resolves directly instead of routing through
+/// the command dispatcher — valid shortcut commands that never appear in the
+/// command registry. Used to validate the shortcut editor's command column.
+pub(super) const INPUT_ACTIONS: &[&str] = &[
+    "SPACEMOUSEFIT",
+    "SPACEMOUSETOP",
+    "FINALIZE",
+    "COMMANDSPACE",
+    "CANCEL",
+    "DELETESELECTED",
+    "BACKSPACE",
+    "DYNTAB",
+    "DYNTABPREV",
+    "HISTORYPREV",
+    "HISTORYNEXT",
+    "CARETLEFT",
+    "CARETRIGHT",
+    "COMMANDHISTORY",
+    "TOGGLEOSNAP",
+    "TOGGLE3DOSNAP",
+    "TOGGLEDUCS",
+    "OTRACK",
+    "DYNINPUT",
+    "TOGGLESELECTIONCYCLING",
+    "NEXTVIEWPORT",
+    "SELECTALL",
+    "PASTECLIP",
+    // The quad cursor menu's master toggle (docs/quad-menu.md §3.6).
+    "QUADTOGGLE",
+];
+
+impl OpenCADStudio {
+    /// Commit the working rows to the live bindings, discarding an
+    /// unfinished draft and reporting duplicates. Shared by Apply and
+    /// Apply-and-Exit.
+    pub(super) fn finish_shortcut_editor(&mut self) {
+        // An add must end in a complete shortcut or a cancellation;
+        // applying with a half-filled draft discards the draft.
+        if self.shortcut_pending_add {
+            self.shortcut_editor_rows.remove(0);
+            self.shortcut_pending_add = false;
+            self.command_line
+                .push_error(crate::tf!("Incomplete shortcut row discarded.").as_ref());
+        }
+        self.shortcut_capture_row = None;
+        // Rows normalizing to the same key silently overwrite each other in
+        // the binding map — surface the conflict instead.
+        let mut seen = rustc_hash::FxHashSet::default();
+        let mut duplicates = Vec::new();
+        for (key, _) in &self.shortcut_editor_rows {
+            let key = normalize_key(key);
+            if key.is_empty() {
+                continue;
+            }
+            if !seen.insert(key.clone()) {
+                duplicates.push(key);
+            }
+        }
+        if !duplicates.is_empty() {
+            self.command_line.push_error(
+                crate::tf!(
+                    "Duplicate shortcut(s) ignored on Apply: {}",
+                    duplicates.join(", ")
+                )
+                .as_ref(),
+            );
+        }
+        self.apply_shortcut_editor_rows();
+        self.command_line.push_info(
+            crate::tf!("{} shortcut(s) applied.", self.shortcut_bindings.len()).as_ref(),
+        );
+    }
+
+    /// Reset the working rows and live bindings to the shipped defaults.
+    pub(super) fn reset_shortcuts_to_defaults(&mut self) {
+        let mut rows: Vec<(String, String)> = default_bindings().into_iter().collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        self.shortcut_editor_rows = rows;
+        self.shortcut_pending_add = false;
+        self.shortcut_capture_row = None;
+        self.shortcut_reset_confirm = false;
+        self.apply_shortcut_editor_rows();
+    }
+
+    /// True when the working rows differ from the live bindings — the editor
+    /// has un-applied changes a close would discard.
+    pub(super) fn shortcut_editor_dirty(&self) -> bool {
+        let rows: FxHashMap<String, String> = self
+            .shortcut_editor_rows
+            .iter()
+            .filter_map(|(key, action)| {
+                let key = normalize_key(key);
+                let action = action.trim().to_uppercase();
+                (!key.is_empty() && !action.is_empty()).then_some((key, action))
+            })
+            .collect();
+        rows != self.shortcut_bindings
+    }
+
+    /// A pending add finishes successfully once its draft row (row 0) has
+    /// both a key and a command; it then becomes a regular row of the table.
+    /// Called after each edit while a draft is pending.
+    pub(super) fn finish_pending_add(&mut self) {
+        if !self.shortcut_pending_add {
+            return;
+        }
+        if let Some((key, command)) = self.shortcut_editor_rows.first() {
+            if !key.trim().is_empty() && !command.trim().is_empty() {
+                self.shortcut_pending_add = false;
+                self.shortcut_capture_row = None;
+            }
+        }
+    }
+
+    pub(super) fn apply_shortcut_editor_rows(&mut self) {
+        let bindings: FxHashMap<String, String> = self
+            .shortcut_editor_rows
+            .iter()
+            .filter_map(|(key, action)| {
+                let key = normalize_key(key);
+                let action = action.trim().to_uppercase();
+                (!key.is_empty() && !action.is_empty()).then_some((key, action))
+            })
+            .collect();
+        self.shortcut_bindings = bindings;
+        sync_space_dispatch_flag(&self.shortcut_bindings);
+        self.persist_settings_if_changed();
+    }
+
+    /// Ctrl+R: make the next viewport of the layout current, from paper
+    /// space the first one, keeping a running command going.
+    fn next_viewport(&mut self) -> Task<Message> {
+        let scene = &self.tabs[self.active_tab].scene;
+        if scene.current_layout == "Model" {
+            return Task::none();
+        }
+        let viewports: Vec<codec::Handle> =
+            scene.viewport_list().into_iter().map(|vp| vp.handle).collect();
+        let next = match scene.active_viewport.and_then(|h| viewports.iter().position(|v| *v == h)) {
+            Some(index) => viewports.get((index + 1) % viewports.len()),
+            None => viewports.first(),
+        };
+        let Some(&next) = next else {
+            return Task::none();
+        };
+        self.viewport_switch_keeps_command = true;
+        Task::done(Message::EnterViewport(next))
+    }
+
+    pub(super) fn run_shortcut(&mut self, key: &str) -> Task<Message> {
+        let action = self.shortcut_bindings.get(key).or_else(|| {
+            let base = key.rsplit('+').next()?;
+            is_named_key(base)
+                .then(|| self.shortcut_bindings.get(base))
+                .flatten()
+        });
+        let Some(action) = action.cloned() else {
+            return Task::none();
+        };
+        self.run_action(&action)
+    }
+
+    /// Shared by keyboard bindings and exported device actions. In particular,
+    /// Undo retains its command-local behavior during PLINE and SPLINE.
+    pub(super) fn run_action(&mut self, action: &str) -> Task<Message> {
+        let message = match action {
+            "SPACEMOUSEFIT" => {
+                let i = self.active_tab;
+                self.clear_navigation_hover(i);
+                self.tabs[i].scene.remember_current_view();
+                self.tabs[i].scene.fit_all();
+                self.arm_hover_after_navigation(i);
+                return Task::none();
+            }
+            "SPACEMOUSETOP" => Message::ViewCubeHome,
+            "SPACEMOUSE" => Message::SpaceMousePreferences,
+            "SPACEMOUSEPAUSE" => Message::SpaceMousePause,
+            "SPACEMOUSEPAN" => {
+                Message::SpaceMouseMode(crate::input::spacemouse::NavigationMode::PanOnly)
+            }
+            "SPACEMOUSEPANZOOM" => {
+                Message::SpaceMouseMode(crate::input::spacemouse::NavigationMode::PanZoom)
+            }
+            "SPACEMOUSEAUTO" => {
+                Message::SpaceMouseMode(crate::input::spacemouse::NavigationMode::Auto)
+            }
+            "SPACEMOUSE3D" => {
+                Message::SpaceMouseMode(crate::input::spacemouse::NavigationMode::Full3D)
+            }
+            "FINALIZE" => Message::CommandFinalize,
+            "COMMANDSPACE" => Message::CommandSpace,
+            "CANCEL" => Message::CommandEscape,
+            "DELETESELECTED" => Message::DeleteSelected,
+            "BACKSPACE" => Message::CommandBackspace,
+            "DYNTAB" => Message::DynTabNext,
+            "DYNTABPREV" => Message::DynTabPrev,
+            "HISTORYPREV" => Message::CommandHistoryPrev,
+            "HISTORYNEXT" => Message::CommandHistoryNext,
+            "CARETLEFT" => Message::MTextCaretMove(-1),
+            "CARETRIGHT" => Message::MTextCaretMove(1),
+            "COMMANDHISTORY" => Message::CommandHistoryToggle,
+            "TOGGLEOSNAP" => Message::ToggleSnapEnabled,
+            "TOGGLE3DOSNAP" => Message::ToggleSnap3dEnabled,
+            "TOGGLEDUCS" => Message::ToggleDynamicUcs,
+            "OTRACK" => Message::ToggleOTrack,
+            "DYNINPUT" => Message::ToggleDynInput,
+            "TOGGLESELECTIONCYCLING" => Message::ToggleSelectionCycling,
+            // Quad cursor menu master toggle (Shift+F12, Options window,
+            // status-bar field): the pure on/off flip, quad panel updates
+            // included, lives in the quad router (docs/quad-menu.md §3.6).
+            "QUADTOGGLE" => Message::Quad(crate::ui::popup::quad_menu::QuadMsg::Toggle),
+            "NEXTVIEWPORT" => return self.next_viewport(),
+            "SELECTALL" => Message::SelectAllShortcut,
+            "PASTECLIP" => Message::PasteShortcut,
+
+            // The multiline text editor keeps its own history.
+            "UNDO" if self.mtext_editor.is_some() => Message::MTextUndo,
+            "REDO" if self.mtext_editor.is_some() => Message::MTextRedo,
+            // In the text editor Ctrl+F inserts a field instead of finding.
+            "FIND" if self.mtext_editor.is_some() => Message::MTextInsertField,
+
+            "UNDO" => {
+                let i = self.active_tab;
+
+                // Multi-step drawing commands may consume Ctrl+Z themselves.
+                // For example PLINE/SPLINE should remove only the last entered
+                // point instead of cancelling the whole in-progress command.
+                let command_result = self.tabs[i]
+                    .active_cmd
+                    .as_mut()
+                    .and_then(|cmd| cmd.on_undo_step());
+
+                if let Some(result) = command_result {
+                    return self.apply_cmd_result(result);
+                }
+
+                Message::Undo
+            }
+
+            "REDO" => Message::Redo,
+
+            other => Message::Command(other.to_string()),
+        };
+
+        self.update(message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::OpenCADStudio;
+
+    /// Bare F12 toggles dynamic input and SHIFT+F12 toggles the quad, also
+    /// through the config-upgrade path: a settings file saved before the
+    /// quad carries no SHIFT+F12 row, and the bare-base-key fallback of
+    /// `run_shortcut` must not shadow it into F12 (DYNINPUT) — `apply_config`
+    /// backfills the row (docs/quad-menu.md §3.6).
+    #[test]
+    fn f12_is_dyn_input_and_shift_f12_is_quad_toggle() {
+        let mut app = OpenCADStudio::new_for_test();
+
+        // Stale table: exact shape of a config saved before the quad existed.
+        let mut cfg = crate::app::config::AppConfig::default();
+        cfg.shortcuts.bindings = [(normalize_key("F12"), "DYNINPUT".to_string())]
+            .into_iter()
+            .collect();
+        app.apply_config(cfg);
+
+        let dyn_before = app.dyn_input;
+        let _ = app.run_shortcut("F12");
+        assert_eq!(
+            app.dyn_input,
+            !dyn_before,
+            "bare F12 toggles dynamic input"
+        );
+        assert!(!app.quad, "bare F12 must not touch the quad");
+
+        let _ = app.run_shortcut("SHIFT+F12");
+        assert!(app.quad, "SHIFT+F12 toggles the quad via QUADTOGGLE");
+    }
+}

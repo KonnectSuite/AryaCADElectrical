@@ -1,0 +1,277 @@
+use super::OpenCADStudio;
+use crate::ui;
+
+impl OpenCADStudio {
+    /// Apply the current layer to the document header and all per-tab/UI
+    /// creation state. Both built-in commands and plugin settings use this.
+    pub(super) fn set_current_layer_name(&mut self, tab: usize, layer: &str) -> Result<(), String> {
+        let handle = self.tabs[tab]
+            .scene
+            .document
+            .layers
+            .get(layer)
+            .map(|entry| entry.handle)
+            .ok_or_else(|| format!("layer {layer:?} does not exist"))?;
+        self.tabs[tab].scene.document.header.current_layer_name = layer.to_owned();
+        self.tabs[tab].scene.document.header.current_layer_handle = handle;
+        self.tabs[tab].active_layer = layer.to_owned();
+        self.tabs[tab].layers.current_layer = layer.to_owned();
+        self.tabs[tab].dirty = true;
+        if tab == self.active_tab {
+            self.ribbon.active_layer = layer.to_owned();
+            self.refresh_layer_panel();
+        }
+        Ok(())
+    }
+    pub(super) fn load_layer_state_editor(&mut self, selected: Option<String>) {
+        let i = self.active_tab;
+        if let Some(name) = selected {
+            if let Some(state) = self.tabs[i].scene.document.layer_state(&name) {
+                self.layer_state_name_buf = state.name.clone();
+                self.layer_state_description_buf = state.description;
+                self.layer_state_selected = Some(state.name);
+                return;
+            }
+        }
+        self.layer_state_selected = None;
+        self.layer_state_description_buf.clear();
+        let names: Vec<String> = self.tabs[i]
+            .scene
+            .document
+            .layer_states()
+            .into_iter()
+            .map(|state| state.name)
+            .collect();
+        let n = (1usize..)
+            .find(|n| {
+                let candidate = format!("Layer State {n}");
+                !names
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(&candidate))
+            })
+            .unwrap_or(1);
+        self.layer_state_name_buf = format!("Layer State {n}");
+    }
+
+    /// Reload the `LayerPanel` cache from the document and push the
+    /// fresh state through to the ribbon dropdown + every other
+    /// layer-aware UI mirror. Use this whenever a command mutates the
+    /// document's layer table directly (LAYOFF / LAYFRZ / LAYLCK …) so
+    /// the panel + dropdown reflect the change. See #39.
+    pub(super) fn refresh_layer_panel(&mut self) {
+        let i = self.active_tab;
+        let doc_layers = self.tabs[i].scene.document.layers.clone();
+        let vp_info = self.tabs[i].scene.viewport_list();
+        let names_before: Vec<String> = self.tabs[i]
+            .layers
+            .layers
+            .iter()
+            .map(|l| l.name.clone())
+            .collect();
+        self.tabs[i]
+            .layers
+            .sync_with_viewports(&doc_layers, vp_info);
+        self.sync_ribbon_layers();
+        // A walk in flight reads the same table: a layer added, renamed or
+        // erased by any other command has to reach its rows, or the override
+        // would go on hiding (or showing) what no longer exists.
+        self.walk_rebuild();
+        // The Properties palette lists layer names it read when it was built;
+        // a layer added, removed or renamed must reach that list too (#1664).
+        // Only then: the rebuild is costly for a large selection.
+        let names_changed = self.tabs[i].layers.layers.len() != names_before.len()
+            || self.tabs[i]
+                .layers
+                .layers
+                .iter()
+                .zip(&names_before)
+                .any(|(layer, before)| layer.name != *before);
+        if names_changed {
+            self.refresh_properties();
+        }
+    }
+
+    /// Pick up layers an entity edit registered on the fly (`ensure_layer`).
+    pub(super) fn sync_registered_layers(&mut self, tab: usize) {
+        if !std::mem::take(&mut self.tabs[tab].scene.layer_table_dirty) {
+            return;
+        }
+        self.tabs[tab].dirty = true;
+        self.refresh_layer_panel();
+    }
+
+    pub(super) fn sync_ribbon_layers(&mut self) {
+        let i = self.active_tab;
+        // The Start (welcome) tab has no document — leave the layer and
+        // linetype dropdowns empty instead of showing a placeholder "0".
+        if self.tabs[i].is_start {
+            self.ribbon.set_layers(vec![], "");
+            self.ribbon.set_available_linetypes(vec![]);
+            self.sync_ribbon_styles();
+            return;
+        }
+        let active = self.tabs[i].active_layer.clone();
+        let vp_column = self.tabs[i].scene.active_viewport.and_then(|vp| {
+            (self.tabs[i].scene.current_layout != "Model")
+                .then(|| {
+                    self.tabs[i]
+                        .layers
+                        .vp_cols
+                        .iter()
+                        .position(|c| c.handle == vp)
+                })
+                .flatten()
+        });
+        let infos: Vec<crate::ui::ribbon::LayerInfo> = self.tabs[i]
+            .layers
+            .layers
+            .iter()
+            // The reference's hidden system layers (`*ADSK_CONSTRAINTS`) stay out.
+            .filter(|l| !l.name.starts_with('*'))
+            .map(|l| crate::ui::ribbon::LayerInfo {
+                stored_color: l.color,
+                name: l.name.clone(),
+                color: crate::ui::window::layers::iced_color_from_acad(&l.color),
+                visible: l.visible,
+                frozen: l.frozen,
+                locked: l.locked,
+                vp_frozen: vp_column
+                    .map(|column| (column, l.vp_frozen.get(column).copied().unwrap_or(false))),
+            })
+            .collect();
+        let names: Vec<String> = infos.iter().map(|l| l.name.clone()).collect();
+        let active = if names.contains(&active) {
+            active
+        } else {
+            "0".to_string()
+        };
+        self.tabs[i].active_layer = active.clone();
+        self.tabs[i].layers.current_layer = active.clone();
+        self.ribbon.set_layers(infos, &active);
+        let mut states: Vec<String> = self.tabs[i]
+            .scene
+            .document
+            .layer_states()
+            .into_iter()
+            .map(|state| state.name)
+            .collect();
+        states.sort_by_key(|name| name.to_lowercase());
+        self.ribbon.layer_states = states;
+        let lt_items: Vec<ui::properties::LinetypeItem> = self.tabs[i]
+            .scene
+            .document
+            .line_types
+            .iter()
+            .map(|lt| {
+                let name = if lt.name.eq_ignore_ascii_case("bylayer") {
+                    "ByLayer".to_string()
+                } else {
+                    lt.name.clone()
+                };
+                let art = crate::io::linetypes::extract_pattern(&lt.description);
+                ui::properties::LinetypeItem { name, art }
+            })
+            .chain(catalog_linetype_items(&self.tabs[i].scene.document))
+            .collect();
+        self.tabs[i].layers.sync_linetypes(lt_items.clone());
+        self.ribbon.set_available_linetypes(lt_items);
+        self.sync_ribbon_styles();
+    }
+
+    pub(super) fn sync_ribbon_styles(&mut self) {
+        let i = self.active_tab;
+        // The Start (welcome) tab has no real document — keep the Annotate
+        // style dropdowns empty rather than showing a placeholder style.
+        if self.tabs[i].is_start {
+            self.ribbon
+                .set_styles(vec![], "", vec![], "", vec![], "", vec![], "");
+            return;
+        }
+        let doc = &self.tabs[i].scene.document;
+
+        let text_names: Vec<String> = doc
+            .text_styles
+            .iter()
+            .filter(|s| !s.is_shape_file)
+            .map(|s| s.name.clone())
+            .collect();
+        let active_text = doc.header.current_text_style_name.clone();
+        let active_text = if text_names.contains(&active_text) {
+            active_text
+        } else {
+            text_names.first().cloned().unwrap_or_default()
+        };
+
+        let dim_names: Vec<String> = doc.dim_styles.iter().map(|s| s.name.clone()).collect();
+        let active_dim = doc.header.current_dimstyle_name.clone();
+        let active_dim = if dim_names.contains(&active_dim) {
+            active_dim
+        } else {
+            dim_names.first().cloned().unwrap_or_default()
+        };
+
+        let mleader_names: Vec<String> = doc
+            .objects
+            .values()
+            .filter_map(|o| {
+                if let codec::objects::ObjectType::MultiLeaderStyle(mls) = o {
+                    Some(mls.name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let current_mleader = doc.header.current_mleader_style_name.clone();
+
+        let active_mleader = mleader_names
+            .iter()
+            .find(|name| name.eq_ignore_ascii_case(&current_mleader))
+            .cloned()
+            .or_else(|| mleader_names.first().cloned())
+            .unwrap_or_default();
+
+        let table_names: Vec<String> = doc
+            .objects
+            .values()
+            .filter_map(|o| {
+                if let codec::objects::ObjectType::TableStyle(ts) = o {
+                    Some(ts.name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let active_table = doc.header.current_table_style_name.clone();
+        let active_table = if table_names.contains(&active_table) {
+            active_table
+        } else {
+            table_names.first().cloned().unwrap_or_default()
+        };
+
+        let active_mleader2 = active_mleader.clone();
+        let active_table2 = active_table.clone();
+        self.ribbon.set_styles(
+            text_names,
+            &active_text,
+            dim_names,
+            &active_dim,
+            mleader_names,
+            &active_mleader2,
+            table_names,
+            &active_table2,
+        );
+    }
+}
+
+/// The catalog linetypes the drawing lacks, offered after its own; a pick
+/// loads the one chosen (`ensure_catalog_linetype`).
+pub(super) fn catalog_linetype_items(
+    document: &codec::Document,
+) -> impl Iterator<Item = ui::properties::LinetypeItem> {
+    crate::io::linetypes::catalog_missing_from(document)
+        .into_iter()
+        .map(|(name, description)| ui::properties::LinetypeItem {
+            name,
+            art: crate::io::linetypes::extract_pattern(&description),
+        })
+}

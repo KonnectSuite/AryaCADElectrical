@@ -1,0 +1,689 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      commit:
+        required: true
+        type: string
+      target:
+        default: all
+        type: string
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Build target
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - snap
+          - macos
+      # Rebuild an already-published release from the commit its tag points at.
+      tag:
+        description: Existing release tag to rebuild (optional)
+        default: ''
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+  # Mirrors .cargo/config.toml so rebuilding a commit that predates the bump
+  # still gives rustc 1.99 enough stack.
+  RUST_MIN_STACK: "67108864"
+
+jobs:
+  build-appimage:
+    # `macos` rebuilds only the dmg of an existing release.
+    if: inputs.target != 'macos'
+    # x86_64 and ARM64 each build natively; the x86_64 payload also feeds
+    # the snap.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit || inputs.tag || github.sha }}
+          # Full history so build.rs can measure the distance from the
+          # release tag; a shallow clone would label the build `+g<hash>`.
+          fetch-depth: 0
+
+      - name: Validate package versions
+        id: version
+        shell: bash
+        run: python3 scripts/release.py versions --tag "$RELEASE_TAG"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            libgl1-mesa-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libxkbcommon-dev libwayland-dev libfontconfig1-dev libfreetype6-dev \
+            librsvg2-bin fuse libfuse2 zsync
+
+      - name: Build
+        env:
+          OCS_PATREON_TOKEN: ${{ secrets.OCS_PATREON_TOKEN }}
+        run: cargo build --locked --release
+
+      - name: Prepare AppDir
+        run: |
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          mkdir -p AppDir/usr/share/metainfo
+          cp target/release/OpenCADStudio AppDir/usr/bin/OpenCADStudio
+          cp packaging/OpenCADStudio.desktop AppDir/usr/share/applications/io.github.HakanSeven12.OpenCadStudio.desktop
+          cp packaging/io.github.HakanSeven12.OpenCadStudio.metainfo.xml AppDir/usr/share/metainfo/
+          rsvg-convert -w 256 -h 256 assets/logo.svg \
+            -o AppDir/usr/share/icons/hicolor/256x256/apps/io.github.HakanSeven12.OpenCadStudio.png
+
+      - name: Pack shared Linux payload
+        if: matrix.arch == 'x86_64'
+        run: tar -C AppDir -czf linux-payload.tar.gz usr
+
+      - name: Upload shared Linux payload
+        if: matrix.arch == 'x86_64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-payload
+          path: linux-payload.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Download linuxdeploy
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.arch }}.AppImage
+          chmod +x linuxdeploy-${{ matrix.arch }}.AppImage
+
+      # The AppImage carries update information so AppImageUpdate and
+      # similar tools can delta-update it from the matching .zsync file.
+      # The .zsync records the AppImage's file name, so it is built under
+      # the name it is uploaded as.
+      - name: Build AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          ASSET: OpenCADStudio-${{ env.RELEASE_TAG || 'dev' }}-linux-${{ matrix.arch }}.AppImage
+          UPDATE_INFO: gh-releases-zsync|${{ github.repository_owner }}|${{ github.event.repository.name }}|latest|OpenCADStudio-*-linux-${{ matrix.arch }}.AppImage.zsync
+        run: |
+          export OUTPUT="$ASSET" LDAI_OUTPUT="$ASSET"
+          export UPDATE_INFORMATION="$UPDATE_INFO" LDAI_UPDATE_INFORMATION="$UPDATE_INFO"
+          ./linuxdeploy-${{ matrix.arch }}.AppImage \
+            --appdir AppDir \
+            --desktop-file AppDir/usr/share/applications/io.github.HakanSeven12.OpenCadStudio.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/io.github.HakanSeven12.OpenCadStudio.png \
+            --output appimage
+          test -f "$ASSET"
+          test -f "$ASSET.zsync" || echo "::warning::no $ASSET.zsync produced"
+
+      - name: Upload AppImage to release
+        if: env.RELEASE_TAG != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ASSET=OpenCADStudio-${{ env.RELEASE_TAG }}-linux-${{ matrix.arch }}.AppImage
+          FILES=("$ASSET")
+          [ -f "$ASSET.zsync" ] && FILES+=("$ASSET.zsync")
+          gh release upload ${{ env.RELEASE_TAG }} "${FILES[@]}" --clobber --repo ${{ github.repository }}
+
+  build-snap:
+    needs: build-appimage
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    concurrency:
+      group: snap
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: write
+    env:
+      SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit || inputs.tag || github.sha }}
+          # Full history so build.rs can measure the distance from the
+          # release tag; a shallow clone would label the build `+g<hash>`.
+          fetch-depth: 0
+
+      - name: Validate package versions
+        id: version
+        shell: bash
+        run: python3 scripts/release.py versions --tag "$RELEASE_TAG"
+
+      - name: Download shared Linux payload
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-payload
+          path: .
+
+      - name: Set package version
+        id: package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          sed -i "s/^version: .*/version: '$VERSION'/" snap/snapcraft.yaml
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build snap
+        id: snapcraft
+        uses: snapcore/action-build@v1
+
+      - name: Normalize snap package name
+        id: snap_package
+        env:
+          SNAP: ${{ steps.snapcraft.outputs.snap }}
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          PACKAGE="OpenCADStudio-v${VERSION}-linux-x86_64.snap"
+          mv "$SNAP" "$PACKAGE"
+          echo "snap=$PACKAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload snap to release
+        if: env.RELEASE_TAG != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SNAP: ${{ steps.snap_package.outputs.snap }}
+        run: gh release upload "${{ env.RELEASE_TAG }}" "$SNAP" --clobber
+
+      - name: Upload snap as workflow artifact
+        if: env.RELEASE_TAG == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenCADStudio-v${{ steps.package.outputs.version }}-linux-x86_64-snap
+          path: ${{ steps.snap_package.outputs.snap }}
+          if-no-files-found: error
+
+      - name: Publish snap to edge
+        if: env.RELEASE_TAG != '' && env.SNAPCRAFT_STORE_CREDENTIALS != ''
+        uses: snapcore/action-publish@v1
+        with:
+          snap: ${{ steps.snap_package.outputs.snap }}
+          release: edge
+
+  build-windows:
+    if: (github.event_name == 'release' || inputs.tag != '' || inputs.target == 'all') && inputs.target != 'macos'
+    # ARM64 is cross-built on the x64 runner, which carries the MSVC ARM64
+    # tools, clang and WiX.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-pc-windows-msvc
+            wix_arch: x64
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+            wix_arch: arm64
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    # Step-level `if:` cannot read the `secrets` context, so the signing
+    # waterfall is driven by these boolean mirrors of the credential secrets.
+    env:
+      AZURE_SIGNING_CONFIGURED: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' }}
+      PFX_CONFIGURED: ${{ secrets.WINDOWS_PFX_BASE64 != '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit || inputs.tag || github.sha }}
+          # Full history so build.rs can measure the distance from the
+          # release tag; a shallow clone would label the build `+g<hash>`.
+          fetch-depth: 0
+
+      - name: Validate package versions
+        id: version
+        shell: bash
+        run: python3 scripts/release.py versions --tag "$RELEASE_TAG"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Convert SVG icon to ICO
+        shell: pwsh
+        run: |
+          magick assets/logo.svg `
+            -define icon:auto-resize=16,24,32,48,64,128,256 `
+            packaging/windows/AppIcon.ico
+
+      - name: Convert DWG/DXF file icons to ICO
+        shell: pwsh
+        run: |
+          # DWG/DXF Explorer file icons, from the single-source mimetype SVGs.
+          # The SVGs are 48x48; rasterize them at 16x that (-density) before
+          # auto-resize, otherwise the 64..256 sizes are upscaled from 48px
+          # and look blurry in Explorer.
+          magick -background none -density 1536 assets/mimetypes/image-vnd.dwg.svg `
+            -define icon:auto-resize=16,24,32,48,64,128,256 `
+            packaging/windows/dwg.ico
+          magick -background none -density 1536 assets/mimetypes/image-vnd.dxf.svg `
+            -define icon:auto-resize=16,24,32,48,64,128,256 `
+            packaging/windows/dxf.ico
+
+      - name: Build
+        env:
+          OCS_PATREON_TOKEN: ${{ secrets.OCS_PATREON_TOKEN }}
+        shell: bash
+        run: |
+          cargo build --locked --release --target ${{ matrix.target }}
+          cargo build --locked --release --target ${{ matrix.target }} -p dwg-thumbnailer-win
+          # Later steps read the build from the host layout.
+          mkdir -p target/release
+          cp target/${{ matrix.target }}/release/OpenCADStudio.exe target/release/
+          cp target/${{ matrix.target }}/release/dwg_thumbnailer_win.dll target/release/
+
+      # Forks do not inherit repository secrets, so every signing step is
+      # gated on its credentials being present and the pipeline falls through:
+      # Azure Trusted Signing (upstream setup) -> PFX certificate -> unsigned.
+      - name: Sign executable (Azure Trusted Signing)
+        if: env.AZURE_SIGNING_CONFIGURED == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
+          files: ${{ github.workspace }}\target\release\OpenCADStudio.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Import signing certificate (PFX fallback)
+        if: env.AZURE_SIGNING_CONFIGURED != 'true' && env.PFX_CONFIGURED == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP "signing.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
+          "Imported signing certificate to $pfxPath"
+
+      - name: Sign executable (certificate)
+        if: env.AZURE_SIGNING_CONFIGURED != 'true' && env.PFX_CONFIGURED == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+        run: |
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.DirectoryName -match 'x64' } |
+            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { throw "signtool.exe not found in the Windows SDK" }
+          & $signtool sign /fd SHA256 /tr https://timestamp.digicert.com /td SHA256 `
+            /f (Join-Path $env:RUNNER_TEMP "signing.pfx") /p $env:WINDOWS_PFX_PASSWORD `
+            (Resolve-Path target\release\OpenCADStudio.exe).Path
+          if ($LASTEXITCODE -ne 0) { throw "signtool failed for the executable" }
+
+      - name: Note unsigned executable
+        if: env.AZURE_SIGNING_CONFIGURED != 'true' && env.PFX_CONFIGURED != 'true'
+        shell: pwsh
+        run: |
+          "No signing credentials configured - add the Azure Trusted Signing secrets or WINDOWS_PFX_BASE64/WINDOWS_PFX_PASSWORD to sign. Building UNSIGNED." >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Build MSI installer
+        shell: pwsh
+        run: |
+          # The package template comes from this workflow's commit, so an
+          # older tag rebuilt here gets the ARM64-capable one.
+          git fetch --no-tags --depth=1 origin ${{ github.workflow_sha }}
+          git show FETCH_HEAD:packaging/windows/main.wxs | Set-Content -Encoding utf8 packaging/windows/main.wxs
+          $version = "${{ steps.version.outputs.msi }}"
+          $candle = Join-Path $env:WIX "bin\candle.exe"
+          $light  = Join-Path $env:WIX "bin\light.exe"
+          $exePath  = (Resolve-Path target\release\OpenCADStudio.exe).Path
+          $iconPath = (Resolve-Path packaging\windows\AppIcon.ico).Path
+          # GPL-3 license RTF shown on the installer's EULA page.
+          $licensePath = (Resolve-Path packaging\windows\License.rtf).Path
+          # main.wxs holds the package/feature; ui.wxs holds the installer UI
+          # and finish-screen launch checkbox. Both compile together.
+          $mainWxs  = (Resolve-Path packaging\windows\main.wxs).Path
+          $dllPath  = (Resolve-Path target\release\dwg_thumbnailer_win.dll).Path
+          $uiWxs     = (Resolve-Path packaging\windows\ui.wxs).Path
+          # candle writes one .wixobj per source into this directory (the
+          # trailing slash tells it -out is a folder, not a single file).
+          $objDir   = Join-Path $PWD "packaging\windows\"
+          $msiPath  = Join-Path $PWD "OpenCADStudio.msi"
+          & $candle -arch ${{ matrix.wix_arch }} `
+            "-dVersion=$version" `
+            "-dSource=$exePath" `
+            "-dThumbDll=$dllPath" `
+            "-dIcon=$iconPath" `
+            "-dLicense=$licensePath" `
+            $mainWxs $uiWxs `
+            -out $objDir
+          if ($LASTEXITCODE -ne 0) { throw "candle failed" }
+          $mainObj = Join-Path $objDir "main.wixobj"
+          $uiObj   = Join-Path $objDir "ui.wixobj"
+          & $light $mainObj $uiObj -ext WixUIExtension -cultures:en-us -loc packaging/windows/strings.en-US.wxl -out $msiPath
+          if ($LASTEXITCODE -ne 0) { throw "light failed" }
+
+      - name: Sign MSI installer (Azure Trusted Signing)
+        # The installer itself must be signed separately - light produces a
+        # fresh, unsigned .msi even though the .exe inside is already signed.
+        if: env.AZURE_SIGNING_CONFIGURED == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
+          files: ${{ github.workspace }}\OpenCADStudio.msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Sign MSI installer (certificate)
+        if: env.AZURE_SIGNING_CONFIGURED != 'true' && env.PFX_CONFIGURED == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+        run: |
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.DirectoryName -match 'x64' } |
+            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { throw "signtool.exe not found in the Windows SDK" }
+          & $signtool sign /fd SHA256 /tr https://timestamp.digicert.com /td SHA256 `
+            /f (Join-Path $env:RUNNER_TEMP "signing.pfx") /p $env:WINDOWS_PFX_PASSWORD `
+            (Resolve-Path OpenCADStudio.msi).Path
+          if ($LASTEXITCODE -ne 0) { throw "signtool failed for the MSI" }
+
+      - name: Note unsigned MSI
+        if: env.AZURE_SIGNING_CONFIGURED != 'true' && env.PFX_CONFIGURED != 'true'
+        shell: pwsh
+        run: |
+          "MSI left unsigned - no signing credentials configured." >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload artifacts to release
+        if: env.RELEASE_TAG != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ env.RELEASE_TAG }}"
+          $exe = "OpenCADStudio-$tag-windows-${{ matrix.arch }}-portable.exe"
+          $msi = "OpenCADStudio-$tag-windows-${{ matrix.arch }}-installer.msi"
+          Move-Item target\release\OpenCADStudio.exe $exe
+          Move-Item OpenCADStudio.msi $msi
+          gh release upload $tag `
+            $exe $msi `
+            --clobber --repo ${{ github.repository }}
+
+  build-macos:
+    if: github.event_name == 'release' || inputs.tag != '' || inputs.target == 'all' || inputs.target == 'macos'
+    # Both builds run on the Apple Silicon runner; Intel is cross-built and
+    # checked under Rosetta.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            swift: arm64-apple-macos11
+          - arch: x86_64
+            target: x86_64-apple-darwin
+            swift: x86_64-apple-macos11
+    runs-on: macos-15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit || inputs.tag || github.sha }}
+          # Full history so build.rs can measure the distance from the
+          # release tag; a shallow clone would label the build `+g<hash>`.
+          fetch-depth: 0
+
+      - name: Validate package versions
+        id: version
+        shell: bash
+        run: python3 scripts/release.py versions --tag "$RELEASE_TAG"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install librsvg (for rsvg-convert)
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install librsvg
+
+      - name: Build
+        env:
+          OCS_PATREON_TOKEN: ${{ secrets.OCS_PATREON_TOKEN }}
+        run: |
+          cargo build --locked --release --target ${{ matrix.target }}
+          cargo build --locked --release --target ${{ matrix.target }} -p dwg-thumbnailer
+          # The launcher shim is the .app's actual CFBundleExecutable (#1039)
+          # — see src/bin/ocs_launcher.rs for why.
+          cargo build --locked --release --target ${{ matrix.target }} --bin ocs_launcher
+
+      - name: Build .icns from SVG
+        run: |
+          mkdir -p OpenCADStudio.iconset
+          # Render all the sizes Apple expects in an .icns.
+          for SIZE in 16 32 64 128 256 512 1024; do
+            rsvg-convert -w $SIZE -h $SIZE assets/logo.svg -o OpenCADStudio.iconset/icon_${SIZE}x${SIZE}.png
+          done
+          # @2x retina variants (half-size base name)
+          for BASE in 16 32 128 256 512; do
+            DOUBLE=$((BASE * 2))
+            cp OpenCADStudio.iconset/icon_${DOUBLE}x${DOUBLE}.png OpenCADStudio.iconset/icon_${BASE}x${BASE}@2x.png
+          done
+          iconutil -c icns OpenCADStudio.iconset -o AppIcon.icns
+
+      - name: Build DWG/DXF document .icns from the same SVG sources
+        run: |
+          # Finder document icons (Info.plist CFBundleTypeIconFile = DWG/DXF),
+          # generated from the single-source mimetype SVGs — never hand-drawn.
+          for T in dwg dxf; do
+            mkdir -p "$T.iconset"
+            for SIZE in 16 32 64 128 256 512 1024; do
+              rsvg-convert -w $SIZE -h $SIZE "assets/mimetypes/image-vnd.$T.svg" \
+                -o "$T.iconset/icon_${SIZE}x${SIZE}.png"
+            done
+            for BASE in 16 32 128 256 512; do
+              cp "$T.iconset/icon_$((BASE*2))x$((BASE*2)).png" \
+                 "$T.iconset/icon_${BASE}x${BASE}@2x.png"
+            done
+            iconutil -c icns "$T.iconset" -o "$(echo "$T" | tr a-z A-Z).icns"
+          done
+
+      - name: Build DWG QuickLook thumbnail extension (.appex)
+        run: |
+          set -e
+          VERSION="${{ steps.version.outputs.cargo }}"
+          EXT=DWGThumbnail.appex
+          rm -rf "$EXT"; mkdir -p "$EXT/Contents/MacOS"
+          swiftc \
+            -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+            -target ${{ matrix.swift }} \
+            -O -parse-as-library -application-extension \
+            -module-name DWGThumbnail \
+            -import-objc-header crates/dwg-thumbnailer/macos/dwg_thumbnailer.h \
+            crates/dwg-thumbnailer/macos/ThumbnailProvider.swift \
+            -L target/${{ matrix.target }}/release -ldwg_thumbnailer \
+            -framework QuickLookThumbnailing -framework CoreGraphics \
+            -framework ImageIO -framework Foundation -framework Security \
+            -framework SystemConfiguration -liconv \
+            -Xlinker -e -Xlinker _NSExtensionMain \
+            -o "$EXT/Contents/MacOS/DWGThumbnail"
+          sed "s/__VERSION__/$VERSION/g" crates/dwg-thumbnailer/macos/Info.plist > "$EXT/Contents/Info.plist"
+
+      - name: Assemble .app bundle
+        run: |
+          APP=OpenCADStudio.app
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/PlugIns"
+          # Finder opens the launcher, which relays files to the sibling GUI.
+          cp target/${{ matrix.target }}/release/ocs_launcher "$APP/Contents/MacOS/OpenCADStudio"
+          cp target/${{ matrix.target }}/release/OpenCADStudio "$APP/Contents/MacOS/OpenCADStudio-App"
+          chmod +x "$APP/Contents/MacOS/OpenCADStudio" "$APP/Contents/MacOS/OpenCADStudio-App"
+          cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+          cp DWG.icns DXF.icns "$APP/Contents/Resources/"
+          # First-party Python scripting plugin. It remains out of process and
+          # uses the same API/toolchain as this host build. Its own lock file
+          # has to name the codec the plugin API pins, and a codec bump that
+          # forgot it failed the --locked build (v2026.42); follow the pin
+          # here, which also lets an older tag be rebuilt.
+          cargo update -p acadrust --manifest-path plugins/opencad-python/Cargo.toml
+          # Stage with this workflow's own copy of the staging script: a
+          # rebuilt older tag may carry one that no longer reads its lock
+          # (v2026.42 looked for the codec under its pre-rename name).
+          git fetch --no-tags --depth=1 origin ${{ github.workflow_sha }}
+          git show FETCH_HEAD:plugins/opencad-python/tools/stage-bundled.sh \
+            > plugins/opencad-python/tools/stage-bundled.sh
+          bash plugins/opencad-python/tools/stage-bundled.sh \
+            "$APP/Contents/Resources/plugins/opencad.python" \
+            --target ${{ matrix.target }}
+          # QuickLook thumbnail extension.
+          cp -R DWGThumbnail.appex "$APP/Contents/PlugIns/"
+          # Substitute version into Info.plist.
+          VERSION="${{ steps.version.outputs.cargo }}"
+          sed "s/__VERSION__/$VERSION/g" packaging/Info.plist > "$APP/Contents/Info.plist"
+
+      - name: Ad-hoc code-sign the bundle
+        run: |
+          codesign --force --sign - --timestamp=none OpenCADStudio.app/Contents/MacOS/OpenCADStudio-App
+          codesign --force --sign - --timestamp=none \
+            --entitlements crates/dwg-thumbnailer/macos/entitlements.plist \
+            OpenCADStudio.app/Contents/PlugIns/DWGThumbnail.appex
+          codesign --force --sign - --timestamp=none OpenCADStudio.app
+          codesign --verify --deep --strict --verbose=2 OpenCADStudio.app
+          # --xml keeps newer codesign builds from prefixing text headers,
+          # which made the entitlements parse fail with InvalidFileException.
+          codesign -d --entitlements - --xml OpenCADStudio.app/Contents/PlugIns/DWGThumbnail.appex \
+            | python3 -c 'import io, plistlib, sys; ent = plistlib.load(io.BytesIO(sys.stdin.buffer.read())); print("entitlements:", ent); assert ent.get("com.apple.security.app-sandbox") is True'
+
+      # The check script comes from the workflow's own commit, so rebuilding
+      # an older tag runs today's check rather than the one it shipped with.
+      - name: Checkout check scripts
+        uses: actions/checkout@v4
+        with:
+          path: ci-scripts
+          sparse-checkout: docs/automation
+
+      # Exercise CFBundleExecutable, not just the inner application: the
+      # Finder launcher must preserve --mcp and the client's stdio pipes.
+      - name: Install Rosetta for the Intel build's checks
+        if: matrix.arch == 'x86_64'
+        run: softwareupdate --install-rosetta --agree-to-license || true
+
+      - name: Verify packaged MCP handshake
+        timeout-minutes: 5
+        env:
+          # Rosetta translates the Intel build on its first start, which
+          # takes far longer than a native start.
+          OCS_HANDSHAKE_TIMEOUT: ${{ matrix.arch == 'x86_64' && '180' || '10' }}
+        run: python3 ci-scripts/docs/automation/mcp_handshake.py OpenCADStudio.app/Contents/MacOS/OpenCADStudio
+
+      # Stage the app beside an /Applications symlink so the mounted image
+      # offers drag-to-install (#769), matching packaging/build_macos_signed.sh.
+      - name: Create .dmg
+        run: |
+          rm -rf dmg-staging
+          mkdir dmg-staging
+          cp -R OpenCADStudio.app dmg-staging/
+          ln -s /Applications dmg-staging/Applications
+          set +e
+          for attempt in 1 2 3 4 5; do
+            hdiutil detach "/Volumes/Open CAD Studio" >/dev/null 2>&1 || true
+            rm -f OpenCADStudio.dmg
+            hdiutil create \
+              -volname "Open CAD Studio" \
+              -srcfolder dmg-staging \
+              -ov -format UDZO \
+              OpenCADStudio.dmg && break
+            echo "hdiutil create failed (attempt $attempt) — retrying in 5s"
+            sleep 5
+          done
+          set -e
+          test -f OpenCADStudio.dmg
+          rm -rf dmg-staging
+
+      - name: Verify .dmg layout
+        run: |
+          MNT=$(mktemp -d)
+          hdiutil attach -readonly -nobrowse -mountpoint "$MNT" OpenCADStudio.dmg
+          ls -la "$MNT"
+          test -d "$MNT/OpenCADStudio.app"
+          test "$(readlink "$MNT/Applications")" = /Applications
+          codesign --verify --deep --strict "$MNT/OpenCADStudio.app"
+          hdiutil detach "$MNT"
+
+      - name: Upload .dmg as workflow artifact
+        if: env.RELEASE_TAG == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenCADStudio-macos-${{ matrix.arch }}-dmg
+          path: OpenCADStudio.dmg
+          if-no-files-found: error
+
+      - name: Upload .dmg to release
+        if: env.RELEASE_TAG != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ASSET=OpenCADStudio-${{ env.RELEASE_TAG }}-macos-${{ matrix.arch }}.dmg
+          mv OpenCADStudio.dmg "$ASSET"
+          gh release upload ${{ env.RELEASE_TAG }} "$ASSET" --clobber --repo ${{ github.repository }}
+
+      - name: Emit Homebrew cask sha256
+        if: env.RELEASE_TAG != ''
+        run: |
+          VERSION="${{ env.RELEASE_TAG }}"
+          VERSION="${VERSION#v}"
+          SHA=$(shasum -a 256 OpenCADStudio-${{ env.RELEASE_TAG }}-macos-${{ matrix.arch }}.dmg | awk '{print $1}')
+          {
+            echo "## Homebrew cask bump (${{ matrix.arch }})"
+            echo "Update \`packaging/homebrew/open-cad-studio.rb\`:"
+            echo '```ruby'
+            echo "  version \"$VERSION\""
+            echo "  sha256 \"$SHA\""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    needs: [build-appimage, build-snap, build-windows, build-macos]
+    if: github.event_name == 'release' || inputs.tag != ''
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit || inputs.tag || github.sha }}
+      - name: Verify native release assets and notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release.py verify-native --tag "$RELEASE_TAG"

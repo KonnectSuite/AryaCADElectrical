@@ -1,0 +1,794 @@
+use crate::app::OpenCADStudio;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+/// 5x7 bitmapped font glyphs for digits '0' through '9'
+const DIGITS_5X7: [[u8; 7]; 10] = [
+    [
+        0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+    ], // 0
+    [
+        0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+    ], // 1
+    [
+        0b01110, 0b10001, 0b00001, 0b00110, 0b01000, 0b10000, 0b11111,
+    ], // 2
+    [
+        0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110,
+    ], // 3
+    [
+        0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+    ], // 4
+    [
+        0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
+    ], // 5
+    [
+        0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+    ], // 6
+    [
+        0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+    ], // 7
+    [
+        0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+    ], // 8
+    [
+        0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100,
+    ], // 9
+];
+
+/// Draw a Set-of-Marks badge at `(center_x, center_y)` onto `image`.
+pub(crate) fn draw_som_badge(
+    image: &mut image::RgbaImage,
+    center_x: i32,
+    center_y: i32,
+    tag: usize,
+    selected: bool,
+) {
+    let tag_str = tag.to_string();
+    let num_digits = tag_str.len();
+    if num_digits == 0 {
+        return;
+    }
+    let text_w = num_digits * 5 + (num_digits - 1) * 1;
+    let badge_w = (text_w + 8) as i32;
+    let badge_h = 13i32;
+
+    let img_w = image.width() as i32;
+    let img_h = image.height() as i32;
+
+    // Anchor badge slightly above the center anchor point if possible
+    let x0 = (center_x - badge_w / 2).clamp(1, (img_w - badge_w - 1).max(1));
+    let y0 = (center_y - badge_h - 2).clamp(1, (img_h - badge_h - 1).max(1));
+
+    let (bg, border, text_col) = if selected {
+        (
+            image::Rgba([0, 230, 255, 245]), // Electric cyan
+            image::Rgba([0, 60, 80, 255]),
+            image::Rgba([0, 0, 0, 255]),
+        )
+    } else {
+        (
+            image::Rgba([255, 220, 0, 245]), // Vibrant yellow
+            image::Rgba([40, 30, 0, 255]),
+            image::Rgba([0, 0, 0, 255]),
+        )
+    };
+
+    // Fill badge background and border
+    for y in y0..(y0 + badge_h) {
+        for x in x0..(x0 + badge_w) {
+            if x < 0 || x >= img_w || y < 0 || y >= img_h {
+                continue;
+            }
+            let is_border = x == x0 || x == x0 + badge_w - 1 || y == y0 || y == y0 + badge_h - 1;
+            let col = if is_border { border } else { bg };
+            image.put_pixel(x as u32, y as u32, col);
+        }
+    }
+
+    // Draw digits
+    let mut cur_x = x0 + 4;
+    let cur_y = y0 + 3;
+    for ch in tag_str.chars() {
+        if let Some(digit) = ch.to_digit(10) {
+            let d = digit as usize;
+            if d < 10 {
+                for r in 0..7 {
+                    let row_bits = DIGITS_5X7[d][r];
+                    for c in 0..5 {
+                        if (row_bits & (1 << (4 - c))) != 0 {
+                            let px = cur_x + c as i32;
+                            let py = cur_y + r as i32;
+                            if px >= 0 && px < img_w && py >= 0 && py < img_h {
+                                image.put_pixel(px as u32, py as u32, text_col);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        cur_x += 6;
+    }
+
+    // Small 3x3 indicator dot at the center anchor
+    let dot_col = if selected {
+        image::Rgba([0, 230, 255, 255])
+    } else {
+        image::Rgba([255, 60, 0, 255])
+    };
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            let px = center_x + dx;
+            let py = center_y + dy;
+            if px >= 0 && px < img_w && py >= 0 && py < img_h {
+                image.put_pixel(px as u32, py as u32, dot_col);
+            }
+        }
+    }
+}
+
+pub(crate) struct VisionGrounding {
+    pub viewport_world_bounds: Value,
+    pub camera: Value,
+    pub target_plane: Value,
+    pub pixel_to_world_matrix: [f64; 6],
+    pub world_to_pixel_matrix: [f64; 6],
+    pub visible_entities: Vec<Value>,
+}
+
+pub(crate) fn compute_grounding(
+    app: &OpenCADStudio,
+    vp_logical_width: f32,
+    vp_logical_height: f32,
+    image_width: u32,
+    image_height: u32,
+) -> VisionGrounding {
+    let tab = &app.tabs[app.active_tab];
+    let c = tab.scene.camera.borrow();
+    let vp_rect = iced::Rectangle {
+        x: 0.0,
+        y: 0.0,
+        width: vp_logical_width.max(1.0),
+        height: vp_logical_height.max(1.0),
+    };
+
+    let p_tl = c.pick_on_target_plane(iced::Point::new(0.0, 0.0), vp_rect);
+    let p_tr = c.pick_on_target_plane(iced::Point::new(vp_rect.width, 0.0), vp_rect);
+    let p_bl = c.pick_on_target_plane(iced::Point::new(0.0, vp_rect.height), vp_rect);
+    let p_br = c.pick_on_target_plane(iced::Point::new(vp_rect.width, vp_rect.height), vp_rect);
+
+    let min_x = p_tl.x.min(p_tr.x).min(p_bl.x).min(p_br.x);
+    let max_x = p_tl.x.max(p_tr.x).max(p_bl.x).max(p_br.x);
+    let min_y = p_tl.y.min(p_tr.y).min(p_bl.y).min(p_br.y);
+    let max_y = p_tl.y.max(p_tr.y).max(p_bl.y).max(p_br.y);
+
+    let viewport_world_bounds = json!({
+        "min": [min_x, min_y],
+        "max": [max_x, max_y]
+    });
+
+    let eye = c.eye();
+    let target = c.target;
+
+    let normal = (c.rotation * glam::Vec3::NEG_Z).normalize_or(glam::Vec3::Z);
+    let target_plane = json!({
+        "normal": [normal.x, normal.y, normal.z],
+        "origin": [target.x, target.y, target.z],
+    });
+
+    let proj_name = match c.projection {
+        crate::scene::view::camera::Projection::Orthographic => "Orthographic",
+        crate::scene::view::camera::Projection::Perspective => "Perspective",
+    };
+    let camera_info = json!({
+        "eye": [eye.x, eye.y, eye.z],
+        "target": [target.x, target.y, target.z],
+        "distance": c.distance,
+        "ortho_size": c.ortho_size(),
+        "projection": proj_name,
+        "fov_y": c.fov_y,
+    });
+
+    let p_origin = p_tl;
+    let p_right = p_tr;
+    let p_bottom = p_bl;
+
+    let d_x = (p_right - p_origin) / (image_width as f64).max(1.0);
+    let d_y = (p_bottom - p_origin) / (image_height as f64).max(1.0);
+
+    let m00 = d_x.x;
+    let m01 = d_y.x;
+    let tx = p_origin.x;
+    let m10 = d_x.y;
+    let m11 = d_y.y;
+    let ty = p_origin.y;
+
+    let det = m00 * m11 - m01 * m10;
+    let (inv_m00, inv_m01, inv_m10, inv_m11, inv_tx, inv_ty) = if det.abs() > 1e-12 {
+        let inv_m00 = m11 / det;
+        let inv_m01 = -m01 / det;
+        let inv_m10 = -m10 / det;
+        let inv_m11 = m00 / det;
+        let inv_tx = -(inv_m00 * tx + inv_m01 * ty);
+        let inv_ty = -(inv_m10 * tx + inv_m11 * ty);
+        (inv_m00, inv_m01, inv_m10, inv_m11, inv_tx, inv_ty)
+    } else {
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    };
+
+    let pixel_to_world_matrix = [m00, m01, m10, m11, tx, ty];
+    let world_to_pixel_matrix = [inv_m00, inv_m01, inv_m10, inv_m11, inv_tx, inv_ty];
+
+    let img_w = image_width as f32;
+    let img_h = image_height as f32;
+
+    struct Candidate {
+        handle: codec::Handle,
+        entity_type: &'static str,
+        layer: String,
+        owner: codec::Handle,
+        space: Option<String>,
+        screen_pixel: [i32; 2],
+        screen_bounds: [i32; 4],
+        world_center: [f64; 3],
+        selected: bool,
+        area: f32,
+    }
+
+    let selected_set: std::collections::HashSet<codec::Handle> =
+        tab.scene.selected_handles_in_order().into_iter().collect();
+    let space_names: rustc_hash::FxHashMap<codec::Handle, String> = tab
+        .scene
+        .document
+        .block_records
+        .iter()
+        .map(|record| (record.handle, record.name.clone()))
+        .collect();
+
+    let mut candidates = Vec::new();
+
+    for entity in tab.scene.document.entities() {
+        let handle = entity.common().handle;
+        let (b_min, b_max) =
+            crate::scene::convert::tess::entity_bounds_in(&tab.scene.document, entity);
+        let min_dvec = glam::DVec3::from(b_min);
+        let max_dvec = glam::DVec3::from(b_max);
+        if !min_dvec.is_finite() || !max_dvec.is_finite() {
+            continue;
+        }
+        let center = (min_dvec + max_dvec) * 0.5;
+        if let Some(screen_pt) = c.project(center, vp_rect) {
+            if screen_pt.x >= 0.0
+                && screen_pt.x <= vp_rect.width
+                && screen_pt.y >= 0.0
+                && screen_pt.y <= vp_rect.height
+            {
+                let px = (screen_pt.x / vp_rect.width * img_w).round() as i32;
+                let py = (screen_pt.y / vp_rect.height * img_h).round() as i32;
+
+                let mut s_min_x = px;
+                let mut s_max_x = px;
+                let mut s_min_y = py;
+                let mut s_max_y = py;
+
+                if let (Some(p0), Some(p1)) =
+                    (c.project(min_dvec, vp_rect), c.project(max_dvec, vp_rect))
+                {
+                    let x0 = (p0.x / vp_rect.width * img_w).round() as i32;
+                    let y0 = (p0.y / vp_rect.height * img_h).round() as i32;
+                    let x1 = (p1.x / vp_rect.width * img_w).round() as i32;
+                    let y1 = (p1.y / vp_rect.height * img_h).round() as i32;
+                    s_min_x = x0.min(x1);
+                    s_max_x = x0.max(x1);
+                    s_min_y = y0.min(y1);
+                    s_max_y = y0.max(y1);
+                }
+
+                // An unbounded entity (XLINE, RAY) projects to saturated i32
+                // corners, whose difference overflows i32.
+                let width = (f64::from(s_max_x) - f64::from(s_min_x)).abs();
+                let area = (width * (f64::from(s_max_y) - f64::from(s_min_y)).abs()) as f32;
+                let selected = selected_set.contains(&handle);
+                let layer = entity.common().layer.clone();
+                let owner = entity.common().owner_handle;
+
+                candidates.push(Candidate {
+                    handle,
+                    entity_type: crate::entities::names::ui_name(entity),
+                    layer,
+                    owner,
+                    space: space_names.get(&owner).cloned(),
+                    screen_pixel: [px, py],
+                    screen_bounds: [s_min_x, s_min_y, s_max_x, s_max_y],
+                    world_center: [center.x, center.y, center.z],
+                    selected,
+                    area,
+                });
+            }
+        }
+    }
+
+    // Selected entities prioritized, then larger visual area first
+    candidates.sort_by(|a, b| {
+        b.selected.cmp(&a.selected).then_with(|| {
+            b.area
+                .partial_cmp(&a.area)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    });
+
+    candidates.truncate(64);
+
+    let visible_entities = candidates
+        .into_iter()
+        .enumerate()
+        .map(|(idx, cand)| {
+            json!({
+                "tag": idx + 1,
+                "handle": format!("{:X}", cand.handle.value()),
+                "type": cand.entity_type,
+                "layer": cand.layer,
+                "owner": format!("{:X}", cand.owner.value()),
+                "space": cand.space,
+                "constraints": crate::app::automation::constraint_records_json(
+                    &tab.scene, cand.handle,
+                ),
+                "screen_pixel": cand.screen_pixel,
+                "screen_bounds": cand.screen_bounds,
+                "world_center": cand.world_center,
+                "selected": cand.selected
+            })
+        })
+        .collect();
+
+    VisionGrounding {
+        viewport_world_bounds,
+        camera: camera_info,
+        target_plane,
+        pixel_to_world_matrix,
+        world_to_pixel_matrix,
+        visible_entities,
+    }
+}
+
+pub(crate) fn encode_image_png(img: &image::RgbaImage) -> Result<Vec<u8>, String> {
+    use std::io::Cursor;
+    let mut buf = Cursor::new(Vec::new());
+    img.write_to(&mut buf, image::ImageFormat::Png)
+        .map_err(|e| format!("Failed to encode PNG: {e}"))?;
+    Ok(buf.into_inner())
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PyramidLevelInfo {
+    pub level: u32,
+    pub grid: [u32; 2],
+    pub tile_world_span: [f64; 2],
+    pub tiles_count: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PyramidManifest {
+    pub crs: String,
+    pub unit: String,
+    pub world_bounds: [f64; 4],
+    pub max_level: u32,
+    pub tile_size: u32,
+    pub tile_uri_template: String,
+    pub levels: Vec<PyramidLevelInfo>,
+}
+
+pub fn compute_pyramid_manifest(
+    session_id: &str,
+    unit: &str,
+    world_bounds: [f64; 4],
+    max_level: u32,
+    tile_size: u32,
+) -> PyramidManifest {
+    let min_x = world_bounds[0];
+    let min_y = world_bounds[1];
+    let max_x = world_bounds[2];
+    let max_y = world_bounds[3];
+
+    let w = (max_x - min_x).abs().max(1e-4);
+    let h = (max_y - min_y).abs().max(1e-4);
+
+    let max_lvl = max_level.clamp(1, 6);
+    let mut levels = Vec::new();
+
+    for level in 0..=max_lvl {
+        let cols = 1u32 << level;
+        let rows = 1u32 << level;
+        let tile_w = w / cols as f64;
+        let tile_h = h / rows as f64;
+        levels.push(PyramidLevelInfo {
+            level,
+            grid: [cols, rows],
+            tile_world_span: [tile_w, tile_h],
+            tiles_count: cols * rows,
+        });
+    }
+
+    PyramidManifest {
+        crs: "CAD_WCS".to_string(),
+        unit: unit.to_string(),
+        world_bounds: [min_x, min_y, max_x, max_y],
+        max_level: max_lvl,
+        tile_size,
+        tile_uri_template: format!("cad://session/{session_id}/tile/{{level}}/{{x}}/{{y}}.png"),
+        levels,
+    }
+}
+
+pub fn compute_tile_bounds(
+    manifest_world_bounds: [f64; 4],
+    level: u32,
+    x: u32,
+    y: u32,
+) -> Result<[f64; 4], String> {
+    let cols = 1u32 << level;
+    let rows = 1u32 << level;
+
+    if x >= cols || y >= rows {
+        return Err(format!(
+            "Tile coordinates ({x}, {y}) out of range for level {level} (grid is {cols}x{rows})"
+        ));
+    }
+
+    let min_x = manifest_world_bounds[0];
+    let min_y = manifest_world_bounds[1];
+    let max_x = manifest_world_bounds[2];
+    let max_y = manifest_world_bounds[3];
+
+    let w = (max_x - min_x).abs().max(1e-4);
+    let h = (max_y - min_y).abs().max(1e-4);
+
+    let tile_w = w / cols as f64;
+    let tile_h = h / rows as f64;
+
+    let t_min_x = min_x + (x as f64) * tile_w;
+    let t_max_x = t_min_x + tile_w;
+    let t_max_y = max_y - (y as f64) * tile_h;
+    let t_min_y = t_max_y - tile_h;
+
+    Ok([t_min_x, t_min_y, t_max_x, t_max_y])
+}
+
+#[allow(dead_code)]
+pub fn point_to_tile(
+    manifest_world_bounds: [f64; 4],
+    level: u32,
+    point_x: f64,
+    point_y: f64,
+) -> (u32, u32) {
+    let cols = 1u32 << level;
+    let rows = 1u32 << level;
+
+    let min_x = manifest_world_bounds[0];
+    let min_y = manifest_world_bounds[1];
+    let max_x = manifest_world_bounds[2];
+    let max_y = manifest_world_bounds[3];
+
+    let w = (max_x - min_x).abs().max(1e-4);
+    let h = (max_y - min_y).abs().max(1e-4);
+
+    let tile_w = w / cols as f64;
+    let tile_h = h / rows as f64;
+
+    let tx = (((point_x - min_x) / tile_w).floor() as i64).clamp(0, (cols - 1) as i64) as u32;
+    let ty = (((max_y - point_y) / tile_h).floor() as i64).clamp(0, (rows - 1) as i64) as u32;
+
+    (tx, ty)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_draw_som_badge_renders_without_panics() {
+        let mut img = image::RgbaImage::from_pixel(120, 100, image::Rgba([40, 40, 40, 255]));
+
+        // Render normal badge
+        draw_som_badge(&mut img, 50, 50, 1, false);
+
+        // Center dot should be drawn
+        let dot = img.get_pixel(50, 50);
+        assert_eq!(*dot, image::Rgba([255, 60, 0, 255]));
+
+        // Render selected badge with multi-digit tag near edge (clamped)
+        draw_som_badge(&mut img, 2, 2, 42, true);
+        let selected_dot = img.get_pixel(2, 2);
+        assert_eq!(*selected_dot, image::Rgba([0, 230, 255, 255]));
+
+        // Right edge clamp
+        draw_som_badge(&mut img, 118, 98, 99, false);
+    }
+
+    #[test]
+    fn test_compute_grounding_identifies_visible_entities() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"CIRCLE 0,0 5"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"LINE -10,-10 10,10"}"#);
+
+        // Set test canvas viewport size
+        app.tabs[0].scene.selection.borrow_mut().view.vp_size = (800.0, 600.0);
+        app.tabs[0].scene.fit_all();
+
+        let grounding = compute_grounding(&app, 800.0, 600.0, 800, 600);
+
+        // Viewport world bounds should be valid
+        assert!(grounding.viewport_world_bounds["min"].is_array());
+        assert!(grounding.viewport_world_bounds["max"].is_array());
+
+        // Camera info should be populated with projection
+        assert!(grounding.camera["eye"].is_array());
+        assert!(grounding.camera["target"].is_array());
+        assert_eq!(grounding.camera["projection"], "Orthographic");
+
+        // Target plane normal and origin
+        assert!(grounding.target_plane["normal"].is_array());
+        assert!(grounding.target_plane["origin"].is_array());
+
+        // Affine matrices: test forward and inverse round-trip
+        let p2w = grounding.pixel_to_world_matrix;
+        let w2p = grounding.world_to_pixel_matrix;
+
+        // Center pixel (400, 300) should project to camera target (within 1e-4)
+        let cx = 400.0;
+        let cy = 300.0;
+        let wx = p2w[0] * cx + p2w[1] * cy + p2w[4];
+        let wy = p2w[2] * cx + p2w[3] * cy + p2w[5];
+        let target_x = grounding.camera["target"][0].as_f64().unwrap();
+        let target_y = grounding.camera["target"][1].as_f64().unwrap();
+        assert!((wx - target_x).abs() < 1e-3, "wx={wx}, target_x={target_x}");
+        assert!((wy - target_y).abs() < 1e-3, "wy={wy}, target_y={target_y}");
+
+        // Inverse mapping of (wx, wy) should return (400, 300)
+        let inv_px = w2p[0] * wx + w2p[1] * wy + w2p[4];
+        let inv_py = w2p[2] * wx + w2p[3] * wy + w2p[5];
+        assert!((inv_px - cx).abs() < 1e-3, "inv_px={inv_px}, cx={cx}");
+        assert!((inv_py - cy).abs() < 1e-3, "inv_py={inv_py}, cy={cy}");
+
+        // Both entities should be visible and tagged
+        assert_eq!(grounding.visible_entities.len(), 2);
+
+        let first = &grounding.visible_entities[0];
+        assert_eq!(first["tag"], 1);
+        assert!(first["handle"].is_string());
+        assert!(first["type"].is_string());
+        assert!(first["screen_pixel"].is_array());
+        assert!(first["screen_bounds"].is_array());
+        assert!(first["world_center"].is_array());
+
+        let second = &grounding.visible_entities[1];
+        assert_eq!(second["tag"], 2);
+    }
+
+    #[test]
+    fn grounding_names_the_space_each_visible_entity_is_drawn_in() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 10,0"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"LINE 20,0 30,0"}"#);
+        let q = app.automation_op(r#"{"op":"query","type":"Line","detail":"summary"}"#);
+        let handles: Vec<String> = q["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entity| entity["handle"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(handles.len(), 2, "{q}");
+        let doc = app.automation_op(r#"{"protocol":1,"op":"state"}"#)["document_id"]
+            .as_u64()
+            .unwrap();
+        let defined = app.automation_op(&format!(
+            r#"{{"protocol":1,"op":"block_define","request_id":"g1","document_id":{doc},"name":"SPACE_SRC","base":[0,0,0],"handles":["{}"]}}"#,
+            handles[1]
+        ));
+        assert_eq!(defined["ok"], true, "{defined}");
+
+        app.tabs[0].scene.selection.borrow_mut().view.vp_size = (800.0, 600.0);
+        app.tabs[0].scene.fit_all();
+        let grounding = compute_grounding(&app, 800.0, 600.0, 800, 600);
+        let visible = |space: &str| {
+            grounding
+                .visible_entities
+                .iter()
+                .find(|entity| entity["space"] == space)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{space} is not grounded: {:?}",
+                        grounding.visible_entities
+                    )
+                })
+                .clone()
+        };
+        let model = visible("*Model_Space");
+        assert_eq!(model["handle"], handles[0].as_str(), "{model}");
+        let child = visible("SPACE_SRC");
+        assert_ne!(child["owner"], model["owner"], "{model} {child}");
+        assert_ne!(child["handle"], model["handle"], "{model} {child}");
+    }
+
+    #[test]
+    fn grounding_names_the_constraints_on_each_visible_entity() {
+        use crate::scene::parametric_constraints::{
+            ConstraintKind, ParametricRef, ParametricScope,
+        };
+
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 10,0"}"#);
+        let line = app.automation_op(r#"{"op":"query","type":"Line","detail":"summary"}"#)
+            ["entities"][0]["handle"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let doc = app.automation_op(r#"{"protocol":1,"op":"state"}"#)["document_id"]
+            .as_u64()
+            .unwrap();
+        let defined = app.automation_op(&format!(
+            r#"{{"protocol":1,"op":"block_define","request_id":"gc1","document_id":{doc},"name":"CONST_DEF","base":[0,0,0],"handles":["{line}"]}}"#
+        ));
+        assert_eq!(defined["ok"], true, "{defined}");
+
+        let i = app.active_tab;
+        let definition = app.tabs[i]
+            .scene
+            .document
+            .block_records
+            .iter()
+            .find(|record| record.name == "CONST_DEF")
+            .expect("definition exists")
+            .handle;
+        let child = app.tabs[i]
+            .scene
+            .document
+            .entities()
+            .find(|entity| entity.common().owner_handle == definition)
+            .expect("the definition holds the line")
+            .common()
+            .handle;
+        app.tabs[i]
+            .scene
+            .parametric_constraint_set_mut(ParametricScope::Block(definition))
+            .add(
+                ConstraintKind::Vertical,
+                vec![ParametricRef::whole(child)],
+                None,
+            );
+        let child_hex = format!("{:X}", child.value());
+
+        app.tabs[i].scene.selection.borrow_mut().view.vp_size = (800.0, 600.0);
+        app.tabs[i].scene.fit_all();
+        let grounding = compute_grounding(&app, 800.0, 600.0, 800, 600);
+        let visible = grounding
+            .visible_entities
+            .iter()
+            .find(|entity| entity["space"] == "CONST_DEF")
+            .unwrap_or_else(|| {
+                panic!(
+                    "CONST_DEF is not grounded: {:?}",
+                    grounding.visible_entities
+                )
+            });
+        assert_eq!(
+            visible["constraints"],
+            json!([{
+                "kind": "Vertical",
+                "participants": [child_hex],
+                "enabled": true,
+                "conflict": null,
+                "form": null
+            }]),
+            "{visible}"
+        );
+    }
+
+    #[test]
+    fn test_pyramid_tiling_manifest_and_bounds() {
+        let wb = [0.0, 0.0, 200.0, 100.0];
+        let manifest = compute_pyramid_manifest("sess_test", "Millimeters", wb, 3, 512);
+
+        assert_eq!(manifest.crs, "CAD_WCS");
+        assert_eq!(manifest.unit, "Millimeters");
+        assert_eq!(manifest.world_bounds, wb);
+        assert_eq!(manifest.max_level, 3);
+        assert_eq!(manifest.tile_size, 512);
+        assert_eq!(manifest.levels.len(), 4); // 0, 1, 2, 3
+
+        // Level 0: 1x1 tile covering full world bounds
+        assert_eq!(manifest.levels[0].grid, [1, 1]);
+        assert_eq!(manifest.levels[0].tiles_count, 1);
+        assert_eq!(manifest.levels[0].tile_world_span, [200.0, 100.0]);
+        let t00 = compute_tile_bounds(wb, 0, 0, 0).unwrap();
+        assert_eq!(t00, [0.0, 0.0, 200.0, 100.0]);
+
+        // Level 1: 2x2 grid (4 tiles, 100x50 span each)
+        assert_eq!(manifest.levels[1].grid, [2, 2]);
+        assert_eq!(manifest.levels[1].tiles_count, 4);
+        assert_eq!(manifest.levels[1].tile_world_span, [100.0, 50.0]);
+
+        // (0, 0): top-left
+        let t1_00 = compute_tile_bounds(wb, 1, 0, 0).unwrap();
+        assert_eq!(t1_00, [0.0, 50.0, 100.0, 100.0]);
+
+        // (1, 0): top-right
+        let t1_10 = compute_tile_bounds(wb, 1, 1, 0).unwrap();
+        assert_eq!(t1_10, [100.0, 50.0, 200.0, 100.0]);
+
+        // (0, 1): bottom-left
+        let t1_01 = compute_tile_bounds(wb, 1, 0, 1).unwrap();
+        assert_eq!(t1_01, [0.0, 0.0, 100.0, 50.0]);
+
+        // (1, 1): bottom-right
+        let t1_11 = compute_tile_bounds(wb, 1, 1, 1).unwrap();
+        assert_eq!(t1_11, [100.0, 0.0, 200.0, 50.0]);
+
+        // Out-of-range checks
+        assert!(compute_tile_bounds(wb, 1, 2, 0).is_err());
+        assert!(compute_tile_bounds(wb, 1, 0, 2).is_err());
+
+        // Point-to-tile mapping
+        assert_eq!(point_to_tile(wb, 1, 25.0, 75.0), (0, 0));
+        assert_eq!(point_to_tile(wb, 1, 175.0, 75.0), (1, 0));
+        assert_eq!(point_to_tile(wb, 1, 25.0, 25.0), (0, 1));
+        assert_eq!(point_to_tile(wb, 1, 175.0, 25.0), (1, 1));
+    }
+
+    /// A capture annotated a block reference as a single pixel at its
+    /// insertion point, so a block drawn forty units away from that point was
+    /// described as sitting where nothing of it paints.
+    #[test]
+    fn the_capture_annotation_covers_where_a_reference_draws() {
+        use codec::entities::{EntityType, Insert, Line};
+        use codec::types::Vector3;
+
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        app.tabs[i].scene.define_block_raw(
+            "GROUND_REF",
+            Vector3::ZERO,
+            vec![EntityType::Line(Line::from_points(
+                Vector3::new(10.0, 5.0, 0.0),
+                Vector3::new(20.0, 10.0, 0.0),
+            ))],
+        );
+        app.tabs[i].scene.add_entity(EntityType::Insert(Insert::new(
+            "GROUND_REF".to_string(),
+            Vector3::new(-40.0, 0.0, 0.0),
+        )));
+
+        app.tabs[i].scene.selection.borrow_mut().view.vp_size = (800.0, 600.0);
+        app.tabs[i].scene.fit_all();
+        let grounding = compute_grounding(&app, 800.0, 600.0, 800, 600);
+        let annotated = grounding
+            .visible_entities
+            .iter()
+            .find(|entity| entity["type"] == "Block Reference")
+            .expect("the reference is annotated");
+
+        let center = annotated["world_center"]
+            .as_array()
+            .expect("the annotated centre");
+        let [x, y]: [f64; 2] = [center[0].as_f64().unwrap(), center[1].as_f64().unwrap()];
+        assert!(
+            (x + 25.0).abs() < 1e-6 && (y - 7.5).abs() < 1e-6,
+            "the reference is described where it draws, not at its \
+             insertion point (-40, 0): {annotated}"
+        );
+
+        let bounds = annotated["screen_bounds"]
+            .as_array()
+            .expect("the annotated screen box");
+        let corners: Vec<i64> = bounds.iter().map(|v| v.as_i64().unwrap()).collect();
+        assert!(
+            corners[2] - corners[0] > 1 && corners[3] - corners[1] > 1,
+            "a reference with painted extent is annotated as a box, \
+             not a pixel: {annotated}"
+        );
+    }
+}

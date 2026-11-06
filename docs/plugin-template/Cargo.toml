@@ -1,0 +1,19 @@
+[package]
+name = "my-plugin"
+version = "0.1.0"
+edition = "2021"
+description = "An Open CAD Studio add-on."
+license = "GPL-3.0-only"
+
+[workspace]
+
+# A plugin is a C-ABI dynamic library the host loads at runtime.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The stable contract, with the runtime `host` surface (HostApi / BuiltinPlugin).
+ocs_plugin_api = { git = "https://github.com/HakanSeven12/OpenCADStudio", features = ["host"] }
+# Entity types for writes. MUST match the host's codec pin exactly
+# (the host's `codec` dependency in its Cargo.toml) or the host refuses.
+acadrust = { package = "acadrust", git = "https://github.com/HakanSeven12/acadrust.git", rev = "24b037a" }

@@ -1,0 +1,1754 @@
+use super::*;
+
+/// The address of the object's hyperlink.
+pub(crate) fn pe_url_of(entity: &EntityType) -> Option<&str> {
+    pe_url_strings(entity).next().filter(|text| !text.is_empty())
+}
+
+fn pe_url_strings(entity: &EntityType) -> impl Iterator<Item = &str> {
+    entity
+        .common()
+        .extended_data
+        .get_record(super::hyperlink::APP)
+        .into_iter()
+        .flat_map(|record| record.values.iter())
+        .filter_map(|value| match value {
+            codec::xdata::XDataValue::String(text) => Some(text.trim()),
+            _ => None,
+        })
+}
+
+impl Scene {
+    // ── Selection ─────────────────────────────────────────────────────────
+    /// Treat a classic LEADER and its attached annotation as one logical object.
+    /// Clicking/copying/deleting either side expands to the complete pair.
+    /// Every LEADER that points at `annotation`, resolved once per
+    /// `geometry_epoch` rather than by walking the document per handle.
+    fn leaders_by_annotation(&self) -> std::cell::Ref<'_, (u64, HashMap<Handle, Vec<Handle>>)> {
+        {
+            let cache = self.leaders_by_annotation_cache.borrow();
+            if cache
+                .as_ref()
+                .is_some_and(|(epoch, _)| *epoch == self.geometry_epoch)
+            {
+                drop(cache);
+                return std::cell::Ref::map(self.leaders_by_annotation_cache.borrow(), |c| {
+                    c.as_ref().unwrap()
+                });
+            }
+        }
+        let mut by_annotation: HashMap<Handle, Vec<Handle>> = HashMap::default();
+        for entity in self.document.entities() {
+            if let EntityType::Leader(leader) = entity {
+                if !leader.annotation_handle.is_null() {
+                    by_annotation
+                        .entry(leader.annotation_handle)
+                        .or_default()
+                        .push(entity.common().handle);
+                }
+            }
+        }
+        *self.leaders_by_annotation_cache.borrow_mut() = Some((self.geometry_epoch, by_annotation));
+        std::cell::Ref::map(self.leaders_by_annotation_cache.borrow(), |c| {
+            c.as_ref().unwrap()
+        })
+    }
+
+    fn expanded_with_leaders(&self, handles: &[Handle]) -> Vec<Handle> {
+        let leaders = self.leaders_by_annotation();
+        let mut expanded = Vec::with_capacity(handles.len());
+        for &handle in handles {
+            let start = expanded.len();
+            expanded.push(handle);
+            if let Some(EntityType::Leader(leader)) = self.document.get_entity(handle) {
+                if !leader.annotation_handle.is_null() {
+                    expanded.push(leader.annotation_handle);
+                }
+            }
+            if let Some(pointing) = leaders.1.get(&handle) {
+                expanded.extend(pointing.iter().copied());
+            }
+            expanded[start..].sort_unstable_by_key(Handle::value);
+        }
+        expanded
+    }
+
+    pub fn select_entities(&mut self, handles: &[Handle]) {
+        if handles.is_empty() {
+            return;
+        }
+        self.selected_constraint = None;
+        self.table_cells = None;
+        let expanded = self.expanded_with_leaders(handles);
+        let mut changed = false;
+        for handle in expanded {
+            if self.selected.insert(handle) {
+                self.selected_order.push(handle);
+                changed = true;
+            }
+        }
+        if changed {
+            self.bump_selection_set();
+        }
+    }
+
+    pub fn deselect_entities(&mut self, handles: &[Handle]) {
+        if handles.is_empty() {
+            return;
+        }
+        let doomed: HashSet<Handle> = self.expanded_with_leaders(handles).into_iter().collect();
+        let mut changed = false;
+        for handle in &doomed {
+            changed |= self.selected.remove(handle);
+        }
+        if changed {
+            self.selected_order
+                .retain(|handle| !doomed.contains(handle));
+            self.bump_selection_set();
+        }
+    }
+
+    pub(crate) fn handles_expanded_for_leader_annotations(
+        &self,
+        handles: &[Handle],
+    ) -> Vec<Handle> {
+        let mut expanded = self.expanded_with_leaders(handles);
+        // A viewport's clip boundary goes with its viewport: picking the
+        // boundary selects both, erasing it erases the viewport.
+        let viewports: Vec<Handle> = expanded
+            .iter()
+            .filter_map(|h| self.document.get_entity(*h).map(|e| (*h, e)))
+            .flat_map(|(h, e)| {
+                e.common().reactors.iter().copied().filter(move |r| {
+                    matches!(self.document.get_entity(*r),
+                        Some(EntityType::Viewport(vp)) if vp.clip_boundary_handle == h)
+                })
+            })
+            .collect();
+        expanded.extend(viewports);
+        expanded.sort_unstable_by_key(|handle| handle.value());
+        expanded.dedup();
+        expanded
+    }
+    pub fn select_entity(&mut self, handle: Handle, exclusive: bool) {
+        self.selected_constraint = None;
+        self.table_cells = None;
+        let handles = self.handles_expanded_for_leader_annotations(&[handle]);
+        let mut changed = false;
+
+        if exclusive {
+            changed = self.selected.len() != handles.len()
+                || handles.iter().any(|handle| !self.selected.contains(handle));
+            self.selected.clear();
+            self.selected_order.clear();
+        }
+
+        for handle in handles {
+            if self.selected.insert(handle) {
+                self.selected_order.push(handle);
+                changed = true;
+            }
+        }
+        if changed {
+            self.bump_selection_set();
+        }
+    }
+
+    pub fn deselect_all(&mut self) {
+        self.selected_constraint = None;
+        self.table_cells = None;
+        self.sub_segments.clear();
+        if self.selected.is_empty() {
+            return;
+        }
+        self.selected.clear();
+        self.selected_order.clear();
+        self.bump_selection_set();
+    }
+
+    /// Script-facing replacement: preserve exactly the validated input order.
+    /// UI picks still use `select_entity` and its leader/annotation expansion.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn replace_selection_exact(&mut self, handles: &[Handle]) {
+        if self.selected_handles_in_order() == handles {
+            return;
+        }
+        self.selected_constraint = None;
+        self.selected = handles.iter().copied().collect();
+        self.selected_order = handles.to_vec();
+        self.bump_selection_set();
+    }
+
+    pub fn select_all_visible(&mut self) -> usize {
+        let block = self.interaction_block_handle();
+        let frozen: Option<HashSet<Handle>> = self
+            .interaction_viewport_frozen_layers()
+            .map(|layers| layers.iter().copied().collect());
+        let annotation_scale = self.displayed_annotation_scale_handle();
+        let all_visible = self.annotation_all_visible();
+        let handles = self
+            .document
+            .block_records
+            .iter()
+            .find(|record| record.handle == block)
+            .map(|record| record.entity_handles.clone())
+            .unwrap_or_default();
+        let selected = handles
+            .into_iter()
+            .filter(|handle| self.passes_selection_filter(*handle))
+            .filter(|handle| !self.is_reference_only(*handle))
+            .filter(|handle| {
+                self.document.get_entity(*handle).is_some_and(|entity| {
+                    self.resident_entity_visible(
+                        entity,
+                        block,
+                        frozen.as_ref(),
+                        annotation_scale,
+                        all_visible,
+                    )
+                })
+            })
+            .collect();
+        self.replace_selection(selected);
+        self.selected.len()
+    }
+
+    #[cfg(any(test, not(target_arch = "wasm32")))]
+    pub(crate) fn selection_fingerprint(&mut self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        if self.selection_fingerprint_dirty {
+            let mut fingerprint = self.selected.len() as u64;
+            for handle in &self.selected {
+                let mut hasher = DefaultHasher::new();
+                handle.hash(&mut hasher);
+                fingerprint ^= hasher.finish();
+            }
+            self.selection_fingerprint_cache = fingerprint;
+            self.selection_fingerprint_dirty = false;
+        }
+        self.selection_fingerprint_cache
+    }
+
+    pub(crate) fn selected_handles_in_order(&self) -> Vec<Handle> {
+        let mut seen = HashSet::default();
+        let mut ordered: Vec<_> = self
+            .selected_order
+            .iter()
+            .copied()
+            .filter(|handle| self.selected.contains(handle) && seen.insert(*handle))
+            .collect();
+        let mut missing: Vec<_> = self
+            .selected
+            .iter()
+            .copied()
+            .filter(|handle| seen.insert(*handle))
+            .collect();
+        missing.sort_unstable_by_key(|handle| handle.value());
+        ordered.extend(missing);
+        ordered
+    }
+
+    /// Replace the complete selection and invalidate the GPU highlight overlay
+    /// only when its contents actually changed. History/file/command paths must
+    /// use this instead of assigning `selected` directly.
+    pub(crate) fn replace_selection(&mut self, selected: HashSet<Handle>) {
+        self.selected_constraint = None;
+        let handles: Vec<Handle> = selected.iter().copied().collect();
+        let selected: HashSet<Handle> = self
+            .handles_expanded_for_leader_annotations(&handles)
+            .into_iter()
+            .collect();
+
+        if self.selected != selected {
+            let mut seen = HashSet::default();
+            let mut order: Vec<_> = self
+                .selected_order
+                .iter()
+                .copied()
+                .filter(|handle| selected.contains(handle) && seen.insert(*handle))
+                .collect();
+            let mut added: Vec<_> = selected
+                .iter()
+                .copied()
+                .filter(|handle| seen.insert(*handle))
+                .collect();
+            added.sort_unstable_by_key(|handle| handle.value());
+            order.extend(added);
+            self.selected = selected;
+            self.selected_order = order;
+            self.bump_selection_set();
+        }
+    }
+
+    /// Remove a single entity from the selection (Shift+click subtractive pick).
+    pub fn deselect_entity(&mut self, handle: Handle) {
+        let handles = self.handles_expanded_for_leader_annotations(&[handle]);
+        let mut changed = false;
+
+        for handle in handles {
+            changed |= self.selected.remove(&handle);
+            self.selected_order.retain(|selected| *selected != handle);
+        }
+
+        if changed {
+            self.bump_selection_set();
+        }
+    }
+
+    pub fn selected_entities(&self) -> Vec<(Handle, &EntityType)> {
+        self.selected_handles_in_order()
+            .into_iter()
+            .filter_map(|h| self.document.get_entity(h).map(|e| (h, e)))
+            .collect()
+    }
+
+    /// Iterates every entity owned by the current layout's block-record.
+    /// Returns an empty vec when the block-record is missing or holds no
+    /// entity handles (legacy DXF without group-code 330 — we err on the
+    /// side of "no candidates" instead of scanning the whole document, so
+    /// model-block entities don't leak into a paper-layout selection).
+    fn current_layout_entity_handles(&self) -> Vec<Handle> {
+        let block = self.current_layout_block_handle();
+        self.document
+            .block_records
+            .iter()
+            .find(|br| br.handle == block)
+            .map(|br| br.entity_handles.clone())
+            .unwrap_or_default()
+    }
+
+    fn qselect_candidate_handles(&self, scope: crate::app::QSelectScope) -> Vec<Handle> {
+        match scope {
+            crate::app::QSelectScope::CurrentSpace => self.current_layout_entity_handles(),
+            crate::app::QSelectScope::CurrentSelection => self.selected_handles_in_order(),
+        }
+    }
+
+    pub fn qselect_candidate_count(&self, scope: crate::app::QSelectScope) -> usize {
+        self.qselect_candidate_handles(scope).len()
+    }
+
+    pub fn qselect_entity_type_names(&self, scope: crate::app::QSelectScope) -> Vec<String> {
+        use crate::entities::traits::entity_type_name;
+        let mut names = std::collections::BTreeSet::new();
+        for h in self.qselect_candidate_handles(scope) {
+            if let Some(entity) = self.document.get_entity(h) {
+                names.insert(entity_type_name(entity).to_string());
+            }
+        }
+        names.into_iter().collect()
+    }
+
+    /// Extends the current selection with every entity in the active
+    /// layout that matches one of the selected entities by `(variant,
+    /// layer)`. The seed selection stays selected. No-op when nothing is
+    /// selected. Returns the number of newly-added entities.
+    /// Add every object of the active layout that has the type of a
+    /// selected object and the same properties `mode` names (the
+    /// SELECTSIMILARMODE bits, see [`SIMILAR_FIELDS`]).
+    pub fn select_similar(&mut self, mode: u16) -> usize {
+        use crate::entities::traits::entity_type_name;
+        if self.selected.is_empty() {
+            return 0;
+        }
+        let key = |e: &codec::EntityType| -> Vec<Option<String>> {
+            SIMILAR_FIELDS
+                .iter()
+                .filter(|(bit, _)| mode & bit != 0)
+                .map(|(_, fields)| {
+                    fields
+                        .iter()
+                        .find_map(|field| self.entity_property_value(e, field))
+                })
+                .collect()
+        };
+        let mut keys: rustc_hash::FxHashMap<&str, rustc_hash::FxHashSet<Vec<Option<String>>>> =
+            Default::default();
+        for e in self.selected.iter().filter_map(|h| self.document.get_entity(*h)) {
+            keys.entry(entity_type_name(e)).or_default().insert(key(e));
+        }
+        let matches: Vec<Handle> = self
+            .current_layout_entity_handles()
+            .into_iter()
+            .filter(|h| !self.selected.contains(h))
+            .filter(|h| {
+                self.document.get_entity(*h).is_some_and(|e| {
+                    keys.get(entity_type_name(e))
+                        .is_some_and(|wanted| wanted.contains(&key(e)))
+                })
+            })
+            .collect();
+        for &h in &matches {
+            self.selected.insert(h);
+            self.selected_order.push(h);
+        }
+        if !matches.is_empty() {
+            self.bump_selection_set();
+        }
+        matches.len()
+    }
+
+    /// Replace the selection with its complement: every selectable object
+    /// in the active layout that isn't currently selected. The candidate
+    /// set is the visible wire set, so objects on off/frozen layers (which
+    /// can't be picked anyway) are excluded. Returns the new count.
+    pub fn invert_selection(&mut self) -> usize {
+        let prev: rustc_hash::FxHashSet<Handle> = self.selected.iter().copied().collect();
+        let all: Vec<Handle> = self
+            .entity_wires()
+            .iter()
+            .filter_map(|w| Self::handle_from_wire_name(&w.name))
+            .collect();
+        self.selected.clear();
+        self.selected_order.clear();
+        for h in all {
+            if !prev.contains(&h) {
+                self.selected.insert(h);
+                self.selected_order.push(h);
+            }
+        }
+        if self.selected != prev {
+            self.bump_selection_set();
+        }
+        self.selected.len()
+    }
+
+    /// Builds a selection from the chosen scope and filter. Exclude mode
+    /// keeps candidates that do not match. Append mode unions the result
+    /// with the selection that existed before the query.
+    ///
+    /// `type_name` of `None` means "any type". `property_field` of
+    /// `None` skips the property test (only the type filter applies).
+    /// The operator's `Any` variant also skips the property test.
+    /// Numeric operators (`Gt` / `Lt`) parse both sides as `f64` and
+    /// reject anything non-numeric.
+    pub fn qselect(
+        &mut self,
+        scope: crate::app::QSelectScope,
+        type_name: Option<&str>,
+        property_field: Option<&str>,
+        op: crate::app::QSelectOp,
+        value: &str,
+        mode: crate::app::QSelectMode,
+        append: bool,
+    ) -> usize {
+        let condition = crate::app::QSelectCondition {
+            type_filter: type_name.map(str::to_owned),
+            property: property_field.map(|field| crate::app::QSelectPropertyChoice {
+                field: field.to_owned(),
+                label: field.to_owned(),
+                editor: crate::app::QSelectValueEditor::Text,
+            }),
+            operator: op,
+            value: value.to_owned(),
+        };
+        self.qselect_conditions(scope, &[condition], mode, append)
+    }
+
+    /// Evaluate all conditions against the same candidate set, then apply result behavior once.
+    pub fn qselect_conditions(
+        &mut self,
+        scope: crate::app::QSelectScope,
+        conditions: &[crate::app::QSelectCondition],
+        mode: crate::app::QSelectMode,
+        append: bool,
+    ) -> usize {
+        use crate::app::{QSelectMode, QSelectOp};
+        use crate::entities::traits::entity_type_name;
+        let previous = self.selected.clone();
+        let handles = self.qselect_candidate_handles(scope);
+        let mut result = HashSet::default();
+        for h in handles {
+            let Some(e) = self.document.get_entity(h) else {
+                continue;
+            };
+            let matches_filter = conditions.iter().all(|condition| {
+                let type_ok = condition
+                    .type_filter
+                    .as_deref()
+                    .is_none_or(|t| entity_type_name(e) == t);
+                let prop_ok = if !type_ok {
+                    true
+                } else {
+                    match (
+                        condition
+                            .property
+                            .as_ref()
+                            .map(|property| property.field.as_str()),
+                        condition.operator,
+                    ) {
+                        (None, _) | (_, QSelectOp::Any) => true,
+                        (Some(field), op) => match self.entity_property_value(e, field) {
+                            Some(actual) => match op {
+                                QSelectOp::Eq => actual.eq_ignore_ascii_case(&condition.value),
+                                QSelectOp::Neq => !actual.eq_ignore_ascii_case(&condition.value),
+                                QSelectOp::Gt | QSelectOp::Lt => {
+                                    match (
+                                        crate::entities::common::parse_f64(&actual),
+                                        crate::entities::common::parse_f64(&condition.value),
+                                    ) {
+                                        (Some(a), Some(b)) if matches!(op, QSelectOp::Gt) => a > b,
+                                        (Some(a), Some(b)) => a < b,
+                                        _ => false,
+                                    }
+                                }
+                                QSelectOp::Any => true,
+                            },
+                            None => false,
+                        },
+                    }
+                };
+                type_ok && prop_ok
+            });
+            let keep = match mode {
+                QSelectMode::Include => matches_filter,
+                QSelectMode::Exclude => !matches_filter,
+            };
+            if keep {
+                result.insert(h);
+            }
+        }
+        if append {
+            result.extend(previous);
+        }
+        self.replace_selection(result);
+        self.selected.len()
+    }
+
+    /// Entity type names in the current layout for the selection-filter menu.
+    /// Pure additions are folded into the cached set; other changes rebuild it.
+    pub fn entity_type_names_in_layout(&self) -> std::sync::Arc<Vec<String>> {
+        use crate::entities::traits::entity_type_name;
+        let block = self.current_layout_block_handle();
+        let mut cached_epoch = None;
+        {
+            let cache = self.layout_type_names_cache.borrow();
+            if let Some((epoch, cached_block, _, names)) = cache.as_ref() {
+                if *cached_block == block {
+                    if *epoch == self.geometry_epoch {
+                        return std::sync::Arc::clone(names);
+                    }
+                    cached_epoch = Some(*epoch);
+                }
+            }
+        }
+
+        // Incremental: fold the changes since the cached epoch into the set.
+        if let Some(since) = cached_epoch {
+            if let Some(deltas) = self.replay_since(since) {
+                if deltas.iter().all(|(_, kind)| *kind == ChangeKind::Added) {
+                    let mut cache = self.layout_type_names_cache.borrow_mut();
+                    if let Some((epoch, _, present, names)) = cache.as_mut() {
+                        let mut added = false;
+                        for (handle, _) in &deltas {
+                            if let Some(entity) = self.document.get_entity(*handle) {
+                                if entity.common().owner_handle == block {
+                                    // `contains` first: the common case is a
+                                    // type already present, and that path must
+                                    // not allocate.
+                                    let name = entity_type_name(entity);
+                                    if !present.contains(name) {
+                                        present.insert(name.to_string());
+                                        added = true;
+                                    }
+                                }
+                            }
+                        }
+                        // Only rebuild the list when the set actually moved;
+                        // otherwise the existing `Arc` is still the answer.
+                        if added {
+                            *names = std::sync::Arc::new(present.iter().cloned().collect());
+                        }
+                        *epoch = self.geometry_epoch;
+                        return std::sync::Arc::clone(names);
+                    }
+                }
+            }
+        }
+
+        let mut present: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        if let Some(record) = self
+            .document
+            .block_records
+            .iter()
+            .find(|record| record.handle == block)
+        {
+            for &handle in &record.entity_handles {
+                if let Some(entity) = self.document.get_entity(handle) {
+                    let name = entity_type_name(entity);
+                    if !present.contains(name) {
+                        present.insert(name.to_string());
+                    }
+                }
+            }
+        }
+        let names: std::sync::Arc<Vec<String>> =
+            std::sync::Arc::new(present.iter().cloned().collect());
+        *self.layout_type_names_cache.borrow_mut() = Some((
+            self.geometry_epoch,
+            block,
+            present,
+            std::sync::Arc::clone(&names),
+        ));
+        names
+    }
+
+    /// True when `handle`'s entity type is allowed by the selection filter.
+    /// The filter stores excluded type names; empty = everything allowed.
+    pub fn passes_selection_filter(&self, handle: Handle) -> bool {
+        if self.selection_filter.is_empty() {
+            return true;
+        }
+        match self.document.get_entity(handle) {
+            Some(e) => !self
+                .selection_filter
+                .contains(crate::entities::traits::entity_type_name(e)),
+            None => true,
+        }
+    }
+
+    /// True when the selection filter is excluding at least one type.
+    pub fn selection_filter_active(&self) -> bool {
+        !self.selection_filter.is_empty()
+    }
+
+    /// Returns common and type-specific filter properties with the editor
+    /// each value needs. Choice editors are enriched from both document
+    /// tables and values present in the selected candidate scope.
+    pub fn qselect_properties(
+        &self,
+        type_name: Option<&str>,
+        scope: crate::app::QSelectScope,
+    ) -> Vec<crate::app::QSelectPropertyChoice> {
+        self.qselect_properties_with_sample(type_name, scope, None)
+    }
+
+    /// Use the picked entity's own property schema, including optional fields
+    /// that may not be present on the first entity of this type in the drawing.
+    fn qselect_properties_with_sample(
+        &self,
+        type_name: Option<&str>,
+        scope: crate::app::QSelectScope,
+        sample_handle: Option<Handle>,
+    ) -> Vec<crate::app::QSelectPropertyChoice> {
+        use crate::app::{QSelectPropertyChoice, QSelectValueEditor};
+        use crate::entities::traits::{entity_type_name, EntityTypeOps};
+        use crate::scene::model::object::PropValue;
+
+        let candidate_handles: Vec<Handle> = self
+            .qselect_candidate_handles(scope)
+            .into_iter()
+            .filter(|h| {
+                self.document
+                    .get_entity(*h)
+                    .is_some_and(|entity| type_name.is_none_or(|t| entity_type_name(entity) == t))
+            })
+            .collect();
+
+        let mut layer_options: Vec<String> = self
+            .document
+            .layers
+            .iter()
+            .map(|layer| layer.name.clone())
+            .collect();
+        layer_options.sort_by_key(|value| value.to_lowercase());
+        let mut linetype_options = vec!["ByLayer".to_string(), "ByBlock".to_string()];
+        linetype_options.extend(
+            self.document
+                .line_types
+                .iter()
+                .map(|linetype| linetype.name.clone()),
+        );
+
+        let choice =
+            |field: &str, label: String, editor: QSelectValueEditor| QSelectPropertyChoice {
+                field: field.to_string(),
+                label,
+                editor,
+            };
+        let mut out = vec![
+            choice(
+                "handle",
+                crate::t!("Handle").into_owned(),
+                QSelectValueEditor::Text,
+            ),
+            choice(
+                "color",
+                crate::t!("Color").into_owned(),
+                QSelectValueEditor::Choice(vec!["ByLayer".into(), "ByBlock".into()]),
+            ),
+            choice(
+                "layer",
+                crate::t!("Layer").into_owned(),
+                QSelectValueEditor::Choice(layer_options.clone()),
+            ),
+            choice(
+                "linetype",
+                crate::t!("Linetype").into_owned(),
+                QSelectValueEditor::Choice(linetype_options.clone()),
+            ),
+            choice(
+                "linetype_scale",
+                crate::t!("Linetype scale").into_owned(),
+                QSelectValueEditor::Number,
+            ),
+            choice(
+                "plot_style",
+                crate::t!("Plot style").into_owned(),
+                QSelectValueEditor::Choice(vec![
+                    "ByLayer".into(),
+                    "ByBlock".into(),
+                    "ByColor".into(),
+                ]),
+            ),
+            choice(
+                "lineweight",
+                crate::t!("Lineweight").into_owned(),
+                QSelectValueEditor::Choice(vec![
+                    "ByLayer".into(),
+                    "ByBlock".into(),
+                    "Default".into(),
+                ]),
+            ),
+            choice(
+                "transparency",
+                crate::t!("Transparency").into_owned(),
+                QSelectValueEditor::Choice(vec!["ByLayer".into()]),
+            ),
+            choice(
+                "hyperlink",
+                crate::t!("Hyperlink").into_owned(),
+                QSelectValueEditor::Text,
+            ),
+        ];
+        if let Some(t) = type_name {
+            let text_style_names: Vec<String> = self
+                .document
+                .text_styles
+                .iter()
+                .map(|s| s.name.clone())
+                .collect();
+            let sample = sample_handle
+                .and_then(|handle| self.document.get_entity(handle))
+                .filter(|entity| entity_type_name(entity) == t)
+                .or_else(|| {
+                    candidate_handles
+                        .iter()
+                        .copied()
+                        .filter_map(|h| self.document.get_entity(h))
+                        .find(|e| entity_type_name(e) == t)
+                });
+            if let Some(sample) = sample {
+                let mut sections = vec![crate::scene::cache::properties::general_section(sample)];
+                if let Some(section) =
+                    crate::scene::cache::properties::visualization_section(sample)
+                {
+                    sections.push(section);
+                }
+                sections.extend(sample.geometry_properties(&text_style_names));
+                for section in sections {
+                    for prop in section.props {
+                        if out.iter().any(|item| item.field == prop.field) {
+                            continue;
+                        }
+                        let editor = if prop.field == "material" {
+                            QSelectValueEditor::Choice(vec![
+                                "ByLayer".into(),
+                                "ByBlock".into(),
+                                "Custom".into(),
+                            ])
+                        } else {
+                            match prop.value {
+                                PropValue::PlainText(_) | PropValue::Hyperlink(_) => {
+                                    QSelectValueEditor::Text
+                                }
+                                PropValue::ReadOnly(ref value)
+                                | PropValue::ReadOnlyWithTooltip { ref value, .. }
+                                | PropValue::EditText(ref value) => {
+                                    let field = prop.field.to_ascii_lowercase();
+                                    let textual = [
+                                        "name",
+                                        "text",
+                                        "content",
+                                        "style",
+                                        "tag",
+                                        "prompt",
+                                        "value",
+                                        "description",
+                                        "format",
+                                        "font",
+                                        "path",
+                                        "file",
+                                        "url",
+                                    ]
+                                    .iter()
+                                    .any(|part| field.contains(part));
+                                    if !textual
+                                        && crate::entities::common::parse_f64(value).is_some()
+                                    {
+                                        QSelectValueEditor::Number
+                                    } else {
+                                        QSelectValueEditor::Text
+                                    }
+                                }
+                                PropValue::LayerChoice(_) => {
+                                    QSelectValueEditor::Choice(layer_options.clone())
+                                }
+                                PropValue::Choice { ref options, .. } | PropValue::ChoiceWithTooltip { ref options, .. } => {
+                                    QSelectValueEditor::Choice(options.clone())
+                                }
+                                PropValue::EditChoice {
+                                    ref value,
+                                    ref options,
+                                } => {
+                                    let mut values = options.clone();
+                                    if !values.iter().any(|item| item == value) {
+                                        values.push(value.clone());
+                                    }
+                                    QSelectValueEditor::Choice(values)
+                                }
+                                PropValue::ColorChoice(_) | PropValue::NamedColorChoice { .. } => {
+                                    QSelectValueEditor::Choice(vec![
+                                        "ByLayer".into(),
+                                        "ByBlock".into(),
+                                    ])
+                                }
+                                PropValue::LwChoice(_) | PropValue::FieldLwChoice { .. } => {
+                                    QSelectValueEditor::Choice(vec![
+                                        "ByLayer".into(),
+                                        "ByBlock".into(),
+                                        "Default".into(),
+                                    ])
+                                }
+                                PropValue::LinetypeChoice(_) => {
+                                    QSelectValueEditor::Choice(linetype_options.clone())
+                                }
+                                PropValue::HatchPatternChoice(value) => {
+                                    let mut patterns: Vec<String> =
+                                        crate::scene::model::hatch_patterns::catalog()
+                                            .iter()
+                                            .map(|entry| entry.name.clone())
+                                            .collect();
+                                    if !patterns.iter().any(|item| item == &value) {
+                                        patterns.push(value);
+                                    }
+                                    QSelectValueEditor::Choice(patterns)
+                                }
+                                PropValue::BoolToggle { .. } => {
+                                    QSelectValueEditor::Choice(vec!["false".into(), "true".into()])
+                                }
+                                PropValue::AttrText { .. } => QSelectValueEditor::Text,
+                                PropValue::PluginParam { .. } => {
+                                    // A class parameter's record value is text to the
+                                    // quick-select reader; the committed edit stays on
+                                    // the class's own record path (API v14).
+                                    QSelectValueEditor::Text
+                                }
+                                PropValue::BlockNumber { .. }
+                                | PropValue::BlockChoice { .. }
+                                | PropValue::Stepper { .. }
+                                | PropValue::ColorVaries
+                                | PropValue::LwVaries
+                                | PropValue::FieldLwVaries { .. }
+                                | PropValue::EntityLink { .. }
+                                | PropValue::ParamRow { .. }
+                                | PropValue::ParamAddRow
+                                | PropValue::ParamsVisibilityToggle(_) => continue,
+                            }
+                        };
+                        out.push(choice(prop.field, prop.label, editor));
+                    }
+                }
+            }
+        }
+
+        for property in &mut out {
+            let QSelectValueEditor::Choice(options) = &mut property.editor else {
+                continue;
+            };
+            let common_choice = matches!(
+                property.field.as_str(),
+                "color"
+                    | "layer"
+                    | "linetype"
+                    | "plot_style"
+                    | "lineweight"
+                    | "transparency"
+                    | "material"
+            );
+            if !common_choice && !options.is_empty() {
+                continue;
+            }
+            for handle in &candidate_handles {
+                let Some(entity) = self.document.get_entity(*handle) else {
+                    continue;
+                };
+                if let Some(value) = self.entity_property_value(entity, &property.field) {
+                    if !options
+                        .iter()
+                        .any(|option| option.eq_ignore_ascii_case(&value))
+                    {
+                        options.push(value);
+                    }
+                }
+            }
+            options.sort_by_key(|value| value.to_lowercase());
+        }
+        out
+    }
+
+    /// Build editable equality conditions without changing the current selection.
+    /// The unique handle and empty values are deliberately not sampled.
+    pub fn qselect_conditions_from_entity(
+        &self,
+        handle: Handle,
+    ) -> Vec<crate::app::QSelectCondition> {
+        use crate::app::{QSelectCondition, QSelectOp, QSelectScope, QSelectValueEditor};
+        let Some(entity) = self.document.get_entity(handle) else {
+            return Vec::new();
+        };
+        let type_name = crate::entities::traits::entity_type_name(entity).to_owned();
+        let mut conditions = vec![QSelectCondition {
+            type_filter: Some(type_name.clone()),
+            property: None,
+            operator: QSelectOp::Eq,
+            value: String::new(),
+        }];
+        let properties = self.qselect_properties_with_sample(
+            Some(&type_name),
+            QSelectScope::CurrentSpace,
+            Some(handle),
+        );
+        for mut property in properties {
+            if property.field == "handle" {
+                continue;
+            }
+            let Some(value) = self.entity_property_value(entity, &property.field) else {
+                continue;
+            };
+            if value.trim().is_empty() {
+                continue;
+            }
+            // Ensure a sampled choice can also be edited, even outside the
+            // filter's current-selection scope.
+            if let QSelectValueEditor::Choice(options) = &mut property.editor {
+                if !options.contains(&value) {
+                    options.push(value.clone());
+                }
+            }
+            let condition = QSelectCondition {
+                type_filter: Some(type_name.clone()),
+                property: Some(property),
+                operator: QSelectOp::Eq,
+                value,
+            };
+            if condition.validation_error().is_none() {
+                conditions.push(condition);
+            }
+        }
+        conditions
+    }
+
+    /// Reads a property value from an entity for QSELECT comparison.
+    /// Returns the canonical string used as the left-hand side of the
+    /// operator test. Common properties have hand-rolled formatting so
+    /// `"ByLayer"` / `"7"` / `"0.30mm"` are stable; everything else
+    /// goes through `geometry_properties()` and pulls the matching
+    /// row's value out.
+    pub fn entity_property_value(&self, entity: &codec::EntityType, field: &str) -> Option<String> {
+        use crate::entities::traits::EntityTypeOps;
+        use crate::scene::model::object::PropValue;
+        match field {
+            "handle" => Some(entity.common().handle.value().to_string()),
+            "layer" => Some(entity.common().layer.clone()),
+            "color" => Some(
+                entity
+                    .common()
+                    .color_name
+                    .clone()
+                    .unwrap_or_else(|| Self::format_color(entity.common().color)),
+            ),
+            "linetype" => Some(if entity.common().linetype.is_empty() {
+                "ByLayer".to_string()
+            } else {
+                entity.common().linetype.clone()
+            }),
+            "linetype_scale" => Some(crate::entities::common::format_decimal(
+                entity.common().linetype_scale,
+            )),
+            "plot_style" => Some(
+                match entity.common().plotstyle_flags {
+                    0 => "ByLayer",
+                    1 => "ByBlock",
+                    _ => "ByColor",
+                }
+                .to_string(),
+            ),
+            "lineweight" => Some(Self::format_lineweight(entity.common().line_weight)),
+            "transparency" => Some(match entity.common().transparency {
+                codec::types::Transparency::ByLayer => "ByLayer".to_string(),
+                codec::types::Transparency::ByBlock => "ByBlock".to_string(),
+                codec::types::Transparency::Explicit(alpha) => {
+                    ((alpha as f64 / 255.0 * 100.0).round() as u32).to_string()
+                }
+            }),
+            "hyperlink" => Some(pe_url_of(entity).unwrap_or_default().to_owned()),
+            "material" => Some(
+                match entity.common().material_flags {
+                    0 => "ByLayer",
+                    1 => "ByBlock",
+                    _ => "Custom",
+                }
+                .to_string(),
+            ),
+            _ => {
+                let text_style_names: Vec<String> = self
+                    .document
+                    .text_styles
+                    .iter()
+                    .map(|s| s.name.clone())
+                    .collect();
+                let mut sections = vec![crate::scene::cache::properties::general_section(entity)];
+                if let Some(section) =
+                    crate::scene::cache::properties::visualization_section(entity)
+                {
+                    sections.push(section);
+                }
+                sections.extend(entity.geometry_properties(&text_style_names));
+                let prop = sections
+                    .into_iter()
+                    .flat_map(|s| s.props)
+                    .find(|p| p.field == field)?;
+                Some(match prop.value {
+                    PropValue::ReadOnly(s)
+                    | PropValue::ReadOnlyWithTooltip { value: s, .. }
+                    | PropValue::EditText(s)
+                    | PropValue::PlainText(s)
+                    | PropValue::Hyperlink(s) => s,
+                    PropValue::LayerChoice(s) => s,
+                    PropValue::Choice { selected, .. } | PropValue::ChoiceWithTooltip { selected, .. } => selected,
+                    PropValue::EditChoice { value, .. } => value,
+                    PropValue::ColorChoice(c) => Self::format_color(c),
+                    PropValue::NamedColorChoice { name, .. } => name,
+                    PropValue::LwChoice(lw) | PropValue::FieldLwChoice { value: lw, .. } => {
+                        Self::format_lineweight(lw)
+                    }
+                    PropValue::LinetypeChoice(s) => s,
+                    PropValue::HatchPatternChoice(s) => s,
+                    PropValue::BoolToggle { value, .. } => value.to_string(),
+                    PropValue::AttrText { value, .. } => value,
+                    PropValue::PluginParam { value, .. } => value,
+                    PropValue::Stepper { display, .. } => display,
+                    PropValue::BlockNumber { .. }
+                    | PropValue::BlockChoice { .. }
+                    | PropValue::ColorVaries
+                    | PropValue::LwVaries
+                    | PropValue::FieldLwVaries { .. }
+                    | PropValue::EntityLink { .. }
+                    | PropValue::ParamRow { .. }
+                    | PropValue::ParamAddRow
+                    | PropValue::ParamsVisibilityToggle(_) => return None,
+                })
+            }
+        }
+    }
+
+    fn format_color(c: codec::types::Color) -> String {
+        use codec::types::Color;
+        match c {
+            Color::ByLayer => "ByLayer".to_string(),
+            Color::None => "None".to_string(),
+            Color::ByBlock => "ByBlock".to_string(),
+            Color::Index(i) => i.to_string(),
+            Color::Rgb { r, g, b } => format!("{},{},{}", r, g, b),
+        }
+    }
+
+    fn format_lineweight(lw: codec::types::LineWeight) -> String {
+        use codec::types::LineWeight;
+        match lw {
+            LineWeight::ByLayer => "ByLayer".to_string(),
+            LineWeight::ByBlock => "ByBlock".to_string(),
+            LineWeight::Default => "Default".to_string(),
+            LineWeight::Value(v) => format!("{:.2}mm", v as f64 / 100.0),
+        }
+    }
+
+    // ── Erase ─────────────────────────────────────────────────────────────
+
+    pub fn erase_entities(&mut self, handles: &[Handle]) {
+        self.remove_entities(handles, true, true, true);
+    }
+
+    /// Replace only planned sources, preserving annotations or leaders not exploded.
+    pub fn erase_entities_exact(&mut self, handles: &[Handle]) {
+        self.remove_entities(handles, true, true, false);
+    }
+
+    /// Like [`erase_entities`](Self::erase_entities) but without the
+    /// reference-only skip. The plugin owns reference-only entities and
+    /// removes them through the plugin host API; locked-layer policy stays
+    /// enforced either way.
+    pub fn erase_entities_plugin(&mut self, handles: &[Handle]) {
+        self.remove_entities(handles, true, false, true);
+    }
+
+    /// Roll back entities created by the current command after a downstream
+    /// registration failure. These entities were never successful command
+    /// results, so locked-layer edit policy must not prevent their removal.
+    /// The shared removal path keeps first-touch undo state, history objects,
+    /// groups, selection, and derived caches coherent.
+    pub(crate) fn rollback_new_entities(&mut self, handles: &[Handle]) {
+        self.remove_entities(handles, false, false, true);
+    }
+
+    fn remove_entities(
+        &mut self,
+        handles: &[Handle],
+        respect_layer_locks: bool,
+        respect_reference_only: bool,
+        expand_linked: bool,
+    ) {
+        let erase_handles = if expand_linked {
+            self.handles_expanded_for_leader_annotations(handles)
+        } else {
+            handles.to_vec()
+        };
+
+        // One pass over document.objects instead of a scan per erased handle.
+        let mut managers_by_section: HashMap<Handle, Vec<Handle>> = HashMap::default();
+        for (handle, object) in self.document.objects.iter() {
+            if let ObjectType::ClassObject(object) = object {
+                if let codec::objects::ClassObjectData::SectionManager(manager) = &object.data {
+                    for &section in &manager.sections {
+                        managers_by_section
+                            .entry(section)
+                            .or_default()
+                            .push(*handle);
+                    }
+                }
+            }
+        }
+
+        let mut handle_set: HashSet<Handle> = HashSet::default();
+        let mut erased: Vec<(Handle, ChangeKind)> = Vec::new();
+        let mut selection_changed = false;
+        let mut hover_changed = false;
+
+        for &h in &erase_handles {
+            // Objects on a locked layer can't be erased. Reference-only
+            // entities are plugin-owned: only the plugin-owned erase path
+            // may remove them.
+            if respect_layer_locks && self.is_layer_locked(h) {
+                continue;
+            }
+            if respect_reference_only && self.is_reference_only(h) {
+                continue;
+            }
+            let settings_handle = self.document.get_entity(h).and_then(|entity| match entity {
+                EntityType::Extended(extended) => match &extended.data {
+                    codec::entities::ExtendedEntityData::SectionObject(data)
+                        if !data.settings_handle.is_null() =>
+                    {
+                        Some(data.settings_handle)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            });
+            let section_managers: Vec<Handle> =
+                managers_by_section.get(&h).cloned().unwrap_or_default();
+            // Delta-undo: capture the removed entity so an undo can re-insert it.
+            if self.is_recording_undo() {
+                let before = self.document.get_entity_arc(h);
+                self.record_undo_before(h, before);
+                if let Some(settings_handle) = settings_handle {
+                    let before = self.document.objects.get(&settings_handle).cloned();
+                    self.record_undo_object_before(settings_handle, before);
+                }
+                for &manager_handle in &section_managers {
+                    let before = self.document.objects.get(&manager_handle).cloned();
+                    self.record_undo_object_before(manager_handle, before);
+                }
+                // The designation set is scene state, not document state: a
+                // designated entity's set entry joins the same first-touch
+                // recording so undo restores entity and designation together.
+                if self.reference_only.is_marked(h) {
+                    self.record_undo_reference_designation_before(h);
+                }
+            }
+            self.remove_image_definition_reactor(h);
+            self.delete_solid_history(h);
+            if let Some(settings_handle) = settings_handle {
+                self.document.objects.remove(&settings_handle);
+            }
+            for manager_handle in section_managers {
+                if let Some(ObjectType::ClassObject(object)) =
+                    self.document.objects.get_mut(&manager_handle)
+                {
+                    if let codec::objects::ClassObjectData::SectionManager(manager) =
+                        &mut object.data
+                    {
+                        manager.sections.retain(|section| *section != h);
+                    }
+                }
+            }
+            self.remember_removed_cache_categories(h);
+            self.document.remove_entity_arc(h);
+            // The set entry dies with its entity (an absent entity is never
+            // reference-only). Undo restores it through the recorded channel.
+            self.reference_only.remove(h);
+            selection_changed |= self.selected.remove(&h);
+            self.selected_order.retain(|selected| *selected != h);
+            if self.hover_highlight == Some(h) {
+                self.hover_highlight = None;
+                hover_changed = true;
+            }
+            hover_changed |= self.constraint_hover_highlights.remove(&h);
+            hover_changed |= self.box_hover_highlights.remove(&h);
+            if self
+                .constraint_hover_refs
+                .iter()
+                .any(|reference| reference.entity == h)
+            {
+                self.constraint_hover_refs.clear();
+                self.constraint_hover_wires.clear();
+                self.constraint_hover_highlights.clear();
+                hover_changed = true;
+            }
+            self.hatches.remove(&h);
+            self.images.remove(&h);
+            self.meshes.remove(&h);
+            self.block_meshes.remove(&h);
+            self.solid_models.remove(&h);
+            handle_set.insert(h);
+            erased.push((h, ChangeKind::Removed));
+        }
+        if selection_changed {
+            self.bump_selection_set();
+        } else if hover_changed {
+            self.bump_selection();
+        }
+        // Capture exactly the group objects that this erase will rewrite, plus
+        // the group dictionary when an emptied group will be removed. Do this
+        // before taking mutable object-map borrows below.
+        if self.is_recording_undo() && !handle_set.is_empty() {
+            let affected_groups: Vec<(Handle, ObjectType)> = self
+                .document
+                .objects
+                .iter()
+                .filter_map(|(&handle, object)| match object {
+                    ObjectType::Group(group)
+                        if group.entities.iter().any(|h| handle_set.contains(h)) =>
+                    {
+                        Some((handle, object.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            if !affected_groups.is_empty() {
+                let removes_group = affected_groups.iter().any(|(_, object)| {
+                    matches!(
+                        object,
+                        ObjectType::Group(group)
+                            if group.entities.iter().all(|h| handle_set.contains(h))
+                    )
+                });
+                if removes_group {
+                    let dictionary = self.document.header.acad_group_dict_handle;
+                    let dictionary_before = self.document.objects.get(&dictionary).cloned();
+                    self.record_undo_object_before(dictionary, dictionary_before);
+                }
+                for (handle, object) in affected_groups {
+                    self.record_undo_object_before(handle, Some(object));
+                }
+            }
+        }
+        // Remove erased handles from all groups; delete groups that become empty.
+        let group_dict_handle = self.document.header.acad_group_dict_handle;
+        let to_remove: Vec<Handle> = self
+            .document
+            .objects
+            .values_mut()
+            .filter_map(|obj| match obj {
+                ObjectType::Group(g) => {
+                    g.entities.retain(|h| !handle_set.contains(h));
+                    if g.entities.is_empty() {
+                        Some(g.handle)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+        for gh in &to_remove {
+            if let Some(ObjectType::Dictionary(dict)) =
+                self.document.objects.get_mut(&group_dict_handle)
+            {
+                dict.entries.retain(|(_, h)| h != gh);
+            }
+            self.document.objects.remove(gh);
+        }
+        // Deleting top-level entities/inserts leaves block definitions intact.
+        // Report the exact erased handles so derived caches drop just those and
+        // the resident set removes only their wires (bump_entities drops them
+        // from the tessellation memos too).
+        if !erased.is_empty() {
+            self.invalidate_dependency_index();
+            self.bump_entities(&erased);
+        }
+    }
+
+    /// Restore erased Arc-backed entities without re-linking their still-present
+    /// block-record handles. Used by OOPS and history replay.
+    pub fn restore_erased_entities(&mut self, entities: Vec<Arc<EntityType>>) -> Vec<Handle> {
+        let mut restored = Vec::with_capacity(entities.len());
+        let mut changes = Vec::with_capacity(entities.len());
+        for entity in entities {
+            let handle = entity.common().handle;
+            if handle.is_null() || self.document.get_entity(handle).is_some() {
+                continue;
+            }
+            if self.is_recording_undo() {
+                self.record_undo_before(handle, None);
+            }
+            // OOPS restores entities without replaying the erased object images.
+            let entity = if matches!(entity.as_ref(), EntityType::RasterImage(_)) {
+                let mut image = (*entity).clone();
+                self.ensure_image_definition(&mut image);
+                Arc::new(image)
+            } else {
+                entity
+            };
+            if self.document.restore_entity_arc(entity).is_some() {
+                self.reseed_derived_caches(handle);
+                restored.push(handle);
+                changes.push((handle, ChangeKind::Added));
+            }
+        }
+        if !changes.is_empty() {
+            self.invalidate_dependency_index();
+            self.bump_entities(&changes);
+        }
+        restored
+    }
+}
+
+/// SELECTSIMILARMODE's default: layer and name.
+pub const SELECT_SIMILAR_DEFAULT: u16 = 130;
+
+/// The SELECTSIMILARMODE bits and the property each compares; the first
+/// field an object has is its value.
+const SIMILAR_FIELDS: &[(u16, &[&str])] = &[
+    (1, &["color"]),
+    (2, &["layer"]),
+    (4, &["linetype"]),
+    (8, &["linetype_scale"]),
+    (16, &["lineweight"]),
+    (32, &["plot_style"]),
+    (64, &["style", "style_name", "dimension_style"]),
+    (128, &["block"]),
+];
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn qselect_sample_matches_identical_entities_without_unique_handles() {
+        use crate::app::{QSelectMode, QSelectScope};
+        use codec::entities::Line;
+        use codec::types::Vector3;
+        let mut scene = Scene::new();
+        let line = || {
+            EntityType::Line(Line::from_points(
+                Vector3::ZERO,
+                Vector3::new(10.0, 0.0, 0.0),
+            ))
+        };
+        let first = scene.add_entity(line());
+        let second = scene.add_entity(line());
+        scene.select_entity(second, false);
+        let before = scene.selected.clone();
+        let conditions = scene.qselect_conditions_from_entity(first);
+        assert_eq!(
+            scene.selected, before,
+            "sampling must not change the selection"
+        );
+        assert!(conditions.iter().any(|condition| condition
+            .property
+            .as_ref()
+            .is_some_and(|property| property.field == "layer")));
+        assert!(conditions.iter().all(|condition| condition
+            .property
+            .as_ref()
+            .is_none_or(|property| property.field != "handle")));
+        assert!(conditions
+            .iter()
+            .all(|condition| condition.validation_error().is_none()));
+        assert_eq!(
+            scene.qselect_conditions(
+                QSelectScope::CurrentSpace,
+                &conditions,
+                QSelectMode::Include,
+                false,
+            ),
+            2
+        );
+        assert!(scene.selected.contains(&first) && scene.selected.contains(&second));
+    }
+
+    #[test]
+    fn pe_url_of_reads_standard_hyperlink_xdata() {
+        use codec::entities::Point;
+        use codec::xdata::{ExtendedDataRecord, XDataValue};
+
+        let mut doc = Document::new();
+
+        // An entity carrying a PE_URL hyperlink resolves to that link.
+        let mut linked = Point::new();
+        let mut rec = ExtendedDataRecord::new("PE_URL");
+        rec.add_value(XDataValue::String("https://example.com/gui".to_string()));
+        linked.common.extended_data.add_record(rec);
+        let linked_handle = doc
+            .add_entity(EntityType::Point(linked))
+            .expect("linked entity added");
+        assert_eq!(
+            pe_url_of(doc.get_entity(linked_handle).unwrap()),
+            Some("https://example.com/gui")
+        );
+
+        // No PE_URL record -> None.
+        let plain_handle = doc
+            .add_entity(EntityType::Point(Point::new()))
+            .expect("plain entity added");
+        assert_eq!(pe_url_of(doc.get_entity(plain_handle).unwrap()), None);
+
+        // Empty string in the record -> None.
+        let mut empty = Point::new();
+        let mut empty_rec = ExtendedDataRecord::new("PE_URL");
+        empty_rec.add_value(XDataValue::String(String::new()));
+        empty_rec.add_value(XDataValue::String("https://description.invalid/".into()));
+        empty.common.extended_data.add_record(empty_rec);
+        let empty_handle = doc
+            .add_entity(EntityType::Point(empty))
+            .expect("empty-link entity added");
+        assert_eq!(pe_url_of(doc.get_entity(empty_handle).unwrap()), None);
+    }
+
+    use super::*;
+
+    #[test]
+    fn bulk_selection_matches_selecting_one_at_a_time() {
+        use codec::entities::Line;
+        use codec::types::Vector3;
+
+        let build = || {
+            let mut scene = Scene::new();
+            let handles: Vec<_> = (0..40)
+                .map(|k| {
+                    let x = k as f64;
+                    scene.add_entity(EntityType::Line(Line::from_points(
+                        Vector3::new(x, 0.0, 0.0),
+                        Vector3::new(x + 1.0, 0.0, 0.0),
+                    )))
+                })
+                .collect();
+            (scene, handles)
+        };
+
+        // Picked in an order that is neither creation nor handle order.
+        let picked = |handles: &[Handle]| -> Vec<Handle> {
+            let mut order: Vec<_> = handles.iter().copied().collect();
+            order.reverse();
+            order.retain(|h| h.value() % 3 != 0);
+            order
+        };
+
+        let (mut one_at_a_time, handles) = build();
+        let order = picked(&handles);
+        for &handle in &order {
+            one_at_a_time.select_entity(handle, false);
+        }
+
+        let (mut in_bulk, handles) = build();
+        in_bulk.select_entities(&picked(&handles));
+
+        assert_eq!(
+            in_bulk.selected_handles_in_order(),
+            one_at_a_time.selected_handles_in_order(),
+            "the bulk path must select the same entities in the same order",
+        );
+
+        // And removing a subset must agree too.
+        let drop: Vec<_> = order.iter().copied().take(7).collect();
+        for &handle in &drop {
+            one_at_a_time.deselect_entity(handle);
+        }
+        in_bulk.deselect_entities(&drop);
+        assert_eq!(
+            in_bulk.selected_handles_in_order(),
+            one_at_a_time.selected_handles_in_order(),
+            "the bulk removal must leave the same selection in the same order",
+        );
+    }
+
+    #[test]
+    fn the_leader_index_matches_a_document_walk() {
+        use codec::entities::Leader;
+        use codec::types::Vector3;
+
+        let mut scene = Scene::new();
+        let line = |x: f64| {
+            EntityType::Line(codec::entities::Line::from_points(
+                Vector3::new(x, 0.0, 0.0),
+                Vector3::new(x + 1.0, 0.0, 0.0),
+            ))
+        };
+        let annotation = scene.add_entity(line(0.0));
+        let unrelated = scene.add_entity(line(5.0));
+        let mut leader_on = |target: Handle| {
+            let mut leader = Leader::default();
+            leader.annotation_handle = target;
+            scene.add_entity(EntityType::Leader(leader))
+        };
+        // Two leaders share one annotation; a third points nowhere.
+        let first = leader_on(annotation);
+        let second = leader_on(annotation);
+        let dangling = leader_on(Handle::NULL);
+
+        // The walk this replaced, written out so the index is compared against
+        // behaviour rather than against itself.
+        let by_walk = |handle: Handle| -> Vec<Handle> {
+            let mut out = vec![handle];
+            if let Some(EntityType::Leader(leader)) = scene.document.get_entity(handle) {
+                if !leader.annotation_handle.is_null() {
+                    out.push(leader.annotation_handle);
+                }
+            }
+            out.extend(scene.document.entities().filter_map(|entity| match entity {
+                EntityType::Leader(leader)
+                    if !leader.annotation_handle.is_null()
+                        && leader.annotation_handle == handle =>
+                {
+                    Some(entity.common().handle)
+                }
+                _ => None,
+            }));
+            out.sort_unstable_by_key(Handle::value);
+            out.dedup();
+            out
+        };
+
+        for handle in [annotation, unrelated, first, second, dangling] {
+            assert_eq!(
+                scene.handles_expanded_for_leader_annotations(&[handle]),
+                by_walk(handle),
+                "the index must answer exactly what the walk answered",
+            );
+        }
+        let expanded = scene.handles_expanded_for_leader_annotations(&[annotation]);
+        assert!(
+            expanded.contains(&first) && expanded.contains(&second),
+            "both leaders on one annotation must come back, not just one",
+        );
+        for handle in [first, annotation, second] {
+            scene.deselect_all();
+            scene.select_entity(handle, false);
+            let expected = scene.selected_handles_in_order();
+            scene.deselect_all();
+            scene.select_entities(&[handle]);
+            assert_eq!(scene.selected_handles_in_order(), expected);
+        }
+    }
+
+    #[test]
+    fn adding_a_type_already_present_reuses_the_list() {
+        use codec::entities::{Circle, EntityType, Line};
+        use codec::types::Vector3;
+        use std::sync::Arc;
+
+        let line = || {
+            EntityType::Line(Line::from_points(
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(1.0, 0.0, 0.0),
+            ))
+        };
+        let mut scene = Scene::new();
+        scene.add_entity(line());
+        let first = scene.entity_type_names_in_layout();
+
+        scene.add_entity(line());
+        let second = scene.entity_type_names_in_layout();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "a second line changes no type name, so the list must be reused",
+        );
+
+        scene.add_entity(EntityType::Circle(Circle::new()));
+        let third = scene.entity_type_names_in_layout();
+        assert_eq!(
+            third.as_slice(),
+            ["Circle", "Line"],
+            "a new type must appear"
+        );
+
+        // The incremental answer has to be the answer a full walk gives.
+        scene.layout_type_names_cache.borrow_mut().take();
+        assert_eq!(
+            scene.entity_type_names_in_layout().as_slice(),
+            third.as_slice(),
+            "folding edits in must match rebuilding from scratch",
+        );
+    }
+
+    #[test]
+    fn changing_an_entity_type_rebuilds_the_type_names() {
+        use codec::entities::{Circle, EntityType, Line};
+        use codec::types::Vector3;
+
+        let mut scene = Scene::new();
+        let handle = scene.add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+        )));
+        assert_eq!(scene.entity_type_names_in_layout().as_slice(), ["Line"]);
+
+        let mut circle = Circle::new();
+        circle.common.handle = handle;
+        assert!(scene.update_entity(EntityType::Circle(circle)));
+        assert_eq!(scene.entity_type_names_in_layout().as_slice(), ["Circle"]);
+    }
+
+    #[test]
+    fn layout_type_cache_reuses_and_invalidates_on_edits_undo_and_layout() {
+        use codec::entities::{Circle, EntityType, Line};
+        use codec::types::Vector3;
+        use std::sync::Arc;
+
+        let mut scene = Scene::new();
+        let empty = scene.entity_type_names_in_layout();
+        assert!(empty.is_empty());
+        assert!(Arc::ptr_eq(&empty, &scene.entity_type_names_in_layout()));
+        scene.add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+        )));
+        let lines = scene.entity_type_names_in_layout();
+        assert_eq!(lines.as_slice(), ["Line"]);
+        assert!(Arc::ptr_eq(&lines, &scene.entity_type_names_in_layout()));
+        let circle = scene.add_entity(EntityType::Circle(Circle::new()));
+        let before = scene.document.get_entity_arc(circle);
+        assert_eq!(
+            scene.entity_type_names_in_layout().as_slice(),
+            ["Circle", "Line"]
+        );
+        scene.erase_entities(&[circle]);
+        assert_eq!(scene.entity_type_names_in_layout().as_slice(), ["Line"]);
+        let changes = scene.apply_entity_delta(&[(circle, before, None)], true);
+        scene.bump_entities(&changes);
+        assert_eq!(
+            scene.entity_type_names_in_layout().as_slice(),
+            ["Circle", "Line"]
+        );
+        scene.set_current_layout("Layout1".to_owned());
+        assert!(scene.entity_type_names_in_layout().is_empty());
+        scene.set_current_layout("Model".to_owned());
+        assert_eq!(
+            scene.entity_type_names_in_layout().as_slice(),
+            ["Circle", "Line"]
+        );
+    }
+
+    #[test]
+    fn selection_fingerprint_tracks_final_set_only() {
+        let mut scene = Scene::default();
+        let first = Handle::new(1);
+        let second = Handle::new(2);
+        scene.select_entity(first, false);
+        scene.select_entity(second, false);
+        let fingerprint = scene.selection_fingerprint();
+        assert!(!scene.selection_fingerprint_dirty);
+
+        scene.deselect_all();
+        scene.select_entity(second, false);
+        scene.select_entity(first, false);
+        assert!(scene.selection_fingerprint_dirty);
+        assert_eq!(scene.selection_fingerprint(), fingerprint);
+
+        scene.set_hover_highlight(Some(Handle::new(3)));
+        assert!(!scene.selection_fingerprint_dirty);
+        assert_eq!(scene.selection_fingerprint(), fingerprint);
+    }
+}
+
+
+
+/// Cells picked in one table: the cell the pick started from and the one it
+/// reaches (a Shift+click or a drag moves the second).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TableCellSelection {
+    pub table: Handle,
+    pub anchor: (usize, usize),
+    pub end: (usize, usize),
+}
+
+impl TableCellSelection {
+    /// Top row, left column, bottom row, right column.
+    pub fn range(&self) -> (usize, usize, usize, usize) {
+        (
+            self.anchor.0.min(self.end.0),
+            self.anchor.1.min(self.end.1),
+            self.anchor.0.max(self.end.0),
+            self.anchor.1.max(self.end.1),
+        )
+    }
+}
+
+impl Scene {
+    /// Select cells of a table: the table becomes the only selected object.
+    pub fn select_table_cells(&mut self, cells: TableCellSelection) {
+        self.select_entity(cells.table, true);
+        self.table_cells = Some(cells);
+        self.bump_selection_set();
+    }
+
+    /// The cell of a shown table in the current space whose inside holds
+    /// `point` at least `margin` from its edges, topmost table first.
+    pub(crate) fn table_cell_pick(
+        &self,
+        point: glam::DVec3,
+        margin: f64,
+    ) -> Option<(Handle, (usize, usize))> {
+        let block = self.interaction_block_handle();
+        let record = self.document.block_records.iter().find(|r| r.handle == block)?;
+        record.entity_handles.iter().rev().find_map(|&handle| {
+            let Some(EntityType::Table(table)) = self.document.get_entity(handle) else {
+                return None;
+            };
+            let layer = self.document.layers.get(&table.common.layer);
+            if self.entity_temporarily_hidden(handle)
+                || self.is_reference_only(handle)
+                || !self.passes_selection_filter(handle)
+                || layer.is_some_and(|l| l.is_off() || l.is_frozen() || l.is_locked())
+                || table.common.invisible
+            {
+                return None;
+            }
+            let style = table.table_style_handle.and_then(|h| match self.document.objects.get(&h)? {
+                codec::objects::ObjectType::TableStyle(style) => Some(style),
+                _ => None,
+            });
+            crate::modules::annotate::table_cmd::table_cell_inside(table, style, point, margin)
+                .map(|cell| (handle, cell))
+        })
+    }
+
+    /// The table whose cells are selected.
+    pub fn table_cells_handle(&self) -> Option<Handle> {
+        self.table_cells
+            .filter(|cells| self.selected.contains(&cells.table))
+            .map(|cells| cells.table)
+    }
+}

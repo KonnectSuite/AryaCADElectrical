@@ -1,0 +1,456 @@
+use codec::objects::ObjectType;
+use codec::tables::{DimStyle, TextStyle};
+use codec::{Document, EntityType, Handle};
+
+#[derive(Debug, Clone)]
+pub struct TextCreationDefaults {
+    pub style_name: String,
+    pub height: f64,
+    pub width_factor: f64,
+    pub oblique_angle: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct DimensionCreationDefaults {
+    pub style_name: String,
+    pub style_handle: Handle,
+    pub text_style_name: String,
+    pub text_height: f64,
+    pub gap: f64,
+    pub arrow_size: f64,
+    pub jog_angle: f64,
+    pub scale: f64,
+    pub annotative: bool,
+}
+
+fn named_text_style(doc: &Document, name: &str) -> Option<TextStyle> {
+    doc.text_styles
+        .iter()
+        .find(|style| style.name.eq_ignore_ascii_case(name))
+        .or_else(|| {
+            doc.text_styles
+                .iter()
+                .find(|style| style.name.eq_ignore_ascii_case("Standard"))
+        })
+        .cloned()
+}
+
+/// Adds the reference's ISO-25 dimension style (the current style of its
+/// metric template) when the drawing has none of that name, and hands back its
+/// handle: the header records the current dimension style by handle as well as
+/// by name, and a DWG carries only the handle.
+pub fn ensure_iso_dim_style(doc: &mut Document) -> Handle {
+    if let Some(style) = doc
+        .dim_styles
+        .iter()
+        .find(|style| style.name.eq_ignore_ascii_case("ISO-25"))
+    {
+        return style.handle;
+    }
+    let mut style = DimStyle::new("ISO-25");
+    style.handle = doc.allocate_handle();
+    // Separate arrowheads off, as in the reference's ISO-25: DIMBLK draws
+    // both ends.
+    style.dimsah = false;
+    style.dimtxt = 2.5;
+    style.dimasz = 2.5;
+    style.dimcen = 2.5;
+    style.dimexe = 1.25;
+    style.dimexo = 0.625;
+    style.dimgap = 0.625;
+    style.dimdli = 3.75;
+    style.dimtad = 1;
+    style.dimtih = false;
+    style.dimtoh = false;
+    style.dimtofl = true;
+    style.dimtix = false;
+    style.dimsoxd = false;
+    style.dimdsep = i16::from(b',');
+    style.dimlunit = 2;
+    style.dimdec = 2;
+    style.dimtdec = 2;
+    style.dimaunit = 0;
+    style.dimadec = 0;
+    style.dimazin = 0;
+    style.dimzin = 8;
+    style.dimtzin = 8;
+    style.dimatfit = 3;
+    style.dimtmove = 0;
+    style.dimscale = 1.0;
+    style.dimlfac = 1.0;
+    style.dimtfac = 1.0;
+    style.dimaltf = 0.03937007874016;
+    style.dimaltd = 3;
+    style.dimalttd = 3;
+    style.dimaltu = 2;
+    style.dimfxl = 1.0;
+    style.dimjogang = std::f64::consts::FRAC_PI_2;
+    style.dimmzf = 100.0;
+    style.dimaltmzf = 100.0;
+    let handle = style.handle;
+    let _ = doc.dim_styles.add(style);
+    handle
+}
+
+fn named_dim_style(doc: &Document, name: &str) -> Option<DimStyle> {
+    doc.dim_styles
+        .iter()
+        .find(|style| style.name.eq_ignore_ascii_case(name))
+        .or_else(|| {
+            doc.dim_styles
+                .iter()
+                .find(|style| style.name.eq_ignore_ascii_case("Standard"))
+        })
+        .cloned()
+}
+
+pub fn current_text_defaults(doc: &Document) -> TextCreationDefaults {
+    let requested = doc.header.current_text_style_name.trim();
+    let style = named_text_style(doc, requested);
+    let variable_height = if doc.header.text_height > 1.0e-9 {
+        doc.header.text_height
+    } else {
+        style
+            .as_ref()
+            .map(|style| style.last_height)
+            .filter(|height| *height > 1.0e-9)
+            .unwrap_or(2.5)
+    };
+    TextCreationDefaults {
+        style_name: style
+            .as_ref()
+            .map(|style| style.name.clone())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "Standard".to_string()),
+        height: style
+            .as_ref()
+            .map(|style| style.height)
+            .filter(|height| *height > 1.0e-9)
+            .unwrap_or(variable_height),
+        width_factor: style.as_ref().map_or(1.0, |style| style.width_factor),
+        oblique_angle: style.as_ref().map_or(0.0, |style| style.oblique_angle),
+    }
+}
+
+pub fn current_dimension_defaults(doc: &Document) -> DimensionCreationDefaults {
+    let requested = doc.header.current_dimstyle_name.trim();
+    let style = named_dim_style(doc, requested);
+    DimensionCreationDefaults {
+        style_name: style
+            .as_ref()
+            .map(|style| style.name.clone())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "Standard".to_string()),
+        style_handle: style.as_ref().map_or(Handle::NULL, |style| style.handle),
+        text_style_name: style
+            .as_ref()
+            .map(|style| style.dimtxsty.clone())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| current_text_defaults(doc).style_name),
+        text_height: style.as_ref().map_or(2.5, |style| style.dimtxt),
+        gap: style.as_ref().map_or(0.625, |style| style.dimgap),
+        arrow_size: style.as_ref().map_or(2.5, |style| style.dimasz),
+        jog_angle: style
+            .as_ref()
+            .map_or(std::f64::consts::FRAC_PI_4, |style| style.dimjogang),
+        scale: style.as_ref().map_or(1.0, |style| {
+            if style.annotative {
+                1.0
+            } else if style.dimscale > 1.0e-9 {
+                style.dimscale
+            } else {
+                1.0
+            }
+        }),
+        annotative: style.as_ref().is_some_and(|style| style.annotative),
+    }
+}
+
+fn entity_uses_default_style(name: &str) -> bool {
+    name.trim().is_empty() || name.eq_ignore_ascii_case("Standard")
+}
+
+fn apply_text_defaults(doc: &Document, entity: &mut EntityType) {
+    let active = current_text_defaults(doc);
+    let style_name = match entity {
+        EntityType::Text(text) => &mut text.style,
+        EntityType::MText(text) => &mut text.style,
+        EntityType::AttributeEntity(attribute) => &mut attribute.text_style,
+        EntityType::AttributeDefinition(attribute) => &mut attribute.text_style,
+        _ => return,
+    };
+    if style_name.trim().is_empty() {
+        style_name.clone_from(&active.style_name);
+    }
+    let mut resolved =
+        named_text_style(doc, style_name).unwrap_or_else(|| TextStyle::new(style_name.clone()));
+    // An annotative style's height is on paper; the creating command already
+    // gave the entity its model height at the current annotation scale.
+    if resolved.annotative {
+        resolved.height = 0.0;
+    }
+    // Backward and upside down are not copied: the drawn state is the style
+    // flag XOR the entity's own (group 71), so a copy would cancel the style.
+    match entity {
+        EntityType::Text(text) => {
+            if resolved.height > 1.0e-9 {
+                text.height = resolved.height;
+            }
+            if (text.width_factor - 1.0).abs() <= 1.0e-9 {
+                text.width_factor = resolved.width_factor;
+            }
+            if text.oblique_angle.abs() <= 1.0e-9 {
+                text.oblique_angle = resolved.oblique_angle;
+            }
+        }
+        EntityType::MText(text) => {
+            if resolved.height > 1.0e-9 {
+                text.height = resolved.height;
+            }
+        }
+        EntityType::AttributeEntity(attribute) => {
+            if resolved.height > 1.0e-9 {
+                attribute.height = resolved.height;
+            }
+            if (attribute.width_factor - 1.0).abs() <= 1.0e-9 {
+                attribute.width_factor = resolved.width_factor;
+            }
+            if attribute.oblique_angle.abs() <= 1.0e-9 {
+                attribute.oblique_angle = resolved.oblique_angle;
+            }
+        }
+        EntityType::AttributeDefinition(attribute) => {
+            if resolved.height > 1.0e-9 {
+                attribute.height = resolved.height;
+            }
+            if (attribute.width_factor - 1.0).abs() <= 1.0e-9 {
+                attribute.width_factor = resolved.width_factor;
+            }
+            if attribute.oblique_angle.abs() <= 1.0e-9 {
+                attribute.oblique_angle = resolved.oblique_angle;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_dimension_defaults(doc: &Document, entity: &mut EntityType) {
+    let active = current_dimension_defaults(doc);
+    match entity {
+        EntityType::Dimension(dimension) => {
+            if entity_uses_default_style(&dimension.base().style_name) {
+                dimension
+                    .base_mut()
+                    .style_name
+                    .clone_from(&active.style_name);
+            }
+        }
+        EntityType::Leader(leader) => {
+            if entity_uses_default_style(&leader.dimension_style) {
+                leader.dimension_style.clone_from(&active.style_name);
+                leader.text_height = active.text_height;
+                leader.dimension_gap = active.gap;
+                leader.arrow_size = active.arrow_size;
+            }
+        }
+        EntityType::Tolerance(tolerance) => {
+            if entity_uses_default_style(&tolerance.dimension_style_name) {
+                tolerance
+                    .dimension_style_name
+                    .clone_from(&active.style_name);
+                tolerance.dimension_style_handle =
+                    (!active.style_handle.is_null()).then_some(active.style_handle);
+                tolerance.text_height = active.text_height;
+                tolerance.dimension_gap = active.gap;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_object_defaults(doc: &Document, entity: &mut EntityType) {
+    match entity {
+        EntityType::MultiLeader(leader) if leader.style_handle.is_none() => {
+            let name = doc.header.current_mleader_style_name.trim();
+            if let Some(style) = doc
+                .objects
+                .iter()
+                .find_map(|(handle, object)| match object {
+                    ObjectType::MultiLeaderStyle(style)
+                        if style.name.eq_ignore_ascii_case(name) =>
+                    {
+                        let mut style = style.clone();
+                        style.handle = *handle;
+                        Some(style)
+                    }
+                    _ => None,
+                })
+            {
+                crate::scene::annotative::apply_mleader_style(leader, &style);
+            }
+        }
+        EntityType::Table(table) if table.table_style_handle.is_none() => {
+            let name = doc.header.current_table_style_name.trim();
+            table.table_style_handle =
+                doc.objects
+                    .iter()
+                    .find_map(|(handle, object)| match object {
+                        ObjectType::TableStyle(style) if style.name.eq_ignore_ascii_case(name) => {
+                            Some(*handle)
+                        }
+                        _ => None,
+                    });
+        }
+        EntityType::MLine(mline) if mline.style_handle.is_none() => {
+            let name = doc.header.multiline_style.trim();
+            if let Some((handle, style_name)) =
+                doc.objects
+                    .iter()
+                    .find_map(|(handle, object)| match object {
+                        ObjectType::MLineStyle(style) if style.name.eq_ignore_ascii_case(name) => {
+                            Some((*handle, style.name.clone()))
+                        }
+                        _ => None,
+                    })
+            {
+                mline.style_handle = Some(handle);
+                mline.style_name = style_name;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The drawing's DIMDLI takes the current dimension style's value, as
+/// making a style current does; DIM's Offset changes it afterwards.
+pub fn sync_header_dim_vars(doc: &mut Document) {
+    let current = doc.header.current_dimstyle_name.clone();
+    let value = doc
+        .dim_styles
+        .iter()
+        .find(|style| style.name.eq_ignore_ascii_case(&current))
+        .map(|style| (style.dimdli, style.dimzin));
+    if let Some((dimdli, dimzin)) = value {
+        doc.header.dim_line_increment = dimdli;
+        // The header's DIMZIN follows the current style too; numbers the
+        // drawing writes (Properties, prompts) drop zeros by it.
+        doc.header.dim_zero_suppression = dimzin;
+    }
+}
+
+/// The drawing's DIMDLI (the header's; the current style's when the header
+/// has none).
+pub fn drawing_dimdli(doc: &Document) -> f64 {
+    let header = doc.header.dim_line_increment;
+    if header > 0.0 {
+        return header;
+    }
+    let current = &doc.header.current_dimstyle_name;
+    doc.dim_styles
+        .iter()
+        .find(|style| style.name.eq_ignore_ascii_case(current))
+        .map_or(header, |style| style.dimdli)
+}
+
+/// A DIMDLI set for the drawing that differs from the current dimension
+/// style goes on a new dimension as an override. Written before the
+/// dimension is committed, so the override is part of the added object and
+/// its undo step.
+pub fn apply_drawing_dimdli(doc: &Document, entity: &mut EntityType) {
+    if !matches!(entity, EntityType::Dimension(_)) {
+        return;
+    }
+    let current = &doc.header.current_dimstyle_name;
+    let Some(style_value) = doc
+        .dim_styles
+        .iter()
+        .find(|style| style.name.eq_ignore_ascii_case(current))
+        .map(|style| style.dimdli)
+    else {
+        return;
+    };
+    let drawing = drawing_dimdli(doc);
+    if (drawing - style_value).abs() > 1.0e-9 {
+        crate::entities::dim_override::set_on_entity(
+            entity,
+            crate::entities::dim_override::DIMDLI,
+            Some(codec::xdata::XDataValue::Real(drawing)),
+        );
+    }
+}
+
+pub fn apply_current_creation_styles(doc: &Document, entity: &mut EntityType) {
+    entity.common_mut().transparency = doc.current_entity_transparency();
+    apply_text_defaults(doc, entity);
+    apply_dimension_defaults(doc, entity);
+    apply_object_defaults(doc, entity);
+}
+
+pub(crate) fn transparency_options() -> Vec<String> {
+    ["ByLayer".to_string(), "ByBlock".to_string()]
+        .into_iter()
+        .chain((0..=90).step_by(10).map(|value| value.to_string()))
+        .collect()
+}
+
+pub(crate) fn parse_current_transparency(value: &str) -> Option<codec::types::Transparency> {
+    use codec::types::Transparency;
+    match value.trim().to_ascii_uppercase().as_str() {
+        "BYLAYER" | "-1" => Some(Transparency::ByLayer),
+        "BYBLOCK" | "-2" => Some(Transparency::ByBlock),
+        value => value
+            .parse::<u8>()
+            .ok()
+            .filter(|value| *value <= 90)
+            .map(|value| Transparency::from_percent(value as f64 / 100.0)),
+    }
+}
+
+pub(crate) fn current_transparency_label(value: codec::types::Transparency) -> String {
+    use codec::types::Transparency;
+    match value {
+        Transparency::ByLayer => "ByLayer".into(),
+        Transparency::ByBlock => "ByBlock".into(),
+        Transparency::Explicit(_) => format!("{:.0}", value.as_percent() * 100.0),
+    }
+}
+
+#[cfg(test)]
+mod transparency_tests {
+    use super::*;
+    use codec::types::Transparency;
+
+    #[test]
+    fn parses_supported_current_transparency_values() {
+        assert_eq!(
+            parse_current_transparency("ByLayer"),
+            Some(Transparency::ByLayer)
+        );
+        assert_eq!(
+            parse_current_transparency("-1"),
+            Some(Transparency::ByLayer)
+        );
+        assert_eq!(
+            parse_current_transparency("ByBlock"),
+            Some(Transparency::ByBlock)
+        );
+        assert_eq!(
+            parse_current_transparency("-2"),
+            Some(Transparency::ByBlock)
+        );
+        assert_eq!(
+            parse_current_transparency("25"),
+            Some(Transparency::Explicit(64))
+        );
+        assert!(parse_current_transparency("91").is_none());
+        assert!(parse_current_transparency("25.5").is_none());
+        assert!(parse_current_transparency("invalid").is_none());
+    }
+
+    #[test]
+    fn labels_transparency_for_command_and_properties_inputs() {
+        assert_eq!(current_transparency_label(Transparency::ByLayer), "ByLayer");
+        assert_eq!(current_transparency_label(Transparency::ByBlock), "ByBlock");
+        assert_eq!(current_transparency_label(Transparency::Explicit(64)), "25");
+    }
+}

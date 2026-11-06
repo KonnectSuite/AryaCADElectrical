@@ -1,0 +1,1206 @@
+//! `dynamic` arms and helpers, split out of the original `update.rs` (#mechanical decomposition).
+
+#![allow(unused_imports)]
+use super::util::*;
+use super::{format_size, VIEWCUBE_HIT_SIZE};
+use crate::app::helpers::{
+    parse_coord, ucs_rotate_vec, ucs_to_wcs, ucs_z_axis, CoordKind,
+};
+use crate::app::{Message, OpenCADStudio, POLY_START_DELAY_MS};
+use crate::modules::ModuleEvent;
+use crate::scene::model::object::GripApply;
+use crate::scene::pick::grip::{find_hit_grip, find_hit_grip_paper, find_hit_grip_rte, GripEdit};
+use crate::scene::{
+    self, hover_id, CubeRegion, Scene, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD, VIEWCUBE_PX,
+};
+use crate::ui::PropertiesPanel;
+use codec::types::Color as AcadColor;
+use codec::{EntityType as AcadEntityType, Handle};
+use iced::time::Instant;
+use iced::{mouse, Point, Task};
+
+fn eval_dynamic_angle(text: &str) -> Option<f64> {
+    let value = crate::app::expr_eval::eval_number(&text.trim().replace(',', "."))?;
+    crate::entities::common::parse_angle(&value.to_string())
+}
+
+impl OpenCADStudio {
+    pub(in crate::app) fn active_distance_ray(
+        &self,
+        i: usize,
+    ) -> Option<(glam::DVec3, glam::DVec3)> {
+        // FROM measures from its base toward the constrained cursor, not
+        // from an OTRACK / Extension endpoint elsewhere in the drawing.
+        if let Some(base) = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .filter(|c| c.name() == "FROM")
+            .and_then(|c| c.resolved_anchor())
+        {
+            return self.angle_override.map(|dir| (base, dir));
+        }
+        // A typed `<angle` locks the way from the last point.
+        if let (Some(dir), Some(base)) = (self.angle_override, self.last_point) {
+            return Some((base, dir));
+        }
+        // OTRACK already exposes its acquired world-space ray.
+        if let Some((base, dir)) = self.otrack_active {
+            return Some((base, dir));
+        }
+
+        // Extension measures along the ray its guide is drawn on. The snap
+        // carries the acquired endpoint that guide starts from, so read the ray
+        // off that rather than searching the tracking set again — a second
+        // search can disagree with the guide the user is looking at, and the
+        // acquisition it needs may already have aged out of the set.
+        let snap = self.tabs[i].snap_result?;
+        if snap.snap_type != crate::snap::SnapType::Extension {
+            return None;
+        }
+        let origin = snap.extension_origin?;
+        // The snap sits beyond its endpoint by construction, so the outward
+        // direction is simply the way from one to the other.
+        let dir = snap.world - origin;
+        Some((origin, dir.try_normalize()?))
+    }
+    /// Rebuild the active tab's dynamic-input field set to match what the
+    /// command is currently asking for. Called on cursor move and after
+    /// command-state changes. The field set only changes shape when the
+    /// command's `dyn_field()` or the presence of a base point changes;
+    /// existing typed buffers survive an unchanged shape.
+    pub(in crate::app) fn sync_dyn_fields(&mut self) {
+        use crate::app::document::{DynComponent, DynFieldEntry};
+        let i = self.active_tab;
+
+        if !self.dyn_input {
+            self.tabs[i].dyn_fields.clear();
+            self.tabs[i].dyn_active = 0;
+            self.tabs[i].dyn_anchor = None;
+            self.tabs[i].dyn_ref = None;
+            return;
+        }
+
+        // A normal 2D grip stretch behaves like a point-placement step:
+        // distance and angle are measured from the grip's original position.
+        // Lengthen uses the same overlay machinery, but it only needs the
+        // distance field: the entity itself determines the endpoint direction
+        // (or arc sweep), so an angle entry would be misleading.
+        //
+        // Grip editing is not an `active_cmd`, so handle it before the normal
+        // command-only path below.
+        let rectangle_frame = self.tabs[i]
+            .active_grip
+            .as_ref()
+            .and_then(|grip| grip.rectangle_frame);
+        let grip_input = self.tabs[i]
+            .active_grip
+            .as_ref()
+            .map(|grip| match grip.mode {
+                crate::scene::pick::grip::GripEditMode::Stretch => (grip.origin_world, None),
+                crate::scene::pick::grip::GripEditMode::Lengthen => {
+                    (grip.origin_world, Some(crate::command::DynRole::Distance))
+                }
+                crate::scene::pick::grip::GripEditMode::Radius => {
+                    (grip.origin_world, Some(crate::command::DynRole::Radius))
+                }
+                crate::scene::pick::grip::GripEditMode::ArcLength => {
+                    (grip.origin_world, Some(crate::command::DynRole::Distance))
+                }
+                crate::scene::pick::grip::GripEditMode::RectangleWidth => {
+                    (grip.origin_world, Some(crate::command::DynRole::Width))
+                }
+                crate::scene::pick::grip::GripEditMode::RectangleHeight => {
+                    (grip.origin_world, Some(crate::command::DynRole::Height))
+                }
+                crate::scene::pick::grip::GripEditMode::MoveParallel => {
+                    (grip.origin_world, Some(crate::command::DynRole::Distance))
+                }
+                crate::scene::pick::grip::GripEditMode::RectangleResize => {
+                    (grip.origin_world, None)
+                }
+            });
+
+        if let Some((origin, scalar_role)) = grip_input {
+            let wanted_roles: Vec<crate::command::DynRole> = if rectangle_frame.is_some() {
+                vec![
+                    crate::command::DynRole::Width,
+                    crate::command::DynRole::Height,
+                ]
+            } else {
+                scalar_role.map_or_else(
+                    || {
+                        vec![
+                            crate::command::DynRole::Distance,
+                            crate::command::DynRole::Angle,
+                        ]
+                    },
+                    |role| vec![role],
+                )
+            };
+            let current: Vec<crate::command::DynRole> = self.tabs[i]
+                .dyn_fields
+                .iter()
+                .map(|field| field.role)
+                .collect();
+
+            if current != wanted_roles {
+                self.tabs[i].dyn_fields = wanted_roles
+                    .iter()
+                    .copied()
+                    .map(DynFieldEntry::from_role)
+                    .collect();
+                self.tabs[i].dyn_active = 0;
+            }
+
+            self.tabs[i].dyn_guide = if rectangle_frame.is_some() {
+                crate::command::DynGuide::RectSides
+            } else if scalar_role.is_some() {
+                crate::command::DynGuide::Radius
+            } else {
+                crate::command::DynGuide::Polar
+            };
+            self.tabs[i].dyn_anchor = rectangle_frame.map(|frame| frame.0).or(Some(origin));
+            self.tabs[i].dyn_ref = None;
+            return;
+        }
+
+        if self.tabs[i].active_cmd.is_none() {
+            self.tabs[i].dyn_fields.clear();
+            self.tabs[i].dyn_active = 0;
+            self.tabs[i].dyn_anchor = None;
+            self.tabs[i].dyn_ref = None;
+            return;
+        }
+        // A command may describe its step explicitly via `dyn_spec()` — that
+        // takes full control of the boxes, guide and anchor. Otherwise fall
+        // back to the legacy `dyn_field()` shaping below.
+        if let Some(spec) = self.tabs[i].active_cmd.as_ref().and_then(|c| c.dyn_spec()) {
+            self.apply_dyn_spec(i, spec);
+            return;
+        }
+        let field = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .map(|c| c.dyn_field())
+            .unwrap_or(crate::command::DynField::Point);
+        // A text-input step reads a single scalar. The overlay shows one box
+        // the user types into (or, when the command supplies a live value,
+        // sets by moving the cursor); on commit the host routes it to
+        // `on_text_input` instead of `on_point`. A distance prompt keeps the
+        // `Distance` box (so a perpendicular-distance live value reads
+        // naturally); everything else uses the typed-only `Scalar` box.
+        let wants_text = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .map(|c| c.input_kind().wants_text())
+            .unwrap_or(false);
+        // A point step that also accepts keyword letters (PLINE A/L/C…) keeps
+        // its polar boxes: only letters reach the command line, digits stay
+        // coordinates. So such a step is NOT treated as a text-only prompt.
+        let point_keywords = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .map(|c| c.point_step_accepts_keywords())
+            .unwrap_or(false);
+        let wants_text = wants_text && !point_keywords;
+        // A step that hit-tests for an object (entity / structure pick) has no
+        // coordinate to enter — clicks select, they don't place a point. Show
+        // no coordinate box so the cursor stays clean and typed option keywords
+        // (e.g. FILLET's "R") reach the command line instead of an X/Y field.
+        let picks_object = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .map(|c| {
+                c.needs_entity_pick() || c.needs_structure_point_pick() || c.selects_by_window()
+            })
+            .unwrap_or(false);
+        let has_base = self.last_point.is_some();
+        // While aligned to an OTRACK ray, the point step reads a single
+        // distance along the ray (issue #69) — show one Distance box.
+        let guided_dist = self.active_distance_ray(i).is_some()
+            && !wants_text
+            && matches!(field, crate::command::DynField::Point);
+        let default: Vec<DynComponent> = match field {
+            _ if guided_dist => vec![DynComponent::Distance],
+            crate::command::DynField::Distance => vec![DynComponent::Distance],
+            crate::command::DynField::Angle => vec![DynComponent::Angle],
+            crate::command::DynField::Scalar => vec![DynComponent::Scalar],
+            // A text prompt with the default `Point` field reads free text /
+            // a name / a keyword (which may itself contain digits) from the
+            // command line — show no scalar box, so digits reach the command
+            // line instead of being captured into a dyn buffer.
+            crate::command::DynField::Point if wants_text || picks_object => vec![],
+            crate::command::DynField::Point if has_base => {
+                vec![DynComponent::Distance, DynComponent::Angle]
+            }
+            crate::command::DynField::Point => vec![DynComponent::X, DynComponent::Y],
+        };
+        // Multiple shapes can satisfy the same command request — e.g. a
+        // `Point` is happy with either `[Distance, Angle]` (polar) or
+        // `[X, Y]` / `[X, Y, Z]` (cartesian). If the user already
+        // reshaped via `,` (see #35) the existing set is still a valid
+        // Point configuration and must not be reverted on every mouse
+        // move.
+        let current: Vec<DynComponent> = self.tabs[i]
+            .dyn_fields
+            .iter()
+            .map(|f| f.component)
+            .collect();
+        // Only treat a cartesian / polar variant as "good enough to keep"
+        // when the user explicitly reshaped via `,`. Otherwise we follow
+        // the command's default so e.g. clicking the first point of LINE
+        // flips a stale `[X, Y]` (from before there was a base) over to
+        // the polar `[Distance, Angle]` the prompt actually wants.
+        let current_is_acceptable = if self.dyn_user_reshaped && !wants_text && !picks_object {
+            match field {
+                crate::command::DynField::Distance => {
+                    matches!(current.as_slice(), [DynComponent::Distance])
+                }
+                crate::command::DynField::Angle => {
+                    matches!(current.as_slice(), [DynComponent::Angle])
+                }
+                crate::command::DynField::Scalar => {
+                    matches!(current.as_slice(), [DynComponent::Scalar])
+                }
+                crate::command::DynField::Point => matches!(
+                    current.as_slice(),
+                    [DynComponent::Distance, DynComponent::Angle]
+                        | [DynComponent::X, DynComponent::Y]
+                        | [DynComponent::X, DynComponent::Y, DynComponent::Z]
+                ),
+            }
+        } else {
+            current == default
+        };
+        if !current_is_acceptable {
+            self.tabs[i].dyn_fields = default.into_iter().map(DynFieldEntry::new).collect();
+            self.tabs[i].dyn_active = 0;
+        }
+        // Derive the guide + anchor for the legacy field set so the overlay
+        // draws the right construction without each command opting in.
+        let comps: Vec<DynComponent> = self.tabs[i]
+            .dyn_fields
+            .iter()
+            .map(|f| f.component)
+            .collect();
+        self.tabs[i].dyn_guide = match comps.as_slice() {
+            [DynComponent::Distance, DynComponent::Angle] | [DynComponent::Angle] => {
+                crate::command::DynGuide::Polar
+            }
+            [DynComponent::Distance] => crate::command::DynGuide::Radius,
+            _ => crate::command::DynGuide::None,
+        };
+        self.tabs[i].dyn_anchor = self.last_point;
+        self.tabs[i].dyn_ref = None;
+    }
+
+    /// Apply an explicit per-step [`DynSpec`](crate::command::DynSpec): rebuild
+    /// the boxes from its roles (preserving typed buffers when the role set is
+    /// unchanged), and set the guide + anchor.
+
+    pub(in crate::app) fn apply_dyn_spec(&mut self, i: usize, spec: crate::command::DynSpec) {
+        use crate::app::document::DynFieldEntry;
+        let new_roles: Vec<crate::command::DynRole> = spec.fields.iter().map(|f| f.role).collect();
+        let cur_roles: Vec<crate::command::DynRole> =
+            self.tabs[i].dyn_fields.iter().map(|f| f.role).collect();
+        if cur_roles != new_roles {
+            self.tabs[i].dyn_fields = spec
+                .fields
+                .iter()
+                .map(|f| DynFieldEntry::from_role(f.role))
+                .collect();
+            self.tabs[i].dyn_active = 0;
+        }
+        self.tabs[i].dyn_guide = spec.guide;
+        self.tabs[i].dyn_anchor = match spec.anchor {
+            crate::command::DynAnchor::LastPoint => self.last_point,
+            crate::command::DynAnchor::Point(p) => Some(p),
+        };
+        self.tabs[i].dyn_ref = spec.ref_point;
+    }
+
+    /// Track cursor dwell over a selected entity's grip. Sets
+    /// `grip_hover` while the cursor sits within `GRIP_THRESHOLD_PX` of
+    /// a grip and opens `grip_popup` once the dwell exceeds the
+    /// threshold. Cursor drift clears both.
+    /// After the active Model tile changes, mirror its stored visual style
+    /// into the tab so the picker shows it and the tile renders with it
+    /// (the active tile draws with the tab's live render mode).
+
+    /// Resolve the world point implied by the current dynamic-input field
+    /// values. Locked fields use their typed buffer; the rest fall back to
+    /// the live cursor-derived value. Returns `None` when the field set
+    /// isn't one we know how to turn into a point.
+    /// Hand the active command the current full-precision coordinate frame.
+    pub(in crate::app) fn push_ucs_to_cmd(&mut self, i: usize) {
+        let plane = if self.tabs[i].editing_model_space() {
+            self.tabs[i].ucs_xform().working_plane()
+        } else {
+            crate::command::WorkingPlane::default()
+        };
+        if let Some(c) = self.tabs[i].active_cmd.as_mut() {
+            c.set_working_plane(plane);
+        }
+    }
+
+    /// Push the live Ctrl state into tab `i`'s active command before it builds a
+    /// preview/commit (arc-direction flip on `ARC_CONT`, etc.).
+    pub(in crate::app) fn push_ctrl_to_cmd(&mut self, i: usize) {
+        let ctrl = self.ctrl_down;
+        if let Some(c) = self.tabs[i].active_cmd.as_mut() {
+            c.set_ctrl(ctrl);
+        }
+    }
+
+    /// Cache the endpoint + exit tangent of a just-committed line/arc so a
+    /// following `ARC_CONT` starts tangentially from where drawing ended. Set to
+    /// `None` for any other entity kind. Uses `last_point` (the final pick) to
+    /// pick the endpoint the pen actually finished on.
+    pub(in crate::app) fn update_cont_anchor(&mut self, entity: &codec::EntityType) {
+        let last = self.last_point;
+        self.cont_anchor = crate::modules::draw::draw::arc::continue_anchor(entity, last);
+    }
+
+    pub(in crate::app) fn dyn_resolve_point(&self) -> Option<glam::DVec3> {
+        use crate::app::document::DynComponent;
+        let i = self.active_tab;
+        let fields = &self.tabs[i].dyn_fields;
+        if fields.is_empty() {
+            return None;
+        }
+        let w = self.tabs[i].last_cursor_world;
+        let base = self.tabs[i]
+            .dyn_anchor
+            .or(self.last_point)
+            .unwrap_or(glam::DVec3::ZERO);
+        // Buffer value parsed as f32 (de-scaled by the role so a typed diameter
+        // becomes a radius), or the supplied geometric live value. Width/Height
+        // are shown unsigned, so a typed value normally takes the sign of the
+        // cursor's delta on that axis (`live` is the signed delta in the
+        // cartesian arms). But once the user separates the two values with `,`
+        // — e.g. the rectangle opposite corner entered as "50,50" — the entry
+        // is a cartesian coordinate pair, not cursor-signed W/H dimensions, so
+        // the typed sign must stay literal. `,` is the only thing that sets
+        // `dyn_user_reshaped`, so it cleanly distinguishes comma-cartesian entry
+        // from Tab-separated dimension entry (#269).
+        let comma_cartesian = self.dyn_user_reshaped;
+        let val = |idx: usize, live: f64| -> f64 {
+            match fields[idx]
+                .buffer
+                .as_ref()
+                .map(|s| s.trim().replace(',', "."))
+                .and_then(|s| crate::app::expr_eval::eval_number(&s))
+                .map(|v| v / fields[idx].role.value_scale() as f64)
+            {
+                Some(v) => {
+                    if matches!(
+                        fields[idx].role,
+                        crate::command::DynRole::Width | crate::command::DynRole::Height
+                    ) && !comma_cartesian
+                    {
+                        v.abs().copysign(live)
+                    } else {
+                        v
+                    }
+                }
+                None => live,
+            }
+        };
+        // Work in the active UCS frame: the cursor delta from the base is
+        // rotated into UCS, so typed cartesian/polar values are interpreted in
+        // the user's coordinate system and mapped back to world on return.
+        // (The delta is offset-invariant, so only the rotation matters.)
+        let xf = self.tabs[i].ucs_xform();
+        let d_ucs = xf.vec_to_ucs(w - base);
+        let w_ucs = xf.to_ucs(w);
+        let dx = d_ucs.x;
+        let dy = d_ucs.y;
+        let dz = d_ucs.z;
+        let live_d = (dx * dx + dy * dy).sqrt();
+        let live_a = dy.atan2(dx); // radians, in the UCS plane
+                                   // A typed angle is shown unsigned (0..180); give it the sign of the
+                                   // cursor's current side so an entry made below the X axis sweeps
+                                   // downward to match the arc instead of mirroring up. An EXPLICIT
+                                   // `-`/`+` prefix keeps its literal sign though — "-30" must mean
+                                   // −30° (= 330°) regardless of where the cursor sits (#417).
+                                   // Untyped → live.
+        let angle_rad = |idx: usize| -> f64 {
+            let raw = fields[idx]
+                .buffer
+                .as_ref()
+                .map(|s| s.trim().replace(',', "."));
+            let explicit_sign = raw
+                .as_deref()
+                .is_some_and(|s| s.starts_with('-') || s.starts_with('+'));
+            match raw.as_deref().and_then(eval_dynamic_angle) {
+                Some(v) if explicit_sign => v,
+                Some(mag) => mag.abs().copysign(dy),
+                None => live_a,
+            }
+        };
+        let comps: Vec<DynComponent> = fields.iter().map(|f| f.component).collect();
+        // Perpendicular offset: a single distance measured square to the
+        // reference line (anchor → dyn_ref). The committed point lies on the
+        // perpendicular through the anchor at that offset; the command projects
+        // it. Untyped tracks the cursor's signed offset; typed takes the
+        // cursor's side.
+        if let (Some(ref_pt), [DynComponent::Distance]) = (self.tabs[i].dyn_ref, comps.as_slice()) {
+            let axis = (ref_pt - base).normalize_or_zero();
+            let perp = glam::DVec3::new(-axis.y, axis.x, 0.0);
+            let signed = (w - base).dot(perp);
+            let typed = fields[0]
+                .buffer
+                .as_ref()
+                .map(|s| s.trim().replace(',', "."))
+                .and_then(|s| crate::app::expr_eval::eval_number(&s));
+            let h = match typed {
+                Some(v) => v.abs().copysign(signed),
+                None => signed,
+            };
+            return Some(base + perp * h);
+        }
+        // DYN-on defaults to RELATIVE coordinates when a base point is set
+        // (see #26 / #35). The live cartesian fallback is the cursor
+        // position relative to base; typed values are relative deltas.
+        let has_base = self.last_point.is_some();
+        let relative = has_base && !self.dyn_coord_absolute;
+        // Relative result: base + the typed UCS-frame offset mapped to world.
+        let rel = |off_ucs: glam::DVec3| base + xf.vec_to_wcs(off_ucs);
+        match comps.as_slice() {
+            [DynComponent::X, DynComponent::Y] if relative => {
+                Some(rel(glam::DVec3::new(val(0, dx), val(1, dy), 0.0)))
+            }
+            [DynComponent::X, DynComponent::Y] => {
+                Some(xf.to_wcs(glam::DVec3::new(val(0, w_ucs.x), val(1, w_ucs.y), 0.0)))
+            }
+            [DynComponent::X, DynComponent::Y, DynComponent::Z] if relative => {
+                Some(rel(glam::DVec3::new(val(0, dx), val(1, dy), val(2, dz))))
+            }
+            [DynComponent::X, DynComponent::Y, DynComponent::Z] => Some(xf.to_wcs(
+                glam::DVec3::new(val(0, w_ucs.x), val(1, w_ucs.y), val(2, w_ucs.z)),
+            )),
+            [DynComponent::Distance, DynComponent::Angle] => {
+                let d = val(0, live_d);
+                let a = angle_rad(1);
+                Some(rel(glam::DVec3::new(d * a.cos(), d * a.sin(), 0.0)))
+            }
+            [DynComponent::Distance] => {
+                // Keep the cursor's direction (in UCS), override the magnitude.
+                let dir = glam::DVec3::new(dx, dy, 0.0).normalize_or(glam::DVec3::X);
+                Some(rel(dir * val(0, live_d)))
+            }
+            [DynComponent::Angle] => {
+                // Standalone angle (e.g. ROTATE): the typed value is an
+                // absolute CCW angle in the UCS plane, not a cursor-signed
+                // magnitude — keep it literal. Only the polar Distance+Angle
+                // pair uses the cursor-signed `angle_rad`.
+                let a = fields[0]
+                    .buffer
+                    .as_deref()
+                    .and_then(eval_dynamic_angle)
+                    .unwrap_or(live_a);
+                Some(rel(glam::DVec3::new(
+                    live_d * a.cos(),
+                    live_d * a.sin(),
+                    0.0,
+                )))
+            }
+            _ => None,
+        }
+    }
+
+    /// Handle `,` while a dynamic-input field set is showing. Locks the
+    /// current field's buffer if it has one, then either advances within
+    /// the existing field set or reshapes it: a polar `[Distance, Angle]`
+    /// configuration becomes cartesian `[X(buf), Y]`, and a cartesian
+    /// `[X, Y]` configuration extends to `[X, Y, Z]`. Default fallthrough
+    /// is "advance to next field", matching `Tab`. See #35.
+
+    pub(in crate::app) fn dyn_comma_advance(&mut self) {
+        use crate::app::document::{DynComponent, DynFieldEntry};
+        let i = self.active_tab;
+        if self.tabs[i].dyn_fields.is_empty() {
+            return;
+        }
+        // The user picked a shape — `sync_dyn_fields` preserves it until
+        // the next commit / command-start clears the flag.
+        self.dyn_user_reshaped = true;
+        let active = self.tabs[i]
+            .dyn_active
+            .min(self.tabs[i].dyn_fields.len() - 1);
+        let comps: Vec<DynComponent> = self.tabs[i]
+            .dyn_fields
+            .iter()
+            .map(|f| f.component)
+            .collect();
+        let cur_buf = self.tabs[i].dyn_fields[active].buffer.clone();
+        match (comps.as_slice(), active) {
+            // First polar field — `,` switches to cartesian, locking the
+            // typed value as X.
+            ([DynComponent::Distance, DynComponent::Angle], 0) | ([DynComponent::Distance], 0) => {
+                let mut x_field = DynFieldEntry::new(DynComponent::X);
+                x_field.buffer = cur_buf;
+                self.tabs[i].dyn_fields = vec![x_field, DynFieldEntry::new(DynComponent::Y)];
+                self.tabs[i].dyn_active = 1;
+            }
+            // Already cartesian X (first field) — just advance to Y.
+            ([DynComponent::X, DynComponent::Y], 0)
+            | ([DynComponent::X, DynComponent::Y, DynComponent::Z], 0) => {
+                self.tabs[i].dyn_active = 1;
+            }
+            // Cartesian Y — extend to 3-D by appending Z.
+            ([DynComponent::X, DynComponent::Y], 1) => {
+                self.tabs[i]
+                    .dyn_fields
+                    .push(DynFieldEntry::new(DynComponent::Z));
+                self.tabs[i].dyn_active = 2;
+            }
+            // Cartesian Y in the 3-D set — advance to Z.
+            ([DynComponent::X, DynComponent::Y, DynComponent::Z], 1) => {
+                self.tabs[i].dyn_active = 2;
+            }
+            // Z, Angle, or any singleton: nothing further to advance to.
+            _ => {}
+        }
+    }
+
+    /// Whether the current dynamic field set represents a point coordinate
+    /// that can be switched with `@` / `#`.
+    pub(in crate::app) fn dyn_has_coordinate_fields(&self, i: usize) -> bool {
+        use crate::app::document::DynComponent;
+        let comps: Vec<DynComponent> = self.tabs[i]
+            .dyn_fields
+            .iter()
+            .map(|field| field.component)
+            .collect();
+        comps.iter().any(|component| {
+            matches!(
+                component,
+                DynComponent::X | DynComponent::Y | DynComponent::Z
+            )
+        }) || matches!(
+            comps.as_slice(),
+            [DynComponent::Distance, DynComponent::Angle]
+        )
+    }
+
+    /// Switch the current dynamic point entry between relative (`@`) and
+    /// absolute (`#`) UCS coordinates. Polar fields become cartesian because
+    /// the selected mode applies to coordinate components, not distance/angle.
+    pub(in crate::app) fn dyn_set_coordinate_mode(&mut self, absolute: bool) {
+        use crate::app::document::{DynComponent, DynFieldEntry};
+        let i = self.active_tab;
+        self.dyn_coord_absolute = absolute;
+
+        let comps: Vec<DynComponent> = self.tabs[i]
+            .dyn_fields
+            .iter()
+            .map(|field| field.component)
+            .collect();
+        if matches!(
+            comps.as_slice(),
+            [DynComponent::Distance, DynComponent::Angle]
+        ) {
+            let first_buffer = self.tabs[i].dyn_fields[0].buffer.clone();
+            let mut x = DynFieldEntry::new(DynComponent::X);
+            x.buffer = first_buffer;
+            self.tabs[i].dyn_fields = vec![x, DynFieldEntry::new(DynComponent::Y)];
+            self.tabs[i].dyn_active = usize::from(self.tabs[i].dyn_fields[0].locked());
+        }
+
+        self.dyn_user_reshaped = true;
+        self.sync_dyn_fields();
+    }
+
+    /// If dynamic input has at least one locked (typed) field, resolve the
+    /// implied point, feed it to the active command as a point pick, reset
+    /// the field buffers, and return the resulting task. Returns `None`
+    /// when there is nothing typed, so the caller falls back to its normal
+    /// Enter handling.
+    /// Give a bare typed angle the sign of the cursor's side relative to the
+    /// step's reference direction, so a commit-as-text angle rotates/sweeps the
+    /// way the cursor is dragging. Only applies to steps with an `Angle` field;
+    /// an explicit `+`/`-` is left untouched. Returns the (possibly re-signed)
+    /// text to feed `on_text_input`.
+
+    pub(in crate::app) fn dyn_sign_angle_text(&self, i: usize, text: String) -> String {
+        let has_angle = self.tabs[i]
+            .dyn_fields
+            .iter()
+            .any(|f| f.role == crate::command::DynRole::Angle);
+        let t = text.trim();
+        if !has_angle || t.is_empty() || t.starts_with('-') || t.starts_with('+') {
+            return text;
+        }
+        if t.parse::<f32>().is_err() {
+            return text;
+        }
+        let anchor = self.tabs[i]
+            .dyn_anchor
+            .or(self.last_point)
+            .unwrap_or(glam::DVec3::ZERO);
+        let cur = self.tabs[i].last_cursor_world;
+        let a_cur = (cur.y - anchor.y).atan2(cur.x - anchor.x);
+        let a_ref = self.tabs[i]
+            .dyn_ref
+            .map(|r| (r.y - anchor.y).atan2(r.x - anchor.x))
+            .unwrap_or(0.0);
+        let mut d = a_cur - a_ref;
+        while d > std::f64::consts::PI {
+            d -= std::f64::consts::TAU;
+        }
+        while d <= -std::f64::consts::PI {
+            d += std::f64::consts::TAU;
+        }
+        if d < 0.0 {
+            format!("-{t}")
+        } else {
+            text
+        }
+    }
+
+    pub(in crate::app) fn try_dyn_commit(&mut self) -> Option<Task<Message>> {
+        let i = self.active_tab;
+        if !self.dyn_input
+            || self.tabs[i].active_cmd.is_none()
+            || self.tabs[i].dyn_fields.is_empty()
+            || !self.tabs[i].dyn_fields.iter().any(|f| f.locked())
+        {
+            return None;
+        }
+        // OTRACK and Extension both allow a typed scalar to act as a
+        // distance measured along the active reference ray.
+        if let Some((base, dir)) = self.active_distance_ray(i) {
+            let wants_text = self.tabs[i]
+                .active_cmd
+                .as_ref()
+                .map(|c| c.input_kind().wants_text())
+                .unwrap_or(false);
+            if !wants_text {
+                if let Some(text) = self.tabs[i]
+                    .dyn_fields
+                    .iter()
+                    .find_map(|f| f.buffer.clone())
+                {
+                    if let Some(dist) = crate::app::expr_eval::eval_number(text.trim()) {
+                        let pt = base + dir * dist;
+                        if !self.command_point_allowed(i, pt) {
+                            return Some(Task::none());
+                        }
+                        self.last_point = Some(pt);
+                        for f in self.tabs[i].dyn_fields.iter_mut() {
+                            f.buffer = None;
+                        }
+                        self.tabs[i].dyn_active = 0;
+                        self.dyn_user_reshaped = false;
+                        self.dyn_coord_absolute = false;
+                        self.sync_dyn_fields();
+                        self.reset_tracking_after_point();
+                        self.snapper.clear_override();
+                        self.snapper.remember_distance_reference(dir);
+                        self.push_ucs_to_cmd(i);
+                        let result = self.tabs[i].active_cmd.as_mut().map(|c| c.on_point(pt));
+                        let task = result.map(|r| self.apply_cmd_result(r))?;
+                        self.cursor_back_from_typed_point(i);
+                        self.refresh_active_cmd_preview(i);
+                        return Some(task);
+                    }
+                }
+            }
+        }
+        // A text-input step reads its single box as a string and commits via
+        // `on_text_input` (a count, radius, distance) rather than resolving a
+        // point. Only the typed buffer matters here — a mouse-driven live
+        // value commits through the viewport click, not Enter.
+        // A point-with-keywords step (PLINE) commits a typed distance/angle as
+        // a point, not as text, so it is excluded here.
+        let wants_text = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .map(|c| {
+                (c.input_kind().wants_text() && !c.point_step_accepts_keywords())
+                    || c.dyn_commit_as_text()
+            })
+            .unwrap_or(false);
+        if wants_text {
+            let text = self.tabs[i]
+                .dyn_fields
+                .iter()
+                .find_map(|f| f.buffer.clone())
+                .unwrap_or_default();
+            let text = crate::app::expr_eval::eval_to_string(text.trim());
+            // Shared rule: a bare angle typed into a commit-as-text step takes
+            // the sign of the cursor's side relative to the reference, so the
+            // committed direction matches the drag (the box shows magnitude
+            // only). Commands receive an already-signed string.
+            let auto_sign = self.tabs[i]
+                .active_cmd
+                .as_ref()
+                .map(|command| command.dyn_auto_sign_angle())
+                .unwrap_or(true);
+            let text = if auto_sign {
+                self.dyn_sign_angle_text(i, text)
+            } else {
+                text
+            };
+            let result = self.tabs[i]
+                .active_cmd
+                .as_mut()
+                .and_then(|c| c.on_text_input(&text));
+            for f in self.tabs[i].dyn_fields.iter_mut() {
+                f.buffer = None;
+            }
+            self.tabs[i].dyn_active = 0;
+            self.sync_dyn_fields();
+            let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
+            if let Some(p) = prompt {
+                self.command_line.push_info(&p);
+            }
+            self.refresh_active_cmd_preview(i);
+            return Some(match result {
+                Some(r) => self.apply_cmd_result(r),
+                None => self.focus_cmd_input(),
+            });
+        }
+        let pt = self.dyn_resolve_point()?;
+        if !self.command_point_allowed(i, pt) {
+            return Some(Task::none());
+        }
+        self.last_point = Some(pt);
+        self.dyn_user_reshaped = false;
+        self.dyn_coord_absolute = false;
+        self.sync_dyn_fields();
+        self.reset_tracking_after_point();
+        self.snapper.clear_override();
+        self.push_ucs_to_cmd(i);
+        let result = self.tabs[i].active_cmd.as_mut().map(|c| c.on_point(pt));
+        for f in self.tabs[i].dyn_fields.iter_mut() {
+            f.buffer = None;
+        }
+        self.tabs[i].dyn_active = 0;
+        let task = result.map(|r| self.apply_cmd_result(r))?;
+        // Match the command-line path: refresh the rubber-band preview
+        // so the next segment immediately starts from the new
+        // last_point even though no mouse-move fires after a typed
+        // coordinate. See #32.
+        self.cursor_back_from_typed_point(i);
+        self.refresh_active_cmd_preview(i);
+        Some(task)
+    }
+
+    /// While a point is typed, the preview reads the typed point as the
+    /// cursor; once it is taken, the next segment runs to the mouse again,
+    /// not to the point just typed (#2456).
+    fn cursor_back_from_typed_point(&mut self, i: usize) {
+        if i < self.tabs.len() && self.tabs[i].dyn_fields.iter().all(|f| f.buffer.is_none()) {
+            let screen = self.tabs[i].last_cursor_screen;
+            self.tabs[i].last_cursor_world = self.cursor_world_at(i, screen);
+        }
+    }
+
+    /// Mutable access to the currently selected table style.
+
+    /// Point modifiers keep their parked command's live wires and source hide-set.
+    pub(in crate::app) fn point_modifier_preview(
+        &mut self,
+        i: usize,
+        cursor: glam::DVec3,
+        tangent: Option<crate::command::TangentObject>,
+    ) -> Option<(Vec<crate::scene::WireModel>, Vec<codec::Handle>)> {
+        let tab = &mut self.tabs[i];
+        let modifier = tab.active_cmd.as_ref()?;
+        if !matches!(modifier.name(), "FROM" | "MTP") {
+            return None;
+        }
+        tab.suspended_cmd.as_ref()?;
+        // These read-only host previews inspect active_cmd. Restore the slots
+        // before invoking any command hooks; no input is dispatched to the parent.
+        std::mem::swap(&mut tab.active_cmd, &mut tab.suspended_cmd);
+        let parameter_preview = self.block_parameter_geometry_preview(i, cursor);
+        let dimension_preview = if parameter_preview.is_none() {
+            self.dimension_preview_wires(i, cursor)
+        } else {
+            None
+        };
+        let tab = &mut self.tabs[i];
+        std::mem::swap(&mut tab.active_cmd, &mut tab.suspended_cmd);
+        let modifier = tab.active_cmd.as_mut().unwrap();
+        let parent = tab.suspended_cmd.as_mut().unwrap();
+        // Use the modifier's incoming cursor, never its base or returned point.
+        let (mut wires, mut hidden) = if let Some(preview) = parameter_preview {
+            tab.scene.set_command_preview_hatches(preview.hatches);
+            (preview.wires, preview.hidden)
+        } else if let Some(wires) = dimension_preview {
+            (wires, parent.preview_hidden_handles().to_vec())
+        } else {
+            let mut wires = parent.on_preview_wires_with_tangent(cursor, tangent);
+            wires.extend(parent.persistent_preview_wires());
+            let entities = parent.preview_entities(&tab.scene.document, cursor);
+            wires.extend(tab.scene.wires_for_entities(&entities));
+            (wires, parent.preview_hidden_handles().to_vec())
+        };
+        hidden.extend_from_slice(modifier.preview_hidden_handles());
+        // Draw construction guides after the parent's ghosts and rubber band.
+        wires.extend(modifier.on_preview_wires_with_tangent(cursor, tangent));
+        Some((wires, hidden))
+    }
+
+    /// Re-run the active command's preview hook against the current
+    /// cursor world position. Keyboard-driven point commits (typed
+    /// coordinates in the command line or dynamic input) don't fire a
+    /// mouse-move event, so without this the rubber-band preview keeps
+    /// dangling from the previous `last_point` until the user actually
+    /// moves the mouse. See #32.
+    pub(in crate::app) fn refresh_active_cmd_preview(&mut self, i: usize) {
+        self.refresh_command_point_pick_context(i);
+        let perf_preview = crate::perf::enabled();
+        let preview_started = perf_preview.then(Instant::now);
+        if self.tabs[i].active_cmd.is_none() {
+            return;
+        }
+        // Re-resolve through the locked dyn fields first so a freshly typed
+        // value reshapes the preview immediately, without waiting for the
+        // next mouse move (#356). Idempotent for the polar/cartesian arms, so
+        // feeding the already-resolved cursor back in is stable.
+        if self.tabs[i].dyn_fields.iter().any(|f| f.buffer.is_some()) {
+            if let Some(r) = self.dyn_resolve_point() {
+                self.tabs[i].last_cursor_world = r;
+            }
+        }
+        let cur = self.tabs[i].last_cursor_world;
+        let compute_started = perf_preview.then(Instant::now);
+        let tab = &mut self.tabs[i];
+        // Selection-hover previews are maintained by the viewport move path.
+        // A generic command refresh (for example SnapDwellTick) has no hovered
+        // entity and would replace MATCHPROP's persistent source glow with an
+        // empty rubber-band. Preserve the current overlay; seed the source glow
+        // only if phase 2 began before any move had produced one.
+        let selection_hover_preview = tab
+            .active_cmd
+            .as_ref()
+            .is_some_and(|command| command.selection_hover_preview_enabled());
+        if selection_hover_preview {
+            if tab.scene.preview_wires.is_empty() {
+                if let Some(preview) = tab
+                    .active_cmd
+                    .as_ref()
+                    .and_then(|command| command.selection_hover_preview(&tab.scene, None))
+                {
+                    tab.scene.set_command_preview_hatches(preview.hatches);
+                    tab.scene.set_preview_wires(preview.wires);
+                }
+            }
+            return;
+        }
+        let parameter_preview = self.block_parameter_geometry_preview(i, cur);
+        let mut parameter_hidden = None;
+        let mut previews = if let Some((wires, hidden)) = self.point_modifier_preview(i, cur, None)
+        {
+            parameter_hidden = Some(hidden);
+            wires
+        } else if let Some(preview) = parameter_preview {
+            self.tabs[i].scene.set_command_preview_hatches(preview.hatches);
+            parameter_hidden = Some(preview.hidden);
+            preview.wires
+        } else if let Some(wires) = self.dimension_preview_wires(i, cur) {
+            wires
+        } else {
+            let tab = &mut self.tabs[i];
+            tab.active_cmd
+                .as_mut()
+                .map(|c| {
+                    if let Some(world_per_pixel) = tab.scene.world_per_pixel() {
+                        c.set_world_per_pixel(f64::from(world_per_pixel));
+                    }
+                    let mut wires = c.on_preview_wires(cur);
+                    wires.extend(c.persistent_preview_wires());
+                    let entities = c.preview_entities(&tab.scene.document, cur);
+                    wires.extend(tab.scene.wires_for_entities(&entities));
+                    wires
+                })
+                .unwrap_or_default()
+        };
+        if self.polar_mode {
+            if let Some(base) = self.last_point {
+                let base = base.as_vec3();
+                let effective = cur.as_vec3();
+                let dx = effective.x - base.x;
+                let dy = effective.y - base.y;
+                let step = self.polar_increment_deg.to_radians();
+                let angle = dy.atan2(dx);
+                let snapped = step > 1e-6 && ((angle / step).round() * step - angle).abs() < 1e-3;
+                if snapped && (dx * dx + dy * dy).sqrt() > 1e-4 {
+                    let far = 1e5_f32;
+                    let dir = glam::Vec3::new(dx, dy, 0.0).normalize();
+                    let far_pos = base + dir * far;
+                    let far_neg = base - dir * far;
+                    previews.push(crate::scene::WireModel {
+                        display_visible: true,
+                        plot_visible: true,
+                        name: "__polar_guide__".into(),
+                        points: vec![
+                            [far_neg.x, far_neg.y, far_neg.z],
+                            [far_pos.x, far_pos.y, far_pos.z],
+                        ],
+                        color: [0.2, 0.7, 0.9, 0.6],
+                        pattern_length: 0.8,
+                        pattern: [0.5, -0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                        line_weight_px: 1.0,
+                        aabb: crate::scene::WireModel::UNBOUNDED_AABB,
+                        plinegen: true,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        let preview_count = previews.len();
+        let compute_ms = crate::perf::elapsed_ms(compute_started);
+        let preview_hidden = parameter_hidden.unwrap_or_else(|| {
+            self.tabs[i]
+                .active_cmd
+                .as_ref()
+                .map(|command| command.preview_hidden_handles().to_vec())
+                .unwrap_or_default()
+        });
+        self.tabs[i]
+            .scene
+            .set_command_preview_hidden(&preview_hidden);
+        self.tabs[i].scene.set_preview_wires(previews);
+        let total_ms = crate::perf::elapsed_ms(preview_started);
+        if total_ms >= 1.0 || compute_ms >= 1.0 {
+            crate::perf_record!(
+                "[perf] command-preview total={total_ms:.2}ms compute={compute_ms:.2}ms wires={preview_count}",
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::eval_dynamic_angle;
+    use crate::entities::common::{set_unit_context, unit_context};
+    use crate::app::OpenCADStudio;
+    use crate::command::{CadCommand, CmdResult, FromPointCommand};
+    use crate::scene::WireModel;
+    use glam::DVec3;
+
+    #[test]
+    fn point_modifiers_keep_move_and_line_previews_at_the_incoming_cursor() {
+        for moving in [false, true] {
+            for from in [false, true] {
+                let mut app = OpenCADStudio::new_for_test();
+                let _ = app.automation_op(r#"{"op":"new"}"#);
+                let i = app.active_tab;
+                let source = WireModel::solid_f64(
+                    "source".into(),
+                    vec![[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+                    WireModel::WHITE,
+                    false,
+                );
+                let mut parent: Box<dyn CadCommand> = if moving {
+                    Box::new(crate::modules::draw::modify::translate::MoveCommand::new(
+                        vec![],
+                        vec![source],
+                    ))
+                } else {
+                    Box::new(crate::modules::draw::draw::line::LineCommand::new())
+                };
+                parent.on_point(DVec3::ZERO);
+                app.tabs[i].active_cmd = Some(parent);
+                if from {
+                    app.start_from_modifier(i);
+                } else {
+                    app.start_mtp_modifier(i);
+                }
+                for second_step in [false, true] {
+                    if second_step {
+                        app.tabs[i]
+                            .active_cmd
+                            .as_mut()
+                            .unwrap()
+                            .on_point(DVec3::new(3.0, 7.0, 0.0));
+                    }
+                    for cursor in [DVec3::new(10.0, 20.0, 0.0), DVec3::new(40.0, 50.0, 0.0)] {
+                        let expected = app.tabs[i]
+                            .suspended_cmd
+                            .as_mut()
+                            .unwrap()
+                            .on_preview_wires(cursor);
+                        app.tabs[i].last_cursor_world = cursor;
+                        app.refresh_active_cmd_preview(i);
+                        let actual = &app.tabs[i].scene.preview_wires;
+                        assert!(actual.len() >= expected.len());
+                        for (wire, expected) in actual.iter().zip(&expected) {
+                            assert_eq!(wire.points, expected.points);
+                            assert_eq!(wire.color, expected.color);
+                        }
+                        assert!(!expected.is_empty());
+                        assert_eq!(
+                            actual.len(),
+                            expected.len()
+                                + if second_step {
+                                    if from {
+                                        1
+                                    } else {
+                                        2
+                                    }
+                                } else {
+                                    0
+                                }
+                        );
+                        if from && second_step {
+                            let guide = actual.last().unwrap();
+                            assert_eq!(guide.name, "from_guide");
+                            assert!(guide.pattern_length > 0.0 && guide.pattern[1] < 0.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn point_modifier_preserves_stationary_ghost_persistence_and_hidden_sources() {
+        struct Parent {
+            hidden: [codec::Handle; 1],
+        }
+        impl CadCommand for Parent {
+            fn name(&self) -> &'static str {
+                "test_parent"
+            }
+            fn prompt(&self) -> String {
+                String::new()
+            }
+            fn on_point(&mut self, _: DVec3) -> CmdResult {
+                CmdResult::NeedPoint
+            }
+            fn on_enter(&mut self) -> CmdResult {
+                CmdResult::Cancel
+            }
+            fn preview_hidden_handles(&self) -> &[codec::Handle] {
+                &self.hidden
+            }
+            fn persistent_preview_wires(&self) -> Vec<WireModel> {
+                vec![WireModel::solid_f64(
+                    "shadow".into(),
+                    vec![[0.0; 3], [1.0; 3]],
+                    [0.67, 0.79, 0.84, 0.38],
+                    false,
+                )]
+            }
+            fn preview_entities(
+                &mut self,
+                _: &codec::Document,
+                pt: DVec3,
+            ) -> Vec<codec::EntityType> {
+                vec![codec::EntityType::Line(codec::Line::from_points(
+                    codec::types::Vector3::ZERO,
+                    codec::types::Vector3::new(pt.x, pt.y, pt.z),
+                ))]
+            }
+        }
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        app.tabs[i].suspended_cmd = Some(Box::new(Parent {
+            hidden: [codec::Handle::new(123)],
+        }));
+        app.tabs[i].active_cmd = Some(Box::new(FromPointCommand::new(None)));
+        app.tabs[i].last_cursor_world = DVec3::new(10.0, 20.0, 0.0);
+        let (_, hidden) = app
+            .point_modifier_preview(i, DVec3::new(10.0, 20.0, 0.0), None)
+            .unwrap();
+        assert_eq!(hidden, vec![codec::Handle::new(123)]);
+        app.refresh_active_cmd_preview(i);
+        let scene = &app.tabs[i].scene;
+        assert_eq!(scene.preview_wires.len(), 2);
+        assert_eq!(scene.preview_wires[0].name, "shadow");
+        assert_eq!(scene.preview_wires[0].color, [0.67, 0.79, 0.84, 0.38]);
+    }
+
+    #[test]
+    fn from_keeps_the_hosts_styled_dimension_preview() {
+        use crate::command::StepInput;
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        let _ = app.run_command_line("DIMLINEAR");
+        let _ = app.feed_command(StepInput::Point(DVec3::ZERO));
+        let _ = app.feed_command(StepInput::Point(DVec3::new(10.0, 0.0, 0.0)));
+        app.tabs[i].last_cursor_world = DVec3::new(10.0, 20.0, 0.0);
+        let expected = app
+            .dimension_preview_wires(i, app.tabs[i].last_cursor_world)
+            .unwrap();
+        assert!(!expected.is_empty());
+        app.start_from_modifier(i);
+        let actual = &app.tabs[i].scene.preview_wires;
+        assert_eq!(actual.len(), expected.len());
+        for (wire, expected) in actual.iter().zip(&expected) {
+            // NaN points are polyline breaks; compare them by bits.
+            let bits = |points: &[[f32; 3]]| -> Vec<[u32; 3]> {
+                points.iter().map(|p| p.map(f32::to_bits)).collect()
+            };
+            assert_eq!(bits(&wire.points), bits(&expected.points));
+        }
+    }
+
+    #[test]
+    fn from_keeps_stretchs_existing_pale_stationary_shadow() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        let handle =
+            app.tabs[i]
+                .scene
+                .add_entity(codec::EntityType::Line(codec::Line::from_points(
+                    codec::types::Vector3::ZERO,
+                    codec::types::Vector3::new(2.0, 0.0, 0.0),
+                )));
+        let source = app.tabs[i].scene.wire_models_for(&[handle]);
+        let mut parent = crate::modules::draw::modify::stretch::StretchCommand::preselected(
+            vec![handle],
+            source,
+            (DVec3::splat(-1.0), DVec3::splat(3.0)),
+        );
+        parent.on_point(DVec3::ZERO);
+        app.tabs[i].active_cmd = Some(Box::new(parent));
+        app.start_from_modifier(i);
+        let (wires, hidden) = app
+            .point_modifier_preview(i, DVec3::new(10.0, 20.0, 0.0), None)
+            .unwrap();
+        assert_eq!(hidden, vec![handle]);
+        assert!(!wires.is_empty());
+        app.tabs[i].last_cursor_world = DVec3::new(10.0, 20.0, 0.0);
+        app.refresh_active_cmd_preview(i);
+        let shadow = app.tabs[i]
+            .scene
+            .preview_wires
+            .iter()
+            .find(|wire| wire.reference_only)
+            .unwrap();
+        assert_eq!(shadow.color, [0.67, 0.79, 0.84, 0.38]);
+        assert_eq!(shadow.points[0], [0.0; 3]);
+        assert_eq!(shadow.points[1], [2.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn dynamic_angle_expressions_follow_drawing_units() {
+        let previous = unit_context();
+        let mut context = previous;
+
+        context.aunits = 2;
+        set_unit_context(context);
+        assert!(
+            (eval_dynamic_angle("2 * 50").unwrap() - std::f64::consts::FRAC_PI_2).abs() < 1e-12
+        );
+
+        context.aunits = 3;
+        set_unit_context(context);
+        assert!(
+            (eval_dynamic_angle("1.5707963267948966").unwrap() - std::f64::consts::FRAC_PI_2).abs()
+                < 1e-12
+        );
+
+        set_unit_context(previous);
+    }
+}

@@ -1,0 +1,42 @@
+[
+  {
+    "repo": "HakanSeven12/opencad-example-plugin",
+    "name": "Example Plugin",
+    "description": "Reference dynamically-loaded add-on (ribbon tab + EX_HELLO command)."
+  },
+  {
+    "repo": "OpenAEC-Foundation/Open-Infra-Studio",
+    "name": "Open Infra Studio",
+    "description": "GIS and civil design for infrastructure: project location in any coordinate system, 600+ WMS/WFS/tile services worldwide, OpenStreetMap, CityGML/CityJSON, alignments, profiles and corridors, plus Dutch base data (BGT, BRK, KLIC, AHN) to NLCS."
+  },
+  {
+    "repo": "mf4633/opencad-storm-sewer-plugin",
+    "name": "Storm Sewer",
+    "description": "Gravity storm-drain network design and analysis (Rational + Manning + HGL, LandXML import). Free to draw and analyze; Pro ($29/yr) adds HTML reports, pipe sizing, multi-RP."
+  },
+  {
+    "repo": "mf4633/opencad-hydrocomplete-plugin",
+    "name": "HydroComplete",
+    "description": "Full stormwater hydrology and hydraulics — mirrors HydroComplete for Civil 3D (HC_ANALYZE, HC_REVIEW, KaTeX HTML reports, Atlas 14, BMP/WQV, LandXML)."
+  },
+  {
+    "repo": "KevinGriffin-new/opencad-landsurvey-plugin",
+    "name": "Land Survey",
+    "description": "Survey points, PNEZD & LandXML import, TIN surfaces, earthwork volumes, COGO, and coordinate transforms (RTS / Helmert / resection)."
+  },
+  {
+    "repo": "piyton/ocs-mcp-bridge",
+    "name": "MCP Bridge",
+    "description": "Read/write bridge for external tools: serves the live selection and accepts draw/remove requests over a local socket (MCP servers, scripts)."
+  },
+  {
+    "repo": "schoeller/ocs_python_repl",
+    "name": "Python REPL Plugin",
+    "description": "Out-of-process V4 plugin for Open CAD Studio that opens an IPython REPL in an OS terminal window bound to the active document tab. Python code reads the live document through a zero-copy shared-memory snapshot and mutates it through the plugin API. Limited to entity types Point, Line, Circle, Arc, Ellipse, Polyline, Polyline2D, Polyline3D, LwPolyline, Spline, MText and XData"
+  },
+  {
+    "repo": "AAD001-Dwg/OpenCadStudio-construction-layer-plugin",
+    "name": "Construction Layers & Guides",
+    "description": "Construction layers, infinite lines, rays, reference circles and LibreCAD/FreeCAD drafting guides with real-time viewport preview and auto-conversion."
+  }
+]

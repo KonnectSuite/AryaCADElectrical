@@ -1,0 +1,4083 @@
+// Explode tool — ribbon definition + command implementation.
+//
+// Command:  EXPLODE (X)
+//   EXPLODE: Breaks compound objects into their constituent simple entities.
+//
+//   Supported:
+//     LwPolyline  → Lines (straight segments) + Arcs (bulge segments)
+//     Polyline2D  → Lines + Arcs
+//     Polyline3D  → Lines
+//     Polyline    → Lines
+//     Insert      → constituent entities (via opencadcodec explode_from_document)
+//     MLine       → Lines (one run per style element, as drawn)
+//     Dimension   → Lines (extension + dimension + arrows) + Text
+//     MText       → Text lines
+//     Region      → Lines, Arcs, Circles, Ellipses, Splines (from ACIS B-Rep loops or wires)
+//     Hatch       → Lines of its pattern, clipped to the boundary (not solid/gradient)
+//
+//   Unsupported entity types are skipped silently.
+
+use super::geom::normalize_angle as norm_angle;
+
+use codec::entities::EntityCommon;
+use codec::entities::{
+    Arc as ArcEnt, Block, BlockEnd, Circle as CircleEnt, Dimension, Line as LineEnt, LwPolyline,
+    MLine,
+};
+use codec::entities::{Polyline, Polyline2D};
+use codec::tables::BlockRecord;
+use codec::types::Vector3;
+use codec::{Document, EntityType, Handle};
+
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
+use crate::entities::curve::lwpolyline_world_xy;
+use crate::modules::{IconKind, ModuleEvent, ToolDef};
+use crate::t;
+use glam::DVec3;
+
+// ── Ribbon definition ──────────────────────────────────────────────────────
+
+pub fn tool() -> ToolDef {
+    ToolDef {
+        id: "EXPLODE",
+        label: "Explode",
+        icon: IconKind::Svg(include_bytes!("../../../../assets/icons/explode.svg")),
+        event: ModuleEvent::Command("EXPLODE".to_string()),
+    }
+}
+
+// ── Geometry helpers ────────────────────────────────────────────────────────
+
+/// Explode just the polyline family (LwPolyline / Polyline / Polyline2D /
+/// Polyline3D) into Line + Arc segments. No document needed — used where a
+/// polyline must be treated as its constituent edges (e.g. TRIM boundaries).
+/// Returns empty for any other entity type.
+pub fn explode_polyline_segments(entity: &EntityType) -> Vec<EntityType> {
+    match entity {
+        EntityType::LwPolyline(p) => explode_lwpolyline(p),
+        EntityType::Polyline2D(p) => explode_polyline2d(p),
+        EntityType::Polyline(p) => explode_polyline(p),
+        EntityType::Polyline3D(p) => explode_polyline3d(p),
+        _ => vec![],
+    }
+}
+
+/// Decompose an entity into its constituent simple entities.
+/// Returns an empty vec if the entity cannot be exploded.
+pub fn explode_entity(entity: &EntityType, document: &Document) -> Vec<EntityType> {
+    explode_entity_in_context(entity, document, None)
+}
+
+fn explode_entity_in_context(
+    entity: &EntityType,
+    document: &Document,
+    annotation_scale_handle: Option<Handle>,
+) -> Vec<EntityType> {
+    let contextual = if matches!(entity, EntityType::MultiLeader(_)) {
+        crate::scene::annotative::entity_for_annotation_context(
+            document,
+            entity,
+            annotation_scale_handle,
+        )
+    } else {
+        std::borrow::Cow::Borrowed(entity)
+    };
+    let entity = contextual.as_ref();
+    match entity {
+        EntityType::Line(line) => {
+            let Some(association) =
+                codec::entities::CenterMarkAssociation::read(&line.common.extended_data)
+            else {
+                return vec![];
+            };
+            crate::scene::centermark::mark_segments(&association)
+                .into_iter()
+                .map(|segment| {
+                    let mut common = line.common.clone();
+                    common.handle = Handle::NULL;
+                    codec::entities::CenterMarkAssociation::remove(&mut common.extended_data);
+                    EntityType::Line(LineEnt {
+                        common,
+                        start: Vector3::new(segment[0].x, segment[0].y, segment[0].z),
+                        end: Vector3::new(segment[1].x, segment[1].y, segment[1].z),
+                        ..LineEnt::new()
+                    })
+                })
+                .collect()
+        }
+        // The codec's pieces match ours for these (and keep an LWPOLYLINE's
+        // own extrusion); the object data rides along as with every piece.
+        EntityType::LwPolyline(_)
+        | EntityType::Polyline2D(_)
+        | EntityType::Polyline3D(_)
+        | EntityType::Hatch(_) => entity
+            .explode()
+            .into_iter()
+            .map(|mut piece| {
+                piece.common_mut().extended_data = entity.common().extended_data.clone();
+                piece
+            })
+            .collect(),
+        EntityType::Polyline(p) => explode_polyline(p),
+        // A MINSERT expands to one copy of the block per cell; leave arrays
+        // too large to materialize intact instead of exhausting memory.
+        EntityType::Insert(ins)
+            if !super::array::array_items_within_limit(&[
+                ins.row_count as u64,
+                ins.column_count as u64,
+            ]) =>
+        {
+            vec![]
+        }
+        // The codec's explode_from_document refuses a MINSERT; expand it cell
+        // by cell from the block's entities instead.
+        EntityType::Insert(ins) => ins
+            .block_entities_from_document(document)
+            .map(|entities| ins.explode(&entities))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|entity| !crate::scene::block_construction::is_construction(entity.common()))
+            .map(normalize_insert_entity)
+            .collect(),
+        EntityType::MLine(ml) => explode_mline(ml, document),
+        EntityType::Dimension(dim) => explode_dimension(dim, document),
+        EntityType::Leader(leader) => explode_leader(leader, document),
+        EntityType::MultiLeader(leader) => {
+            explode_multileader(leader, document, leader.context.scale_factor as f32)
+        }
+        EntityType::MText(t) => crate::entities::mtext::explode_mtext(t, document),
+        EntityType::Region(region) => explode_region(region),
+        _ => vec![],
+    }
+}
+
+/// Explode every entity; one piece list per input, input order preserved,
+/// empty lists kept. Used by benchmarks and regression tests.
+pub fn explode_batch(items: &[(Handle, &EntityType)], doc: &Document) -> Vec<Vec<EntityType>> {
+    items.iter().map(|(_, e)| explode_entity(e, doc)).collect()
+}
+
+/// Plan the EXPLODE command for an already lock-filtered selection:
+/// order-preserving, empty pieces dropped (matching the command arm).
+pub fn plan_explode(
+    selected: &[(Handle, &EntityType)],
+    doc: &Document,
+) -> Vec<(Handle, Vec<EntityType>)> {
+    plan_explode_in_context(selected, doc, None)
+}
+
+/// Bake multileaders from their context for the given annotation scale, at that
+/// context's stored sizes (they are not rescaled to the current scale).
+pub fn plan_explode_in_context(
+    selected: &[(Handle, &EntityType)],
+    doc: &Document,
+    annotation_scale_handle: Option<Handle>,
+) -> Vec<(Handle, Vec<EntityType>)> {
+    selected
+        .iter()
+        .filter_map(|(handle, entity)| {
+            let pieces = explode_entity_in_context(entity, doc, annotation_scale_handle);
+            if pieces.is_empty() {
+                None
+            } else {
+                Some((*handle, pieces))
+            }
+        })
+        .collect()
+}
+
+/// Apply precomputed EXPLODE replacements, erasing only sources with pieces.
+/// Linked annotations or leaders without their own replacements stay intact.
+/// Returns the number of exploded sources.
+pub fn apply_explode_replacements(
+    scene: &mut crate::scene::Scene,
+    replacements: Vec<(Handle, Vec<EntityType>)>,
+) -> usize {
+    let exploded = replacements.len();
+    let handles: Vec<Handle> = replacements.iter().map(|(h, _)| *h).collect();
+    scene.erase_entities_exact(&handles);
+    for (_, pieces) in replacements {
+        for piece in pieces {
+            scene.add_entity(piece);
+        }
+    }
+    exploded
+}
+
+fn explode_leader(leader: &codec::entities::Leader, doc: &Document) -> Vec<EntityType> {
+    use crate::entities::{dim_override as dov, leader::LeaderTess};
+    let style = doc.dim_styles.iter().find(|s| {
+        s.name.eq_ignore_ascii_case(&leader.dimension_style)
+            || (leader.dimension_style.trim().is_empty() && s.name.eq_ignore_ascii_case("Standard"))
+    });
+    let xd = &leader.common.extended_data;
+    let clr = dov::int(xd, dov::DIMCLRD)
+        .or_else(|| style.map(|s| s.dimclrd))
+        .unwrap_or(0);
+    // Match LeaderTess: only a concrete per-object DIMLWD changes the weight.
+    let lw = dov::int(xd, dov::DIMLWD).unwrap_or(-1);
+    let mut common = dim_common(&leader.common, clr, lw);
+    common.owner_handle = Handle::NULL;
+    common.reactors.clear();
+    // Reuse the live path (including spline leaders), hook and all arrow kinds.
+    // The document-only explode API bakes at annotation scale 1.
+    let model = leader.tessellate(doc, Handle::NULL, false, [1.0; 4], 1.0, 1.0);
+    explode_leader_wire(&model, common)
+}
+
+fn explode_multileader(
+    ml: &codec::entities::MultiLeader,
+    doc: &Document,
+    anno_scale: f32,
+) -> Vec<EntityType> {
+    use crate::entities::multileader::{
+        active_vertical_attachment, block_content_insert, mleader_v_anchor, MultiLeaderTess,
+    };
+    use crate::entities::text_support::MTextVAnchor;
+    use codec::entities::{
+        mtext::{AttachmentPoint, DrawingDirection},
+        multileader::TextAttachmentPointType,
+        LeaderContentType,
+    };
+    // Match color_or_inherit: ByLayer/ByBlock inherit the host's colour.
+    let common_for = |color: codec::types::Color| {
+        let mut common = dim_common(&ml.common, 0, -1);
+        common.owner_handle = Handle::NULL;
+        common.reactors.clear();
+        for marker in ["AcadAnnotative", "AcAnnoPO", "AcAnnotativeData"] {
+            common.extended_data.remove_record(marker);
+        }
+        if color.rgb().is_some() {
+            common.color = color;
+            common.color_name = None;
+            common.color_book_handle = None;
+        }
+        common
+    };
+    let mut common = with_dim_linetype(
+        common_for(ml.line_color),
+        doc,
+        ml.line_type_handle.unwrap_or(Handle::NULL),
+    );
+    if let codec::types::LineWeight::Value(v) = ml.line_weight {
+        if v >= 0 {
+            common.line_weight = ml.line_weight;
+        }
+    }
+    // Render only leader geometry: keep text as MTEXT and blocks as INSERTs.
+    // Keep path segments even when they coincide with a filled arrow's outline.
+    let mut geometry = ml.clone();
+    geometry.content_type = LeaderContentType::None;
+    geometry.context.arrowhead_size = 0.0;
+    let tessellate = |geometry: &codec::entities::MultiLeader| {
+        geometry.tessellate(
+            doc,
+            Handle::NULL,
+            false,
+            [1.0; 4],
+            1.0,
+            anno_scale,
+            None,
+            None,
+            None,
+            None,
+            None,
+            [0.0; 4],
+        )
+    };
+    let models = tessellate(&geometry);
+    let mut pieces = models
+        .first()
+        .map(|model| explode_leader_wire(model, common.clone()))
+        .unwrap_or_default();
+    // The arrowheads: the leader drawn again with them and without its
+    // landing, less the runs the first pass already drew. A leader of type
+    // None draws neither, so only its content explodes.
+    geometry.context.arrowhead_size = ml.context.arrowhead_size;
+    geometry.enable_landing = false;
+    let arrows = tessellate(&geometry).into_iter().next();
+    if let (Some(path), Some(mut model)) = (models.first(), arrows) {
+        type Run = Vec<([f32; 3], [f32; 3])>;
+        let runs = |points: &[[f32; 3]], low: &[[f32; 3]]| -> Vec<Run> {
+            let mut out: Vec<Vec<_>> = vec![Vec::new()];
+            for (i, p) in points.iter().enumerate() {
+                if p[0].is_nan() {
+                    out.push(Vec::new());
+                } else {
+                    let l = low.get(i).copied().unwrap_or([0.0; 3]);
+                    out.last_mut().unwrap().push((*p, l));
+                }
+            }
+            out.retain(|run| !run.is_empty());
+            out
+        };
+        let drawn = runs(&path.points, &path.points_low);
+        let nan = [f32::NAN; 3];
+        let (mut points, mut points_low) = (Vec::new(), Vec::new());
+        // Each kept run follows a NaN, so the splitter treats every one as an
+        // arrow and leaves the edges its SOLID owns to the SOLID.
+        for run in runs(&model.points, &model.points_low) {
+            if drawn.contains(&run) {
+                continue;
+            }
+            points.push(nan);
+            points_low.push([0.0; 3]);
+            for (p, l) in run {
+                points.push(p);
+                points_low.push(l);
+            }
+        }
+        model.points = points;
+        model.points_low = points_low;
+        pieces.extend(explode_leader_wire(&model, common));
+    }
+    let ctx = &ml.context;
+    // Same stored-context correction and fallback scale as MultiLeaderTess.
+    let annotative = crate::scene::annotative::mleader_is_annotative(doc, ml);
+    let correction = if annotative && ctx.scale_factor.abs() > 1e-12 {
+        let ratio = anno_scale as f64 / ctx.scale_factor;
+        if ratio.is_finite() && ratio > 0.0 {
+            ratio
+        } else {
+            1.0
+        }
+    } else {
+        1.0
+    };
+    if ml.content_type == LeaderContentType::MText && !ctx.text_string.is_empty() {
+        let mut text = codec::entities::MText::with_value(&ctx.text_string, ctx.text_location);
+        if annotative {
+            if let Some(root) = ctx.leader_roots.first() {
+                text.insertion_point.x = root.connection_point.x
+                    + (ctx.text_location.x - root.connection_point.x) * correction;
+                text.insertion_point.y = root.connection_point.y
+                    + (ctx.text_location.y - root.connection_point.y) * correction;
+            }
+        }
+        text.common = common_for(ctx.text_color);
+        text.height = if ctx.text_height > 0.0 {
+            ctx.text_height * correction
+        } else {
+            let scale = if annotative {
+                anno_scale as f64
+            } else if ml.scale_factor.abs() > 1e-12 {
+                ml.scale_factor
+            } else {
+                1.0
+            };
+            ml.text_height * scale
+        };
+        text.rectangle_width = ctx.text_width * correction;
+        let td = ctx.text_direction;
+        text.rotation = if td.x.abs() > 1e-9 || td.y.abs() > 1e-9 {
+            td.y.atan2(td.x)
+        } else {
+            ctx.text_rotation
+        };
+        if ml.text_direction_negative {
+            text.rotation += std::f64::consts::PI;
+        }
+        // Level horizontal contexts store the box's top corner; the renderer
+        // anchors those at the landing. Rotated/vertical text uses the stored anchor.
+        let row = if ml.text_attachment_direction
+            == codec::entities::TextAttachmentDirectionType::Horizontal
+            && text.rotation.abs() < 1e-3
+            && !ctx.leader_roots.is_empty()
+        {
+            0
+        } else {
+            match mleader_v_anchor(active_vertical_attachment(ml)) {
+                MTextVAnchor::Top => 0,
+                MTextVAnchor::Bottom | MTextVAnchor::BottomOfTopLine => 6,
+                _ => 3,
+            }
+        };
+        let col = match ctx.text_attachment_point {
+            TextAttachmentPointType::Left => 0,
+            TextAttachmentPointType::Center => 1,
+            TextAttachmentPointType::Right => 2,
+        };
+        text.attachment_point = [
+            AttachmentPoint::TopLeft,
+            AttachmentPoint::TopCenter,
+            AttachmentPoint::TopRight,
+            AttachmentPoint::MiddleLeft,
+            AttachmentPoint::MiddleCenter,
+            AttachmentPoint::MiddleRight,
+            AttachmentPoint::BottomLeft,
+            AttachmentPoint::BottomCenter,
+            AttachmentPoint::BottomRight,
+        ][row + col];
+        text.style = ctx
+            .text_style_handle
+            .and_then(|h| doc.text_styles.iter().find(|s| s.handle == h))
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| "STANDARD".into());
+        text.normal = ctx.text_normal;
+        text.line_spacing_factor = ctx.line_spacing_factor;
+        text.line_spacing_style = ctx.line_spacing_style;
+        text.drawing_direction = match ctx.text_flow_direction {
+            codec::entities::FlowDirectionType::Vertical => DrawingDirection::TopToBottom,
+            codec::entities::FlowDirectionType::ByStyle => DrawingDirection::ByStyle,
+            _ => DrawingDirection::LeftToRight,
+        };
+        // The frame explodes into its own polyline: the text box grown by the landing gap.
+        if ml.text_frame {
+            let v_anchor = [
+                MTextVAnchor::Top,
+                MTextVAnchor::Middle,
+                MTextVAnchor::Bottom,
+            ][row / 3];
+            pieces.extend(text_frame_polyline(
+                &text,
+                doc,
+                col as f32 * 0.5,
+                v_anchor,
+                ctx.landing_gap.max(0.0) * correction,
+                common_for(ctx.text_color),
+            ));
+        }
+        pieces.push(EntityType::MText(Box::new(text)));
+    } else {
+        // The render helper resolves the block's extents anchor, scale and rotation.
+        if let Some(mut insert) = block_content_insert(doc, ml) {
+            insert.common = common_for(ml.block_content_color);
+            let record = doc
+                .block_records
+                .iter()
+                .find(|r| r.name == insert.block_name);
+            let definitions: Vec<_> = record
+                .into_iter()
+                .flat_map(|r| &r.entity_handles)
+                .filter_map(|h| match doc.get_entity(*h) {
+                    Some(EntityType::AttributeDefinition(definition)) => Some(definition),
+                    _ => None,
+                })
+                .collect();
+            let transform = crate::scene::render_graph::insert_transform(doc, &insert);
+            for (index, definition) in definitions.iter().enumerate() {
+                let value = ml
+                    .block_attributes
+                    .iter()
+                    .find(|a| a.attribute_definition_handle == Some(definition.common.handle))
+                    .or_else(|| {
+                        ml.block_attributes.iter().find(|a| {
+                            a.attribute_definition_handle.is_none() && a.index as usize == index
+                        })
+                    })
+                    .map(|a| a.text.clone());
+                let mut attribute =
+                    codec::entities::AttributeEntity::from_definition(definition, value);
+                codec::Entity::apply_transform(&mut attribute, &transform);
+                insert.attributes.push(attribute);
+            }
+            pieces.push(EntityType::Insert(insert));
+        }
+    }
+    pieces
+}
+
+/// Frame `gap` outside an MTEXT's laid-out text: five vertices, last = first.
+fn text_frame_polyline(
+    text: &codec::entities::MText,
+    doc: &Document,
+    h_anchor: f32,
+    v_anchor: crate::entities::text_support::MTextVAnchor,
+    gap: f64,
+    common: EntityCommon,
+) -> Option<EntityType> {
+    use crate::entities::text_support::{layout_mtext, resolve_text_style, MTextRenderOpts};
+    use codec::entities::{mtext::DrawingDirection, LineSpacingStyle, LwVertex};
+    let style = resolve_text_style(&text.style, doc);
+    let layout = layout_mtext(&MTextRenderOpts {
+        layer_color: None,
+        columns: Default::default(),
+        value: &text.value,
+        insertion: [0.0, 0.0, 0.0],
+        height: text.height as f32,
+        rect_w: text.rectangle_width as f32,
+        rotation: 0.0,
+        style: &style,
+        attach_h_anchor: h_anchor,
+        v_anchor,
+        line_spacing_factor: text.line_spacing_factor as f32,
+        exact_line_spacing: matches!(text.line_spacing_style, LineSpacingStyle::Exactly),
+        rectangle_height: 0.0,
+        vertical_text: matches!(text.drawing_direction, DrawingDirection::TopToBottom),
+        want_glyph_boxes: false,
+        break_long_words: false,
+    });
+    let lb = layout.local_bounds;
+    if lb[0] > lb[2] || lb[1] > lb[3] {
+        return None;
+    }
+    let (sin, cos) = text.rotation.sin_cos();
+    let corner = |x: f32, y: f32| {
+        let (x, y) = (x as f64, y as f64);
+        LwVertex::new(codec::types::Vector2::new(
+            text.insertion_point.x + x * cos - y * sin,
+            text.insertion_point.y + x * sin + y * cos,
+        ))
+    };
+    let (g, [x0, y0, x1, y1]) = (gap as f32, lb);
+    let mut frame = LwPolyline::new();
+    frame.common = common;
+    frame.vertices = vec![
+        corner(x0 - g, y1 + g),
+        corner(x1 + g, y1 + g),
+        corner(x1 + g, y0 - g),
+        corner(x0 - g, y0 - g),
+        corner(x0 - g, y1 + g),
+    ];
+    frame.elevation = text.insertion_point.z;
+    frame.normal = text.normal;
+    Some(EntityType::LwPolyline(frame))
+}
+
+fn explode_leader_wire(
+    model: &crate::scene::model::wire_model::WireModel,
+    common: EntityCommon,
+) -> Vec<EntityType> {
+    let restore = |high: &[[f32; 3]], low: &[[f32; 3]]| -> Vec<Vector3> {
+        high.iter()
+            .enumerate()
+            .map(|(i, h)| {
+                let l = low.get(i).copied().unwrap_or([0.0; 3]);
+                Vector3::new(
+                    h[0] as f64 + l[0] as f64,
+                    h[1] as f64 + l[1] as f64,
+                    h[2] as f64 + l[2] as f64,
+                )
+            })
+            .collect()
+    };
+    let points = restore(&model.points, &model.points_low);
+    let fill = restore(&model.fill_tris, &model.fill_tris_low);
+    let mut pieces = Vec::new();
+    for (index, run) in points.split(|p| p.x.is_nan()).enumerate() {
+        for pair in run.windows(2) {
+            // Filled arrows also emit wire outlines; the SOLID owns those edges.
+            if index != 0
+                && fill.chunks_exact(3).any(|tri| {
+                    (0..3).any(|i| {
+                        let (a, b) = (tri[i], tri[(i + 1) % 3]);
+                        (pair[0] == a && pair[1] == b) || (pair[0] == b && pair[1] == a)
+                    })
+                })
+            {
+                continue;
+            }
+            pieces.push(dim_seg(pair[0], pair[1], &common));
+        }
+    }
+    for tri in fill.chunks_exact(3) {
+        let mut solid = codec::entities::Solid::triangle(tri[0], tri[1], tri[2]);
+        solid.common = common.clone();
+        pieces.push(EntityType::Solid(solid));
+    }
+    pieces
+}
+
+fn explode_polyline(p: &Polyline) -> Vec<EntityType> {
+    let n = p.vertices.len();
+    if n < 2 {
+        return vec![];
+    }
+    let closed = p.flags.is_closed();
+    let n_segs = if closed { n } else { n - 1 };
+    let mut result = Vec::with_capacity(n_segs);
+    for i in 0..n_segs {
+        let v0 = &p.vertices[i];
+        let v1 = &p.vertices[(i + 1) % n];
+        let mut common = p.common.clone();
+        common.handle = Handle::NULL;
+        result.push(EntityType::Line(LineEnt {
+            common,
+            start: v0.location.clone(),
+            end: v1.location.clone(),
+            ..LineEnt::new()
+        }));
+    }
+    result
+}
+
+fn explode_polyline3d(p: &codec::entities::Polyline3D) -> Vec<EntityType> {
+    let n = p.vertices.len();
+    if n < 2 {
+        return vec![];
+    }
+    let closed = p.is_closed();
+    let n_segs = if closed { n } else { n - 1 };
+    let mut result = Vec::with_capacity(n_segs);
+    for i in 0..n_segs {
+        let v0 = &p.vertices[i];
+        let v1 = &p.vertices[(i + 1) % n];
+        let mut common = p.common.clone();
+        common.handle = Handle::NULL;
+        result.push(EntityType::Line(LineEnt {
+            common,
+            start: v0.position.clone(),
+            end: v1.position.clone(),
+            ..LineEnt::new()
+        }));
+    }
+    result
+}
+
+fn explode_polyline2d(p: &Polyline2D) -> Vec<EntityType> {
+    let n = p.vertices.len();
+    if n < 2 {
+        return vec![];
+    }
+    let closed = p.is_closed();
+    let n_segs = if closed { n } else { n - 1 };
+    let elevation = p.elevation;
+    let normal = DVec3::new(p.normal.x, p.normal.y, p.normal.z)
+        .try_normalize()
+        .unwrap_or(DVec3::Z);
+    let normal = Vector3::new(normal.x, normal.y, normal.z);
+    let plane = crate::entities::curve::ocs_plane(normal.clone(), elevation);
+
+    let mut result = Vec::with_capacity(n_segs);
+    for i in 0..n_segs {
+        let v0 = &p.vertices[i];
+        let v1 = &p.vertices[(i + 1) % n];
+        let p0 = [v0.location.x, v0.location.y];
+        let p1 = [v1.location.x, v1.location.y];
+
+        if v0.bulge.abs() < 1e-10 {
+            let mut common = p.common.clone();
+            common.handle = Handle::NULL;
+            let start = plane.point_at(p0);
+            let end = plane.point_at(p1);
+            result.push(EntityType::Line(LineEnt {
+                common,
+                start: Vector3::new(start[0], start[1], start[2]),
+                end: Vector3::new(end[0], end[1], end[2]),
+                thickness: p.thickness,
+                normal: normal.clone(),
+                ..LineEnt::new()
+            }));
+        } else if let Some(arc) = bulge_to_arc(
+            p0,
+            p1,
+            v0.bulge,
+            elevation,
+            &p.common,
+            p.thickness,
+            normal.clone(),
+        ) {
+            result.push(arc);
+        }
+    }
+    result
+}
+
+pub fn normalize_insert_entity(mut entity: EntityType) -> EntityType {
+    match &mut entity {
+        EntityType::Ellipse(ell) => {
+            let major_len = ell.major_axis_length();
+            let full_span = {
+                let mut span = ell.end_parameter - ell.start_parameter;
+                if span < 0.0 {
+                    span += std::f64::consts::TAU;
+                }
+                (span - std::f64::consts::TAU).abs() < 1e-6
+            };
+            if (ell.minor_axis_ratio - 1.0).abs() < 1e-6 && full_span {
+                let mut circle = CircleEnt::new();
+                circle.common = ell.common.clone();
+                circle.center = ell.center;
+                circle.radius = major_len;
+                circle.normal = ell.normal;
+                entity = EntityType::Circle(circle);
+            }
+        }
+        _ => {}
+    }
+
+    entity.common_mut().handle = Handle::NULL;
+    entity.common_mut().owner_handle = Handle::NULL;
+    entity
+}
+
+pub fn normalize_entity_for_block(entity: EntityType) -> EntityType {
+    entity
+}
+
+fn explode_lwpolyline(p: &LwPolyline) -> Vec<EntityType> {
+    let Some(p) = lwpolyline_world_xy(p) else {
+        return vec![];
+    };
+    let n = p.vertices.len();
+    if n < 2 {
+        return vec![];
+    }
+
+    let elevation = p.elevation;
+    let n_segs = if p.is_closed { n } else { n - 1 };
+
+    let mut result = Vec::with_capacity(n_segs);
+    for i in 0..n_segs {
+        let v0 = &p.vertices[i];
+        let v1 = &p.vertices[(i + 1) % n];
+
+        let p0 = [v0.location.x, v0.location.y];
+        let p1 = [v1.location.x, v1.location.y];
+
+        if v0.bulge.abs() < 1e-10 {
+            // Straight segment → Line
+            let mut common = p.common.clone();
+            common.handle = Handle::NULL;
+            let line = LineEnt {
+                common,
+                start: Vector3::new(p0[0], p0[1], elevation),
+                end: Vector3::new(p1[0], p1[1], elevation),
+                thickness: p.thickness,
+                normal: p.normal.clone(),
+                ..LineEnt::new()
+            };
+            result.push(EntityType::Line(line));
+        } else {
+            // Arc segment from bulge
+            if let Some(arc) = bulge_to_arc(
+                p0,
+                p1,
+                v0.bulge,
+                elevation,
+                &p.common,
+                p.thickness,
+                p.normal.clone(),
+            ) {
+                result.push(arc);
+            }
+        }
+    }
+    result
+}
+
+/// Convert a polyline bulge segment to an Arc entity.
+///   Arc angles are measured from the +X axis.
+fn bulge_to_arc(
+    p0: [f64; 2],
+    p1: [f64; 2],
+    bulge: f64,
+    elevation: f64,
+    common_src: &EntityCommon,
+    thickness: f64,
+    normal: Vector3,
+) -> Option<EntityType> {
+    let ba = crate::entities::common::BulgeArc::from_bulge(p0, p1, bulge)?;
+
+    // opencadcodec Arc is always CCW from start_angle to end_angle. Negative
+    // bulge means the polyline goes p0→p1 the CW way around the centre,
+    // which is the same circular arc traversed p1→p0 the CCW way — so
+    // swap endpoints when bulge < 0.
+    let (start_angle, end_angle) = if bulge > 0.0 {
+        (norm_angle(ba.start_angle), norm_angle(ba.end_angle))
+    } else {
+        (norm_angle(ba.end_angle), norm_angle(ba.start_angle))
+    };
+
+    let mut common = common_src.clone();
+    common.handle = Handle::NULL;
+
+    let arc = ArcEnt {
+        common,
+        center: Vector3::new(ba.center[0], ba.center[1], elevation),
+        radius: ba.radius,
+        start_angle,
+        end_angle,
+        thickness,
+        normal,
+        ..ArcEnt::new()
+    };
+    Some(EntityType::Arc(arc))
+}
+
+/// Explode a multiline into the Lines it draws. The pieces come from the same
+/// `mline_lines` the renderer uses, so they keep the style's elements and
+/// offsets, the justification, MLEDIT breaks, joints and end caps (#2538).
+fn explode_mline(ml: &MLine, doc: &Document) -> Vec<EntityType> {
+    use codec::types::Color;
+
+    let mut result = Vec::new();
+    for element in crate::entities::mline::mline_lines(ml, doc) {
+        let mut common = ml.common.clone();
+        common.handle = Handle::NULL;
+        // ByLayer / ByBlock elements show in the multiline's own colour and
+        // linetype; an explicit element value carries over to its lines.
+        if !matches!(element.color, Color::ByLayer | Color::ByBlock) {
+            common.color = element.color;
+            common.color_name = None;
+            common.color_book_handle = None;
+        }
+        let linetype = element.linetype.as_str();
+        if !linetype.eq_ignore_ascii_case("ByLayer") && !linetype.eq_ignore_ascii_case("ByBlock") {
+            common.linetype = element.linetype.clone();
+            common.linetype_handle = doc
+                .line_types
+                .iter()
+                .find(|line_type| line_type.name.eq_ignore_ascii_case(linetype))
+                .map(|line_type| line_type.handle);
+        }
+        // A NaN point separates the drawn runs of one element (MLEDIT cuts).
+        for pair in element.points.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if a.iter().chain(&b).any(|v| v.is_nan()) {
+                continue;
+            }
+            let (start, end) = (
+                Vector3::new(a[0], a[1], a[2]),
+                Vector3::new(b[0], b[1], b[2]),
+            );
+            if start.distance(&end) <= 1e-12 {
+                continue;
+            }
+            result.push(EntityType::Line(LineEnt {
+                common: common.clone(),
+                start,
+                end,
+                ..LineEnt::new()
+            }));
+        }
+    }
+    result
+}
+
+// ── Region explode ─────────────────────────────────────────────────────────
+
+fn region_piece_common(region: &codec::entities::Region) -> EntityCommon {
+    let mut common = region.common.clone();
+    common.handle = Handle::NULL;
+    common.owner_handle = Handle::NULL;
+    common.xdictionary_handle = None;
+    common.reactors.clear();
+    common
+}
+
+fn explode_region(region: &codec::entities::Region) -> Vec<EntityType> {
+    let common = region_piece_common(region);
+    let mut out = Vec::new();
+
+    if region.acis_data.has_data() {
+        let sat = region.parse_sat().or_else(|| {
+            (region.acis_data.is_binary && !region.acis_data.sab_data.is_empty())
+                .then(|| codec::entities::acis::SabReader::read(&region.acis_data.sab_data).ok())
+                .flatten()
+        });
+        if let Some(sat) = sat {
+            let (bodies, _loss) = kernel::acis::lift(&sat);
+            for body in &bodies {
+                for face in body.face_keys() {
+                    if let Some(profile) = kernel::brep::planar_face_profile(body, face) {
+                        append_region_loops(&profile.plane, &profile.loops, &common, &mut out);
+                    }
+                }
+            }
+        }
+        if out.is_empty() {
+            if let Some((plane, loops, _)) = crate::scene::model::presspull_model::profile_geometry(
+                &EntityType::Region(region.clone()),
+            ) {
+                append_region_loops(&plane, &loops, &common, &mut out);
+            }
+        }
+        return out;
+    }
+
+    // Fallback for synthetic/legacy wire-only regions without ACIS payload.
+    for wire in &region.wires {
+        for pair in wire.points.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if (b - a).length() <= 1e-12 {
+                continue;
+            }
+            out.push(EntityType::Line(LineEnt {
+                common: common.clone(),
+                start: a,
+                end: b,
+                ..LineEnt::new()
+            }));
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone)]
+struct CircularPiece {
+    centre: [f64; 2],
+    radius: f64,
+    start_pt: [f64; 2],
+    mid_pt: [f64; 2],
+    end_pt: [f64; 2],
+    sweep: f64,
+}
+
+fn as_circular_piece(curve: &kernel::geom2d::Curve) -> Option<CircularPiece> {
+    use kernel::geom2d::Curve;
+    match curve {
+        Curve::Circle(circle) if circle.radius > 1e-12 => {
+            let centre = circle.centre;
+            let radius = circle.radius;
+            let start_pt = [centre[0] + radius, centre[1]];
+            let mid_pt = [centre[0] - radius, centre[1]];
+            let end_pt = start_pt;
+            Some(CircularPiece {
+                centre,
+                radius,
+                start_pt,
+                mid_pt,
+                end_pt,
+                sweep: std::f64::consts::TAU,
+            })
+        }
+        Curve::Arc(arc) if arc.radius > 1e-12 => {
+            let centre = arc.centre;
+            let radius = arc.radius;
+            let pt_at = |ang: f64| [centre[0] + radius * ang.cos(), centre[1] + radius * ang.sin()];
+            let start_pt = pt_at(arc.start_angle);
+            let end_pt = pt_at(arc.end_angle);
+            let diff = (arc.end_angle - arc.start_angle).abs();
+            let sweep = if diff <= 1e-12 || (diff - std::f64::consts::TAU).abs() <= 1e-6 {
+                std::f64::consts::TAU
+            } else {
+                diff
+            };
+            let mid_pt = if (sweep - std::f64::consts::TAU).abs() <= 1e-6 {
+                pt_at(arc.start_angle + std::f64::consts::PI)
+            } else {
+                pt_at((arc.start_angle + arc.end_angle) * 0.5)
+            };
+            Some(CircularPiece {
+                centre,
+                radius,
+                start_pt,
+                mid_pt,
+                end_pt,
+                sweep,
+            })
+        }
+        Curve::Ellipse(arc) => {
+            let maj = arc.ellipse.major_radius;
+            let min = arc.ellipse.minor_radius;
+            if maj > 1e-12 && (min - maj).abs() <= 1e-6 * (1.0 + maj) {
+                let centre = arc.ellipse.centre;
+                let radius = (maj + min) * 0.5;
+                let start_pt = arc.ellipse.point_at(arc.start_parameter);
+                let end_pt = arc.ellipse.point_at(arc.end_parameter);
+                let diff = (arc.end_parameter - arc.start_parameter).abs();
+                let sweep = if (arc.sweep() - std::f64::consts::TAU).abs() <= 1e-6
+                    || diff <= 1e-12
+                    || (diff - std::f64::consts::TAU).abs() <= 1e-6
+                {
+                    std::f64::consts::TAU
+                } else {
+                    diff
+                };
+                let mid_pt = if (sweep - std::f64::consts::TAU).abs() <= 1e-6 {
+                    arc.ellipse.point_at(arc.start_parameter + std::f64::consts::PI)
+                } else {
+                    arc.ellipse.point_at((arc.start_parameter + arc.end_parameter) * 0.5)
+                };
+                Some(CircularPiece {
+                    centre,
+                    radius,
+                    start_pt,
+                    mid_pt,
+                    end_pt,
+                    sweep,
+                })
+            } else {
+                None
+            }
+        }
+        Curve::Nurbs(nurbs) => {
+            let p0 = nurbs.point_at(0.0);
+            let p1 = nurbs.point_at(0.5);
+            let p2 = nurbs.point_at(1.0);
+            let d = 2.0 * (p0[0] * (p1[1] - p2[1]) + p1[0] * (p2[1] - p0[1]) + p2[0] * (p0[1] - p1[1]));
+            if d.abs() > 1e-12 {
+                let p0_sq = p0[0] * p0[0] + p0[1] * p0[1];
+                let p1_sq = p1[0] * p1[0] + p1[1] * p1[1];
+                let p2_sq = p2[0] * p2[0] + p2[1] * p2[1];
+                let cx = (p0_sq * (p1[1] - p2[1]) + p1_sq * (p2[1] - p0[1]) + p2_sq * (p0[1] - p1[1])) / d;
+                let cy = (p0_sq * (p2[0] - p1[0]) + p1_sq * (p0[0] - p2[0]) + p2_sq * (p1[0] - p0[0])) / d;
+                let r = (p0[0] - cx).hypot(p0[1] - cy);
+                if r > 1e-12 {
+                    let tol = 1e-5 * (1.0 + r);
+                    let mut is_circle = true;
+                    for step in 1..16 {
+                        let t = step as f64 / 16.0;
+                        let pt = nurbs.point_at(t);
+                        if ((pt[0] - cx).hypot(pt[1] - cy) - r).abs() > tol {
+                            is_circle = false;
+                            break;
+                        }
+                    }
+                    if is_circle {
+                        let th0 = (p0[1] - cy).atan2(p0[0] - cx);
+                        let th1 = (p1[1] - cy).atan2(p1[0] - cx);
+                        let th2 = (p2[1] - cy).atan2(p2[0] - cx);
+                        let ccw_span = |from: f64, to: f64| {
+                            let mut s = to - from;
+                            while s < 0.0 {
+                                s += std::f64::consts::TAU;
+                            }
+                            while s >= std::f64::consts::TAU {
+                                s -= std::f64::consts::TAU;
+                            }
+                            s
+                        };
+                        let sweep = if ccw_span(th0, th1) <= ccw_span(th0, th2) {
+                            ccw_span(th0, th2)
+                        } else {
+                            ccw_span(th2, th0)
+                        };
+                        let sweep = if sweep <= 1e-12 {
+                            std::f64::consts::TAU
+                        } else {
+                            sweep
+                        };
+                        return Some(CircularPiece {
+                            centre: [cx, cy],
+                            radius: r,
+                            start_pt: p0,
+                            mid_pt: p1,
+                            end_pt: p2,
+                            sweep,
+                        });
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn append_region_loops(
+    plane: &kernel::space::Plane,
+    loops: &[Vec<kernel::geom2d::Curve>],
+    common: &EntityCommon,
+    out: &mut Vec<EntityType>,
+) {
+    use kernel::geom2d::Curve;
+    let Some(normal_arr) = plane.normal() else {
+        return;
+    };
+    let normal = Vector3::new(normal_arr[0], normal_arr[1], normal_arr[2]);
+    let normal_tuple = (normal.x, normal.y, normal.z);
+    let (ax, ay) = crate::scene::view::transform::ocs_axes(normal_tuple);
+    let ocs_x = DVec3::new(ax.0, ax.1, ax.2);
+    let ocs_y = DVec3::new(ay.0, ay.1, ay.2);
+
+    let make_circle = |centre: [f64; 2], radius: f64| -> EntityType {
+        let wcs_c = plane.point_at(centre);
+        let (ox, oy, oz) = crate::scene::view::transform::wcs_point_to_ocs(
+            (wcs_c[0], wcs_c[1], wcs_c[2]),
+            normal_tuple,
+        );
+        let mut circle = CircleEnt::new();
+        circle.common = common.clone();
+        circle.center = Vector3::new(ox, oy, oz);
+        circle.radius = radius;
+        circle.normal = normal;
+        EntityType::Circle(circle)
+    };
+
+    let make_ellipse = |ellipse: &kernel::geom2d::Ellipse, start_param: f64, end_param: f64| -> Option<EntityType> {
+        if ellipse.major_radius <= 1e-12 || ellipse.minor_radius <= 1e-12 {
+            return None;
+        }
+        let wcs_c = plane.point_at(ellipse.centre);
+        let tip = plane.point_at([
+            ellipse.centre[0] + ellipse.major_axis[0] * ellipse.major_radius,
+            ellipse.centre[1] + ellipse.major_axis[1] * ellipse.major_radius,
+        ]);
+        let mut ent = codec::entities::Ellipse::new();
+        ent.common = common.clone();
+        ent.center = Vector3::new(wcs_c[0], wcs_c[1], wcs_c[2]);
+        ent.major_axis = Vector3::new(tip[0] - wcs_c[0], tip[1] - wcs_c[1], tip[2] - wcs_c[2]);
+        ent.minor_axis_ratio = ellipse.minor_radius / ellipse.major_radius;
+        ent.start_parameter = start_param;
+        ent.end_parameter = end_param;
+        ent.normal = normal;
+        Some(EntityType::Ellipse(ent))
+    };
+
+    let make_arc_from_piece = |piece: &CircularPiece| -> EntityType {
+        let wcs_c = DVec3::from_array(plane.point_at(piece.centre));
+        let (ox, oy, oz) = crate::scene::view::transform::wcs_point_to_ocs(
+            (wcs_c.x, wcs_c.y, wcs_c.z),
+            normal_tuple,
+        );
+        let wcs_start = DVec3::from_array(plane.point_at(piece.start_pt));
+        let wcs_mid = DVec3::from_array(plane.point_at(piece.mid_pt));
+        let wcs_end = DVec3::from_array(plane.point_at(piece.end_pt));
+
+        let start_dir = wcs_start - wcs_c;
+        let mid_dir = wcs_mid - wcs_c;
+        let end_dir = wcs_end - wcs_c;
+
+        let ang_start = norm_angle(start_dir.dot(ocs_y).atan2(start_dir.dot(ocs_x)));
+        let ang_mid = norm_angle(mid_dir.dot(ocs_y).atan2(mid_dir.dot(ocs_x)));
+        let ang_end = norm_angle(end_dir.dot(ocs_y).atan2(end_dir.dot(ocs_x)));
+
+        let ccw_span = |from: f64, to: f64| {
+            let mut d = to - from;
+            while d < 0.0 {
+                d += std::f64::consts::TAU;
+            }
+            while d >= std::f64::consts::TAU {
+                d -= std::f64::consts::TAU;
+            }
+            d
+        };
+
+        let total_ccw = ccw_span(ang_start, ang_end);
+        let mid_ccw = ccw_span(ang_start, ang_mid);
+
+        let (start_angle, end_angle) = if mid_ccw <= total_ccw {
+            (ang_start, ang_end)
+        } else {
+            (ang_end, ang_start)
+        };
+
+        let mut arc = ArcEnt::new();
+        arc.common = common.clone();
+        arc.center = Vector3::new(ox, oy, oz);
+        arc.radius = piece.radius;
+        arc.start_angle = start_angle;
+        arc.end_angle = end_angle;
+        arc.normal = normal;
+        EntityType::Arc(arc)
+    };
+
+    for ring in loops {
+        // Collapse a closed loop of circular arcs/curves into one Circle.
+        let circular_pieces: Vec<CircularPiece> = ring.iter().filter_map(as_circular_piece).collect();
+        if circular_pieces.len() == ring.len() && !circular_pieces.is_empty() {
+            let first = &circular_pieces[0];
+            let tol = 1e-5 * (1.0 + first.radius);
+            let same_circle = circular_pieces.iter().all(|p| {
+                (p.centre[0] - first.centre[0]).hypot(p.centre[1] - first.centre[1]) <= tol
+                    && (p.radius - first.radius).abs() <= tol
+            });
+            let total_sweep: f64 = circular_pieces.iter().map(|p| p.sweep).sum();
+            if same_circle && (total_sweep - std::f64::consts::TAU).abs() <= 1e-4 {
+                out.push(make_circle(first.centre, first.radius));
+                continue;
+            }
+        }
+
+        // Collapse a closed loop of coaxial equal-axes elliptical arcs into one full Ellipse.
+        if let [Curve::Ellipse(first), rest @ ..] = ring.as_slice() {
+            let tol = 1e-6 * (1.0 + first.ellipse.major_radius);
+            let same_ellipse = rest.iter().all(|piece| {
+                matches!(
+                    piece,
+                    Curve::Ellipse(arc)
+                        if (arc.ellipse.centre[0] - first.ellipse.centre[0])
+                            .hypot(arc.ellipse.centre[1] - first.ellipse.centre[1])
+                            <= tol
+                            && (arc.ellipse.major_radius - first.ellipse.major_radius).abs() <= tol
+                            && (arc.ellipse.minor_radius - first.ellipse.minor_radius).abs() <= tol
+                            && (arc.ellipse.major_axis[0] * first.ellipse.major_axis[0]
+                                + arc.ellipse.major_axis[1] * first.ellipse.major_axis[1]
+                                - 1.0)
+                                .abs()
+                                <= 1e-6
+                )
+            });
+            let total_sweep: f64 = ring
+                .iter()
+                .map(|piece| match piece {
+                    Curve::Ellipse(arc) => {
+                        let diff = (arc.end_parameter - arc.start_parameter).abs();
+                        if (arc.sweep() - std::f64::consts::TAU).abs() <= 1e-6
+                            || diff <= 1e-12
+                            || (diff - std::f64::consts::TAU).abs() <= 1e-6
+                        {
+                            std::f64::consts::TAU
+                        } else {
+                            diff
+                        }
+                    }
+                    _ => 0.0,
+                })
+                .sum();
+            if same_ellipse && (total_sweep - std::f64::consts::TAU).abs() <= 1e-5 {
+                if let Some(ent) = make_ellipse(&first.ellipse, 0.0, std::f64::consts::TAU) {
+                    out.push(ent);
+                    continue;
+                }
+            }
+        }
+
+        for piece in ring {
+            if let Some(circ) = as_circular_piece(piece) {
+                if (circ.sweep - std::f64::consts::TAU).abs() <= 1e-6 {
+                    out.push(make_circle(circ.centre, circ.radius));
+                } else {
+                    out.push(make_arc_from_piece(&circ));
+                }
+                continue;
+            }
+            match piece {
+                Curve::Line(line) => {
+                    let start = plane.point_at(line.start);
+                    let end = plane.point_at(line.end);
+                    let s = Vector3::new(start[0], start[1], start[2]);
+                    let e = Vector3::new(end[0], end[1], end[2]);
+                    if (e - s).length() <= 1e-12 {
+                        continue;
+                    }
+                    out.push(EntityType::Line(LineEnt {
+                        common: common.clone(),
+                        start: s,
+                        end: e,
+                        normal,
+                        ..LineEnt::new()
+                    }));
+                }
+                Curve::Ellipse(arc) => {
+                    let (start_param, end_param) =
+                        if (arc.sweep() - std::f64::consts::TAU).abs() <= 1e-6 {
+                            (0.0, std::f64::consts::TAU)
+                        } else if arc.end_parameter > arc.start_parameter {
+                            (arc.start_parameter, arc.end_parameter)
+                        } else {
+                            (
+                                arc.start_parameter,
+                                arc.end_parameter + std::f64::consts::TAU,
+                            )
+                        };
+                    if let Some(ent) = make_ellipse(&arc.ellipse, start_param, end_param) {
+                        out.push(ent);
+                    }
+                }
+                Curve::Nurbs(nurbs) => {
+                    let mut spline = codec::entities::Spline::new();
+                    spline.common = common.clone();
+                    spline.degree = nurbs.degree() as i32;
+                    spline.knots = nurbs.knots().to_vec();
+                    spline.control_points = nurbs
+                        .control_points()
+                        .iter()
+                        .map(|&uv| {
+                            let p = plane.point_at(uv);
+                            Vector3::new(p[0], p[1], p[2])
+                        })
+                        .collect();
+                    if nurbs.is_rational() {
+                        spline.weights = nurbs.weights().to_vec();
+                        spline.flags.rational = true;
+                    }
+                    spline.flags.planar = true;
+                    spline.flags.closed = nurbs.is_closed();
+                    spline.normal = normal;
+                    out.push(EntityType::Spline(spline));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+// ── Dimension explode ──────────────────────────────────────────────────────
+
+/// Convert a Dimension entity into Lines (geometry) + Text (label).
+/// A NULL-handle line segment for a baked dimension block.
+fn dim_seg(a: Vector3, b: Vector3, common: &codec::entities::EntityCommon) -> EntityType {
+    let mut c = common.clone();
+    c.handle = Handle::NULL;
+    EntityType::Line(LineEnt {
+        common: c,
+        start: a,
+        end: b,
+        ..LineEnt::new()
+    })
+}
+
+fn dim_geom_entities(
+    geometry: &crate::scene::convert::tessellate::DimGeom,
+    ext_common: &codec::entities::EntityCommon,
+    dim_common: &codec::entities::EntityCommon,
+) -> Vec<EntityType> {
+    let mut entities = Vec::new();
+    let origin = geometry.origin;
+    let point = |value: [f32; 3]| {
+        Vector3::new(
+            value[0] as f64 + origin.x,
+            value[1] as f64 + origin.y,
+            value[2] as f64 + origin.z,
+        )
+    };
+    for (points, common) in [
+        (geometry.ext_lines.as_slice(), ext_common),
+        (geometry.dim_lines.as_slice(), dim_common),
+        (geometry.arrow_lines.as_slice(), dim_common),
+    ] {
+        for run in points.split(|point| point[0].is_nan()) {
+            for pair in run.windows(2) {
+                entities.push(dim_seg(point(pair[0]), point(pair[1]), common));
+            }
+        }
+    }
+    for triangle in geometry.arrow_fill.chunks_exact(3) {
+        let mut solid = codec::entities::Solid::triangle(
+            point(triangle[0]),
+            point(triangle[1]),
+            point(triangle[2]),
+        );
+        solid.common = dim_common.clone();
+        solid.common.handle = Handle::NULL;
+        entities.push(EntityType::Solid(solid));
+    }
+    entities
+}
+
+/// A dimension-line terminator at `tip`, body extending back along the unit
+/// vector `(dx,dy)` (toward the dim line). When DIMTSZ>0 it's an oblique 45°
+/// tick; otherwise a closed *filled* arrowhead (DXF SOLID) of length DIMASZ —
+/// matching the style so a baked block keeps the original arrow type rather
+/// than a generic open stroke.
+fn dim_terminator(
+    tip: Vector3,
+    dx: f64,
+    dy: f64,
+    arrow: &crate::scene::convert::tessellate::ArrowKind,
+    common: &codec::entities::EntityCommon,
+) -> Vec<EntityType> {
+    use crate::scene::convert::tessellate::ArrowKind as A;
+    let (dx, dy) = norm2(dx, dy, 1.0, 0.0);
+    let (px, py) = (-dy, dx);
+    // Point at `along` (down the dim line from the tip) and `perp` (sideways).
+    let pt = |along: f64, perp: f64| {
+        Vector3::new(
+            tip.x + dx * along + px * perp,
+            tip.y + dy * along + py * perp,
+            tip.z,
+        )
+    };
+    let mut out: Vec<EntityType> = Vec::new();
+    let tri = |a: Vector3, b: Vector3, c: Vector3, out: &mut Vec<EntityType>| {
+        let mut s = codec::entities::Solid::triangle(a, b, c);
+        s.common = common.clone();
+        s.common.handle = Handle::NULL;
+        out.push(EntityType::Solid(s));
+    };
+    match arrow {
+        A::None => {}
+        A::Triangle {
+            size,
+            filled,
+            size_mul,
+        } => {
+            let size = (*size * *size_mul) as f64;
+            let hw = size / 6.0;
+            let (l, r) = (pt(size, hw), pt(size, -hw));
+            if *filled {
+                tri(tip, l, r, &mut out);
+            } else {
+                out.push(dim_seg(tip, l, common));
+                out.push(dim_seg(l, r, common));
+                out.push(dim_seg(r, tip, common));
+            }
+        }
+        A::Tick { size, width } => {
+            let s = *size as f64;
+            let (ox, oy) = (dx + px, dy + py);
+            let m = (ox * ox + oy * oy).sqrt().max(1e-9);
+            let (ux, uy) = (ox / m, oy / m);
+            let (ox, oy) = (ux * s, uy * s);
+            let (a, b) = (
+                Vector3::new(tip.x - ox, tip.y - oy, tip.z),
+                Vector3::new(tip.x + ox, tip.y + oy, tip.z),
+            );
+            out.push(dim_seg(a, b, common));
+            if *width > 0.0 {
+                // The architectural tick's band, as filled triangles.
+                let h = *width as f64 * 0.5;
+                let side =
+                    |p: Vector3, k: f64| Vector3::new(p.x - uy * h * k, p.y + ux * h * k, p.z);
+                tri(side(a, -1.0), side(a, 1.0), side(b, 1.0), &mut out);
+                tri(side(a, -1.0), side(b, 1.0), side(b, -1.0), &mut out);
+            }
+        }
+        A::Open { size, half_angle } => {
+            let size = *size as f64;
+            let hw = size * (*half_angle as f64).tan();
+            out.push(dim_seg(tip, pt(size, hw), common));
+            out.push(dim_seg(tip, pt(size, -hw), common));
+        }
+        A::Dot { size, filled } => {
+            let r = *size as f64 * 0.5;
+            terminator_circle(tip, r, *filled, common, &mut out);
+        }
+        A::Origin { size, inner } => {
+            // Same geometry as the "_Origin" / "_Origin2" blocks; see
+            // `ArrowKind::Origin`.
+            let size = *size as f64;
+            terminator_circle(tip, size * 0.5, false, common, &mut out);
+            if *inner {
+                terminator_circle(tip, size * 0.25, false, common, &mut out);
+            }
+            let start = if *inner { size * 0.5 } else { 0.0 };
+            out.push(dim_seg(pt(start, 0.0), pt(size, 0.0), common));
+        }
+        A::Box_ { size, filled } => {
+            let h = *size as f64 * 0.5;
+            let (p1, p2, p3, p4) = (pt(-h, -h), pt(h, -h), pt(h, h), pt(-h, h));
+            out.push(dim_seg(p1, p2, common));
+            out.push(dim_seg(p2, p3, common));
+            out.push(dim_seg(p3, p4, common));
+            out.push(dim_seg(p4, p1, common));
+            if *filled {
+                tri(p1, p2, p3, &mut out);
+                tri(p1, p3, p4, &mut out);
+            }
+        }
+        A::Datum { size, filled } => {
+            let half = *size as f64 * 0.5;
+            let (ba, bb, apex) = (pt(0.0, half), pt(0.0, -half), pt(*size as f64, 0.0));
+            out.push(dim_seg(ba, apex, common));
+            out.push(dim_seg(apex, bb, common));
+            out.push(dim_seg(bb, ba, common));
+            if *filled {
+                tri(ba, apex, bb, &mut out);
+            }
+        }
+        A::Custom { size, lines, fill } => {
+            let custom_pt = |point: &[f32; 3]| {
+                let mut placed = pt(
+                    -(point[0] as f64) * *size as f64,
+                    -(point[1] as f64) * *size as f64,
+                );
+                placed.z += point[2] as f64 * *size as f64;
+                placed
+            };
+            let mut previous = None;
+            for point in lines {
+                if point[0].is_nan() {
+                    previous = None;
+                    continue;
+                }
+                let current = custom_pt(point);
+                if let Some(previous) = previous {
+                    out.push(dim_seg(previous, current, common));
+                }
+                previous = Some(current);
+            }
+            for triangle in fill.chunks_exact(3) {
+                tri(
+                    custom_pt(&triangle[0]),
+                    custom_pt(&triangle[1]),
+                    custom_pt(&triangle[2]),
+                    &mut out,
+                );
+            }
+        }
+    }
+    out
+}
+
+/// A dot terminator: a 16-gon ring outline, optionally filled with a triangle fan.
+fn terminator_circle(
+    center: Vector3,
+    r: f64,
+    filled: bool,
+    common: &codec::entities::EntityCommon,
+    out: &mut Vec<EntityType>,
+) {
+    const N: usize = 16;
+    let ring: Vec<Vector3> = (0..=N)
+        .map(|i| {
+            let a = i as f64 * std::f64::consts::TAU / N as f64;
+            Vector3::new(center.x + a.cos() * r, center.y + a.sin() * r, center.z)
+        })
+        .collect();
+    for w in ring.windows(2) {
+        out.push(dim_seg(w[0], w[1], common));
+    }
+    if filled {
+        for i in 0..N {
+            let mut s = codec::entities::Solid::triangle(center, ring[i], ring[i + 1]);
+            s.common = common.clone();
+            s.common.handle = Handle::NULL;
+            out.push(EntityType::Solid(s));
+        }
+    }
+}
+
+/// Center-mark cross at `center`, arm length |DIMCEN|. Empty when DIMCEN == 0.
+fn dim_center_mark(
+    center: Vector3,
+    dimcen: f64,
+    radius: f64,
+    common: &codec::entities::EntityCommon,
+) -> Vec<EntityType> {
+    let mag = dimcen.abs();
+    if mag < 1e-9 {
+        return Vec::new();
+    }
+    let v = |x: f64, y: f64| Vector3::new(x, y, center.z);
+    // Central "+" mark.
+    let mut out = vec![
+        dim_seg(
+            v(center.x - mag, center.y),
+            v(center.x + mag, center.y),
+            common,
+        ),
+        dim_seg(
+            v(center.x, center.y - mag),
+            v(center.x, center.y + mag),
+            common,
+        ),
+    ];
+    // Negative DIMCEN adds centre LINES: four radial strokes spanning the edge.
+    if dimcen < 0.0 && radius > mag + 1e-6 {
+        let inner = (radius - mag).max(0.0);
+        let outer = radius + mag;
+        out.push(dim_seg(
+            v(center.x + inner, center.y),
+            v(center.x + outer, center.y),
+            common,
+        ));
+        out.push(dim_seg(
+            v(center.x - inner, center.y),
+            v(center.x - outer, center.y),
+            common,
+        ));
+        out.push(dim_seg(
+            v(center.x, center.y + inner),
+            v(center.x, center.y + outer),
+            common,
+        ));
+        out.push(dim_seg(
+            v(center.x, center.y - inner),
+            v(center.x, center.y - outer),
+            common,
+        ));
+    }
+    out
+}
+
+/// Arc from angle `a1` to `a2` (radians, swept the short way) at `radius` about
+/// `center`, approximated by straight chords (world f64).
+fn dim_arc_segs(
+    center: Vector3,
+    radius: f64,
+    a1: f64,
+    a2: f64,
+    common: &codec::entities::EntityCommon,
+) -> Vec<EntityType> {
+    use std::f64::consts::PI;
+    let mut sweep = a2 - a1;
+    while sweep > PI {
+        sweep -= 2.0 * PI;
+    }
+    // Half-open at -PI so an exact 180° span sweeps the same way as the
+    // terminator code and the live render (CCW), not the opposite semicircle.
+    while sweep <= -PI {
+        sweep += 2.0 * PI;
+    }
+    dim_arc_segs_with_sweep(center, radius, a1, sweep, common)
+}
+
+fn dim_arc_segs_with_sweep(
+    center: Vector3,
+    radius: f64,
+    start: f64,
+    sweep: f64,
+    common: &codec::entities::EntityCommon,
+) -> Vec<EntityType> {
+    use std::f64::consts::PI;
+    let steps = 12usize.max((sweep.abs() / (PI / 36.0)).ceil() as usize);
+    let pt = |a: f64| {
+        Vector3::new(
+            center.x + radius * a.cos(),
+            center.y + radius * a.sin(),
+            center.z,
+        )
+    };
+    let mut out = Vec::new();
+    let mut prev = pt(start);
+    for i in 1..=steps {
+        let cur = pt(start + sweep * (i as f64 / steps as f64));
+        out.push(dim_seg(prev, cur, common));
+        prev = cur;
+    }
+    out
+}
+
+/// Resolved, DIMSCALE-applied dimension metrics for baking.
+struct DimMetrics {
+    dimasz: f64,
+    dimcen: f64,
+    dimexo: f64,
+    dimexe: f64,
+    dimtsz: f64,
+    dimdle: f64,
+    dimfxl: f64,
+    dimfxlon: bool,
+    dimse1: bool,
+    dimse2: bool,
+    dimsd1: bool,
+    dimsd2: bool,
+    dimsoxd: bool,
+    dimclrd: i16,
+    dimclre: i16,
+    dimclrt: i16,
+    dimlwd: i16,
+    dimlwe: i16,
+    dimltype: Handle,
+    dimltex1: Handle,
+    arrow1: crate::scene::convert::tessellate::ArrowKind,
+    arrow2: crate::scene::convert::tessellate::ArrowKind,
+}
+
+/// Resolve style metrics used by saved dimension geometry.
+fn dim_metrics(dim: &Dimension, doc: &Document) -> DimMetrics {
+    let name = dim.base().style_name.as_str();
+    let effective_style = doc
+        .dim_styles
+        .iter()
+        .find(|style| {
+            style.name.eq_ignore_ascii_case(name)
+                || (name.trim().is_empty() && style.name.eq_ignore_ascii_case("Standard"))
+        })
+        .map(|style| crate::entities::dimension::resolved_dimension_style(style, dim, doc));
+    let style = effective_style.as_ref();
+    let scale = style
+        .map(|s| if s.dimscale > 1e-6 { s.dimscale } else { 1.0 })
+        .unwrap_or(1.0);
+    use crate::scene::convert::tessellate::{arrow_from_block, ArrowKind};
+    let dimasz = style
+        .map(|s| s.dimasz * scale)
+        .unwrap_or(0.18 * scale)
+        .max(1e-6);
+    let dimtsz = style.map(|s| s.dimtsz * scale).unwrap_or(0.0);
+    let asz = dimasz as f32;
+    let (arrow1, arrow2) = if dimtsz > 1e-9 {
+        let t = ArrowKind::Tick {
+            size: dimtsz as f32,
+            width: 0.0,
+        };
+        (t.clone(), t)
+    } else if let Some(s) = style {
+        if matches!(dim, Dimension::Radius(_) | Dimension::LargeRadial(_)) {
+            let arrow = arrow_from_block(doc, s.dimldrblk, asz);
+            (arrow.clone(), arrow)
+        } else if matches!(dim, Dimension::Diameter(_)) {
+            use crate::entities::dim_override as ov;
+            let data = &dim.base().common.extended_data;
+            let first = ov::handle(data, ov::DIMBLK1).unwrap_or(if s.dimsah {
+                s.dimblk1
+            } else {
+                s.dimblk
+            });
+            let second = ov::handle(data, ov::DIMBLK2).unwrap_or(if s.dimsah {
+                s.dimblk2
+            } else {
+                s.dimblk
+            });
+            (
+                arrow_from_block(doc, first, asz),
+                arrow_from_block(doc, second, asz),
+            )
+        } else if s.dimsah {
+            (
+                arrow_from_block(doc, s.dimblk1, asz),
+                arrow_from_block(doc, s.dimblk2, asz),
+            )
+        } else {
+            let a = arrow_from_block(doc, s.dimblk, asz);
+            (a.clone(), a)
+        }
+    } else {
+        let a = ArrowKind::Triangle {
+            size: asz,
+            filled: true,
+            size_mul: 1.0,
+        };
+        (a.clone(), a)
+    };
+    DimMetrics {
+        dimasz,
+        dimcen: style.map(|s| s.dimcen * scale).unwrap_or(0.09 * scale),
+        dimexo: style.map(|s| s.dimexo * scale).unwrap_or(0.0),
+        dimexe: style.map(|s| s.dimexe * scale).unwrap_or(0.0),
+        dimtsz,
+        dimdle: style.map(|s| s.dimdle * scale).unwrap_or(0.0),
+        dimfxl: style.map(|s| s.dimfxl * scale).unwrap_or(1.0),
+        dimfxlon: style.map(|s| s.dimfxlon).unwrap_or(false),
+        dimse1: style.map(|s| s.dimse1).unwrap_or(false),
+        dimse2: style.map(|s| s.dimse2).unwrap_or(false),
+        dimsd1: style.map(|s| s.dimsd1).unwrap_or(false),
+        dimsd2: style.map(|s| s.dimsd2).unwrap_or(false),
+        dimsoxd: style.map(|s| s.dimsoxd).unwrap_or(false),
+        dimclrd: style.map(|s| s.dimclrd).unwrap_or(0),
+        dimclre: style.map(|s| s.dimclre).unwrap_or(0),
+        dimclrt: style.map(|s| s.dimclrt).unwrap_or(0),
+        dimlwd: style.map(|s| s.dimlwd).unwrap_or(-2),
+        dimlwe: style.map(|s| s.dimlwe).unwrap_or(-2),
+        dimltype: style.map(|s| s.dimltex_handle).unwrap_or(Handle::NULL),
+        dimltex1: style.map(|s| s.dimltex1_handle).unwrap_or(Handle::NULL),
+        arrow1,
+        arrow2,
+    }
+}
+
+/// A baked sub-entity common with a per-element dimension colour / lineweight.
+/// A DIMCLR* of 0 (ByBlock) or 256 (ByLayer) keeps the dimension's own colour
+/// so the block inherits it; a specific ACI overrides. DIMLW* < 0 (ByBlock /
+/// ByLayer) keeps the dimension's lineweight.
+fn dim_common(
+    base: &codec::entities::EntityCommon,
+    clr: i16,
+    lw: i16,
+) -> codec::entities::EntityCommon {
+    let mut c = base.clone();
+    c.handle = Handle::NULL;
+    // A baked child must not claim its dimension's extension dictionary:
+    // xdict ownership is exclusive, and a second claimant fails file
+    // validation with "Extension dictionary <H> Cannot access".
+    c.xdictionary_handle = None;
+    if clr != 0 && clr != 256 {
+        c.color = codec::types::Color::from_index(clr);
+        c.color_name = None;
+        c.color_book_handle = None;
+    }
+    if lw >= 0 {
+        c.line_weight = codec::types::LineWeight::from_value(lw);
+    }
+    c
+}
+
+fn with_dim_linetype(
+    mut common: codec::entities::EntityCommon,
+    doc: &Document,
+    handle: Handle,
+) -> codec::entities::EntityCommon {
+    common.linetype = doc
+        .line_types
+        .iter()
+        .find(|line_type| line_type.handle == handle)
+        .map(|line_type| line_type.name.clone())
+        .unwrap_or_else(|| "Continuous".to_string());
+    common.linetype_handle = (!handle.is_null()).then_some(handle);
+    common
+}
+
+/// Baked geometry for an angular dimension, matching the live render exactly:
+/// an extension line from each measured ray point flush out to the dimension
+/// arc, the swept arc, and a terminator at each arc end. (The live angular path
+/// applies neither DIMEXO/DIMEXE nor DIMSE suppression, so the bake mustn't
+/// either, or the dim would shift on reload. Adding those to both is tracked as
+/// a separate live-render enhancement.) #181 / DIM-022.
+fn angular_block_segs(
+    vertex: Vector3,
+    p1: Vector3,
+    p2: Vector3,
+    arc_loc: Vector3,
+    met: &DimMetrics,
+    ext_c: &codec::entities::EntityCommon,
+    dim_c: &codec::entities::EntityCommon,
+    explicit_sweep: Option<(f64, f64)>,
+) -> Vec<EntityType> {
+    use std::f64::consts::PI;
+    let measured_a1 = (p1.y - vertex.y).atan2(p1.x - vertex.x);
+    let measured_a2 = (p2.y - vertex.y).atan2(p2.x - vertex.x);
+    let (a1, a2) = explicit_sweep.unwrap_or((measured_a1, measured_a2));
+    let radius = ((arc_loc.x - vertex.x).powi(2) + (arc_loc.y - vertex.y).powi(2)).sqrt();
+    let mut out = Vec::new();
+    if radius < 1e-9 {
+        out.push(dim_seg(p1, vertex, ext_c));
+        out.push(dim_seg(p2, vertex, ext_c));
+        return out;
+    }
+    // Extension lines run flush from each measured ray point out to the arc.
+    let e1 = Vector3::new(
+        vertex.x + a1.cos() * radius,
+        vertex.y + a1.sin() * radius,
+        vertex.z,
+    );
+    let e2 = Vector3::new(
+        vertex.x + a2.cos() * radius,
+        vertex.y + a2.sin() * radius,
+        vertex.z,
+    );
+    // A ray point on the arc itself needs no extension line.
+    for (from, to) in [(p1, e1), (p2, e2)] {
+        let gap = ((to.x - from.x).powi(2) + (to.y - from.y).powi(2)).sqrt();
+        if gap > 1e-9 * radius.max(1.0) {
+            out.push(dim_seg(from, to, ext_c));
+        }
+    }
+    let mut sweep = a2 - a1;
+    if explicit_sweep.is_some() {
+        while sweep <= 0.0 {
+            sweep += 2.0 * PI;
+        }
+        out.extend(dim_arc_segs_with_sweep(vertex, radius, a1, sweep, dim_c));
+    } else {
+        out.extend(dim_arc_segs(vertex, radius, a1, a2, dim_c));
+    }
+    // Terminators tangent to the arc at each end, pointing along the sweep.
+    if explicit_sweep.is_none() {
+        while sweep > PI {
+            sweep -= 2.0 * PI;
+        }
+        while sweep <= -PI {
+            sweep += 2.0 * PI;
+        }
+    }
+    let sgn = if sweep >= 0.0 { 1.0 } else { -1.0 };
+    out.extend(dim_terminator(
+        e1,
+        -a1.sin() * sgn,
+        a1.cos() * sgn,
+        &met.arrow1,
+        dim_c,
+    ));
+    out.extend(dim_terminator(
+        e2,
+        a2.sin() * sgn,
+        -a2.cos() * sgn,
+        &met.arrow2,
+        dim_c,
+    ));
+    out
+}
+
+/// The parts of segment `a`→`b` outside a rotated box (centre, half width,
+/// half height, rotation), clipped in the box's frame.
+fn outside_box(
+    a: Vector3,
+    b: Vector3,
+    gap: Option<(DVec3, f64, f64, f64)>,
+) -> Vec<(Vector3, Vector3)> {
+    let Some((centre, half_width, half_height, rotation)) = gap else {
+        return vec![(a, b)];
+    };
+    let (sin, cos) = rotation.sin_cos();
+    let local = |p: &Vector3| {
+        let (x, y) = (p.x - centre.x, p.y - centre.y);
+        (x * cos + y * sin, -x * sin + y * cos)
+    };
+    let (p, q) = (local(&a), local(&b));
+    let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+    // Liang-Barsky: the parameter range where the segment is inside.
+    let (mut enter, mut leave) = (0.0f64, 1.0f64);
+    for (step, room) in [
+        (-dx, p.0 + half_width),
+        (dx, half_width - p.0),
+        (-dy, p.1 + half_height),
+        (dy, half_height - p.1),
+    ] {
+        if step.abs() < 1e-12 {
+            if room < 0.0 {
+                return vec![(a, b)];
+            }
+        } else if step < 0.0 {
+            enter = enter.max(room / step);
+        } else {
+            leave = leave.min(room / step);
+        }
+    }
+    if enter >= leave {
+        return vec![(a, b)];
+    }
+    let at = |t: f64| {
+        Vector3::new(
+            a.x + (b.x - a.x) * t,
+            a.y + (b.y - a.y) * t,
+            a.z + (b.z - a.z) * t,
+        )
+    };
+    let mut parts = Vec::new();
+    if enter > 1e-9 {
+        parts.push((a, at(enter)));
+    }
+    if leave < 1.0 - 1e-9 {
+        parts.push((at(leave), b));
+    }
+    parts
+}
+
+/// The text anchor for a radial leader: the saved text middle point when set,
+/// else the midpoint of `a` and `b` — mirroring the live `dimension_text_position`.
+fn dim_text_anchor(
+    base: &codec::entities::dimension::DimensionBase,
+    a: Vector3,
+    b: Vector3,
+) -> Vector3 {
+    let p = base.text_middle_point;
+    if p.x * p.x + p.y * p.y + p.z * p.z > 1e-8 {
+        p
+    } else {
+        Vector3::new((a.x + b.x) * 0.5, (a.y + b.y) * 0.5, (a.z + b.z) * 0.5)
+    }
+}
+
+/// The (start, end) of a linear/aligned extension line. `origin` is the
+/// measured point, `land` its landing on the dim line, `sign` the perpendicular
+/// direction, `(edx,edy)` the (possibly oblique) extension direction. Normally
+/// the line runs from `origin + DIMEXO` to `land + DIMEXE`; with DIMFXLON it is
+/// a fixed length DIMFXL back from the dim line instead. DIM-FXL.
+fn ext_endpoints(
+    origin: Vector3,
+    land: Vector3,
+    sign: f64,
+    edx: f64,
+    edy: f64,
+    met: &DimMetrics,
+) -> (Vector3, Vector3) {
+    let end = Vector3::new(
+        land.x + edx * (sign * met.dimexe),
+        land.y + edy * (sign * met.dimexe),
+        land.z,
+    );
+    let start = if met.dimfxlon {
+        Vector3::new(
+            land.x - edx * (sign * met.dimfxl),
+            land.y - edy * (sign * met.dimfxl),
+            land.z,
+        )
+    } else {
+        Vector3::new(
+            origin.x + edx * (sign * met.dimexo),
+            origin.y + edy * (sign * met.dimexo),
+            origin.z,
+        )
+    };
+    (start, end)
+}
+
+/// Normalise `(dx,dy)`, falling back to `(fx,fy)` when it is ~zero length.
+fn norm2(dx: f64, dy: f64, fx: f64, fy: f64) -> (f64, f64) {
+    let m = (dx * dx + dy * dy).sqrt();
+    if m > 1e-9 {
+        (dx / m, dy / m)
+    } else {
+        (fx, fy)
+    }
+}
+
+fn explode_dimension(dim: &Dimension, doc: &Document) -> Vec<EntityType> {
+    if let Dimension::Arc(arc) = dim {
+        if let Some((local_arc, normal)) = crate::entities::dimension::arc_dimension_in_ocs(arc) {
+            let (x_axis, y_axis) =
+                crate::scene::view::transform::ocs_axes((normal.x, normal.y, normal.z));
+            let plane = WorkingPlane::new(
+                DVec3::ZERO,
+                DVec3::new(x_axis.0, x_axis.1, x_axis.2),
+                DVec3::new(y_axis.0, y_axis.1, y_axis.2),
+            );
+            return explode_dimension(&Dimension::Arc(local_arc), doc)
+                .into_iter()
+                .map(|entity| plane.place_entity(entity))
+                .collect();
+        }
+    }
+    if let Dimension::LargeRadial(radial) = dim {
+        if let Some((local_radial, normal)) =
+            crate::entities::dimension::large_radial_dimension_in_ocs(radial)
+        {
+            let (x_axis, y_axis) =
+                crate::scene::view::transform::ocs_axes((normal.x, normal.y, normal.z));
+            let plane = WorkingPlane::new(
+                DVec3::ZERO,
+                DVec3::new(x_axis.0, x_axis.1, x_axis.2),
+                DVec3::new(y_axis.0, y_axis.1, y_axis.2),
+            );
+            return explode_dimension(&Dimension::LargeRadial(local_radial), doc)
+                .into_iter()
+                .map(|entity| plane.place_entity(entity))
+                .collect();
+        }
+    }
+    if let Some((local, normal)) = crate::entities::dimension::linear_dimension_in_ocs(dim) {
+        let (x_axis, y_axis) =
+            crate::scene::view::transform::ocs_axes((normal.x, normal.y, normal.z));
+        let plane = WorkingPlane::new(
+            DVec3::ZERO,
+            DVec3::new(x_axis.0, x_axis.1, x_axis.2),
+            DVec3::new(y_axis.0, y_axis.1, y_axis.2),
+        );
+        return explode_dimension(&local, doc)
+            .into_iter()
+            .map(|entity| plane.place_entity(entity))
+            .collect();
+    }
+
+    let base = dim.base();
+    let met = dim_metrics(dim, doc);
+    // Per-element commons so a baked block keeps the style's colours/lineweights:
+    // extension lines (DIMCLRE/DIMLWE), dimension line + arrows + centre mark
+    // (DIMCLRD/DIMLWD), text (DIMCLRT).
+    let ext_c = dim_common(&base.common, met.dimclre, met.dimlwe);
+    let dim_c = dim_common(&base.common, met.dimclrd, met.dimlwd);
+    let mut result: Vec<EntityType> = Vec::new();
+
+    // Helper: make a line segment with a given common.
+    let make_seg = |a: &Vector3, b: &Vector3, common: &EntityCommon| -> EntityType {
+        let mut c = common.clone();
+        c.handle = Handle::NULL;
+        EntityType::Line(LineEnt {
+            common: c,
+            start: a.clone(),
+            end: b.clone(),
+            ..LineEnt::new()
+        })
+    };
+
+    let v3 = |x: f64, y: f64, z: f64| Vector3::new(x, y, z);
+
+    // Dimension line for a linear/aligned dim, between d1 and d2 with the unit
+    // direction (ux,uy): DIMDLE overshoot when ticks are used, omitted when both
+    // halves are suppressed. When the arrows don't fit between the extension
+    // lines (gap < 2·DIMASZ, arrows only) they flip to the outside with short
+    // stubs unless DIMSOXD — matching the live fit logic. DIM-ARROWS-OUTSIDE.
+    // The dimension line stays open around the text, as drawn live.
+    let text_break = crate::entities::dimension::dimension_text_break_world(dim, doc);
+    let push_dim_line =
+        |result: &mut Vec<EntityType>, d1: Vector3, d2: Vector3, ux: f64, uy: f64| {
+            let ticks = met.dimtsz > 1e-9;
+            if !(met.dimsd1 && met.dimsd2) {
+                let dle = if ticks { met.dimdle } else { 0.0 };
+                let a = v3(d1.x - ux * dle, d1.y - uy * dle, d1.z);
+                let b = v3(d2.x + ux * dle, d2.y + uy * dle, d2.z);
+                for (a, b) in outside_box(a, b, text_break) {
+                    result.push(make_seg(&a, &b, &dim_c));
+                }
+            }
+            let gap = ((d2.x - d1.x).powi(2) + (d2.y - d1.y).powi(2)).sqrt();
+            let outside = !ticks && met.dimasz > 1e-6 && gap < 2.0 * met.dimasz;
+            // Flip Arrow turns an arrowhead to the other side of its line.
+            let (out1, out2) = (outside != base.flip_arrow1, outside != base.flip_arrow2);
+            // Outside, arrow bodies extend outward (tips still at the origins).
+            let (s1, s2) = (if out1 { -1.0 } else { 1.0 }, if out2 { -1.0 } else { 1.0 });
+            result.extend(dim_terminator(d1, ux * s1, uy * s1, &met.arrow1, &dim_c));
+            result.extend(dim_terminator(d2, -ux * s2, -uy * s2, &met.arrow2, &dim_c));
+            if !met.dimsoxd {
+                let stub = 2.0 * met.dimasz;
+                if out1 {
+                    result.push(make_seg(
+                        &v3(d1.x - ux * stub, d1.y - uy * stub, d1.z),
+                        &d1,
+                        &dim_c,
+                    ));
+                }
+                if out2 {
+                    result.push(make_seg(
+                        &d2,
+                        &v3(d2.x + ux * stub, d2.y + uy * stub, d2.z),
+                        &dim_c,
+                    ));
+                }
+            }
+        };
+
+    match dim {
+        Dimension::Aligned(d) => {
+            let fx = d.first_point.x;
+            let fy = d.first_point.y;
+            let sx = d.second_point.x;
+            let sy = d.second_point.y;
+            let axis_angle = (sy - fy).atan2(sx - fx);
+            let perp_x = -(axis_angle.sin());
+            let perp_y = axis_angle.cos();
+            let offset =
+                (d.definition_point.x - fx) * perp_x + (d.definition_point.y - fy) * perp_y;
+            let d1 = v3(fx + perp_x * offset, fy + perp_y * offset, d.first_point.z);
+            let d2 = v3(sx + perp_x * offset, sy + perp_y * offset, d.second_point.z);
+            let s = if offset >= 0.0 { 1.0 } else { -1.0 };
+            // DIMEDIT "Oblique": extension lines slant by ext_line_rotation (the
+            // dim line itself stays on the unrotated perp). DIM-EXT-OBLIQUE.
+            let (es, ec) = d.ext_line_rotation.sin_cos();
+            let edx = perp_x * ec - perp_y * es;
+            let edy = perp_x * es + perp_y * ec;
+            let (e1a, e1b) = ext_endpoints(d.first_point, d1, s, edx, edy, &met);
+            let (e2a, e2b) = ext_endpoints(d.second_point, d2, s, edx, edy, &met);
+            if !met.dimse1 {
+                result.push(make_seg(&e1a, &e1b, &ext_c));
+            }
+            if !met.dimse2 {
+                result.push(make_seg(&e2a, &e2b, &ext_c));
+            }
+            let ml = ((d2.x - d1.x).powi(2) + (d2.y - d1.y).powi(2))
+                .sqrt()
+                .max(1e-12);
+            let (ux, uy) = ((d2.x - d1.x) / ml, (d2.y - d1.y) / ml);
+            push_dim_line(&mut result, d1, d2, ux, uy);
+        }
+        Dimension::Linear(d) => {
+            // `rotation` is the dimension-line angle, already in radians.
+            let angle = d.rotation;
+            let perp_x = -(angle.sin());
+            let perp_y = angle.cos();
+            let fx = d.first_point.x;
+            let fy = d.first_point.y;
+            let sx = d.second_point.x;
+            let sy = d.second_point.y;
+            // Project each extension origin onto the dim line independently — a
+            // shared offset tilts the line over non-level origins (#181).
+            let dperp = d.definition_point.x * perp_x + d.definition_point.y * perp_y;
+            let off1 = dperp - (fx * perp_x + fy * perp_y);
+            let off2 = dperp - (sx * perp_x + sy * perp_y);
+            let d1 = v3(fx + perp_x * off1, fy + perp_y * off1, d.first_point.z);
+            let d2 = v3(sx + perp_x * off2, sy + perp_y * off2, d.second_point.z);
+            // Extension lines: DIMEXO start gap from the point, DIMEXE overshoot
+            // past the dim line, in the perp direction toward it. #181 / DIM-023.
+            let s1 = if off1 >= 0.0 { 1.0 } else { -1.0 };
+            let s2 = if off2 >= 0.0 { 1.0 } else { -1.0 };
+            // DIMEDIT "Oblique": extension lines slant by ext_line_rotation.
+            let (es, ec) = d.ext_line_rotation.sin_cos();
+            let edx = perp_x * ec - perp_y * es;
+            let edy = perp_x * es + perp_y * ec;
+            let (e1a, e1b) = ext_endpoints(d.first_point, d1, s1, edx, edy, &met);
+            let (e2a, e2b) = ext_endpoints(d.second_point, d2, s2, edx, edy, &met);
+            if !met.dimse1 {
+                result.push(make_seg(&e1a, &e1b, &ext_c));
+            }
+            if !met.dimse2 {
+                result.push(make_seg(&e2a, &e2b, &ext_c));
+            }
+            let ml = ((d2.x - d1.x).powi(2) + (d2.y - d1.y).powi(2))
+                .sqrt()
+                .max(1e-12);
+            let (ux, uy) = ((d2.x - d1.x) / ml, (d2.y - d1.y) / ml);
+            push_dim_line(&mut result, d1, d2, ux, uy);
+        }
+        Dimension::Radius(d) => {
+            let (center, point) = (d.angle_vertex, d.definition_point);
+            result.push(make_seg(&center, &point, &dim_c));
+            let len = ((center.x - point.x).powi(2) + (center.y - point.y).powi(2))
+                .sqrt()
+                .max(1e-12);
+            result.extend(dim_terminator(
+                point,
+                (center.x - point.x) / len,
+                (center.y - point.y) / len,
+                &met.arrow1,
+                &dim_c,
+            ));
+            // Leader from the arrow tip toward the text — to the text anchor when
+            // leader_length is 0, else that far along the text direction (matches
+            // the live radius render). DIM-RAD-LEADER.
+            let anchor = dim_text_anchor(base, center, point);
+            let ld = norm2(anchor.x - point.x, anchor.y - point.y, 1.0, 0.0);
+            let leader = if d.leader_length.abs() > 1e-9 {
+                v3(
+                    point.x + ld.0 * d.leader_length,
+                    point.y + ld.1 * d.leader_length,
+                    point.z,
+                )
+            } else {
+                anchor
+            };
+            result.push(make_seg(&point, &leader, &dim_c));
+            // The dimension line reaches the centre, so no centre mark.
+        }
+        Dimension::Diameter(d) => {
+            let (edge, far) = (d.angle_vertex, d.definition_point);
+            let center = v3(
+                (edge.x + far.x) * 0.5,
+                (edge.y + far.y) * 0.5,
+                (edge.z + far.z) * 0.5,
+            );
+            let len = ((edge.x - far.x).powi(2) + (edge.y - far.y).powi(2))
+                .sqrt()
+                .max(1e-12);
+            let (ux, uy) = ((edge.x - far.x) / len, (edge.y - far.y) / len);
+            let ticks = met.dimtsz > 1e-9;
+            let extension = if ticks { met.dimdle } else { 0.0 };
+            let edge_outer = v3(edge.x + ux * extension, edge.y + uy * extension, edge.z);
+            let far_outer = v3(far.x - ux * extension, far.y - uy * extension, far.z);
+            if !met.dimsd1 {
+                result.push(make_seg(&edge_outer, &center, &dim_c));
+            }
+            if !met.dimsd2 {
+                result.push(make_seg(&center, &far_outer, &dim_c));
+            }
+            let outside = !ticks && met.dimasz > 1e-6 && len < 2.0 * met.dimasz;
+            let (out1, out2) = (outside != base.flip_arrow1, outside != base.flip_arrow2);
+            let (s1, s2) = (if out1 { 1.0 } else { -1.0 }, if out2 { 1.0 } else { -1.0 });
+            result.extend(dim_terminator(edge, ux * s1, uy * s1, &met.arrow1, &dim_c));
+            result.extend(dim_terminator(far, -ux * s2, -uy * s2, &met.arrow2, &dim_c));
+            if !met.dimsoxd {
+                let stub = 2.0 * met.dimasz;
+                if out1 && !met.dimsd1 {
+                    result.push(make_seg(
+                        &edge,
+                        &v3(edge.x + ux * stub, edge.y + uy * stub, edge.z),
+                        &dim_c,
+                    ));
+                }
+                if out2 && !met.dimsd2 {
+                    result.push(make_seg(
+                        &far,
+                        &v3(far.x - ux * stub, far.y - uy * stub, far.z),
+                        &dim_c,
+                    ));
+                }
+            }
+            let anchor = dim_text_anchor(base, center, edge);
+            let distance_squared = |first: Vector3, second: Vector3| {
+                (first.x - second.x).powi(2)
+                    + (first.y - second.y).powi(2)
+                    + (first.z - second.z).powi(2)
+            };
+            let (leader_tip, suppressed, fallback) =
+                if distance_squared(anchor, edge) <= distance_squared(anchor, far) {
+                    (edge, met.dimsd1, (ux, uy))
+                } else {
+                    (far, met.dimsd2, (-ux, -uy))
+                };
+            if !suppressed && d.leader_length.abs() > 1e-9 {
+                let ld = norm2(
+                    anchor.x - leader_tip.x,
+                    anchor.y - leader_tip.y,
+                    fallback.0,
+                    fallback.1,
+                );
+                result.push(make_seg(
+                    &leader_tip,
+                    &v3(
+                        leader_tip.x + ld.0 * d.leader_length.abs(),
+                        leader_tip.y + ld.1 * d.leader_length.abs(),
+                        leader_tip.z,
+                    ),
+                    &dim_c,
+                ));
+            }
+            if !met.dimse1 {
+                if let Some(points) = crate::scene::dimension_assoc::radial_extension_points(
+                    doc,
+                    base.common.handle,
+                    met.dimexo,
+                    met.dimexe,
+                ) {
+                    for pair in points.windows(2) {
+                        result.push(make_seg(&pair[0], &pair[1], &ext_c));
+                    }
+                }
+            }
+            // A centre mark only when no part of the dimension line crosses
+            // the circle.
+            if met.dimsd1 && met.dimsd2 {
+                result.extend(dim_center_mark(center, met.dimcen, len * 0.5, &dim_c));
+            }
+        }
+        Dimension::Angular2Ln(d) => {
+            // Two lines, `first_point`→`second_point` and `angle_vertex`→
+            // `definition_point`, measured at their crossing, as drawn live.
+            let dv = |p: Vector3| DVec3::new(p.x, p.y, p.z);
+            let lines = [
+                (dv(d.first_point), dv(d.second_point)),
+                (dv(d.angle_vertex), dv(d.definition_point)),
+            ];
+            let arc_point = dv(d.dimension_arc);
+            match crate::entities::dimension::two_line_angle_frame_f64(
+                lines[0].0, lines[0].1, lines[1].0, lines[1].1, arc_point,
+            ) {
+                Some((vertex, start, end)) => {
+                    let radius = vertex.distance(arc_point);
+                    // An extension line runs from the side's nearer end out
+                    // to the arc, and not at all where the arc crosses it.
+                    let foot = |angle: f64| {
+                        let dir = DVec3::new(angle.cos(), angle.sin(), 0.0);
+                        let deviation =
+                            |(a, b): (DVec3, DVec3)| (b - a).normalize_or(dir).cross(dir).length();
+                        let (a, b) = if deviation(lines[0]) <= deviation(lines[1]) {
+                            lines[0]
+                        } else {
+                            lines[1]
+                        };
+                        let along = |p: DVec3| (p - vertex).dot(dir);
+                        let arc_end = vertex + dir * radius;
+                        if radius >= along(a).min(along(b)) - 1e-9
+                            && radius <= along(a).max(along(b)) + 1e-9
+                        {
+                            arc_end
+                        } else if a.distance(arc_end) <= b.distance(arc_end) {
+                            a
+                        } else {
+                            b
+                        }
+                    };
+                    let v = |p: DVec3| Vector3::new(p.x, p.y, p.z);
+                    result.extend(angular_block_segs(
+                        v(vertex),
+                        v(foot(start)),
+                        v(foot(end)),
+                        d.dimension_arc,
+                        &met,
+                        &ext_c,
+                        &dim_c,
+                        Some((start, end)),
+                    ));
+                }
+                None => {
+                    result.push(make_seg(&d.first_point, &d.second_point, &ext_c));
+                    result.push(make_seg(&d.angle_vertex, &d.definition_point, &ext_c));
+                }
+            }
+        }
+        Dimension::Angular3Pt(d) => {
+            result.extend(angular_block_segs(
+                d.angle_vertex,
+                d.first_point,
+                d.second_point,
+                d.definition_point,
+                &met,
+                &ext_c,
+                &dim_c,
+                None,
+            ));
+        }
+        Dimension::Ordinate(d) => {
+            if !met.dimse1 {
+                let fixed_length = met.dimfxlon.then_some(met.dimfxl);
+                let points = d.leader_polyline(met.dimasz * 2.0, met.dimexo, fixed_length);
+                for pair in points.windows(2) {
+                    if (pair[1] - pair[0]).length() > 1e-12 {
+                        result.push(make_seg(&pair[0], &pair[1], &ext_c));
+                    }
+                }
+            }
+        }
+        Dimension::Arc(d) => {
+            let explicit_sweep = crate::entities::dimension::arc_dimension_angles(d)
+                .map(|(start, end)| (start as f64, end as f64));
+            result.extend(angular_block_segs(
+                d.center_point,
+                d.first_extension_point,
+                d.second_extension_point,
+                d.definition_point,
+                &met,
+                &ext_c,
+                &dim_c,
+                explicit_sweep,
+            ));
+            if d.has_leader {
+                result.push(make_seg(
+                    &d.first_leader_point,
+                    &d.second_leader_point,
+                    &dim_c,
+                ));
+            }
+        }
+        Dimension::LargeRadial(_) => {
+            if let Some(geometry) =
+                crate::entities::dimension::baked_large_radial_geometry(dim, doc)
+            {
+                let radial_ext_c = with_dim_linetype(ext_c.clone(), doc, met.dimltex1);
+                let radial_dim_c = with_dim_linetype(dim_c.clone(), doc, met.dimltype);
+                result.extend(dim_geom_entities(&geometry, &radial_ext_c, &radial_dim_c));
+            }
+        }
+    }
+
+    let symbol_points = crate::entities::dimension::baked_arc_length_symbol_points(dim, doc, 1.0);
+    if symbol_points.len() > 1 {
+        let text_c = dim_common(&base.common, met.dimclrt, -2);
+        for pair in symbol_points.windows(2) {
+            result.push(make_seg(&pair[0], &pair[1], &text_c));
+        }
+    }
+
+    // Measurement text is the live render's own Text/MText entity (value,
+    // position, height, rotation, alignment, text style, MText handling all
+    // shared), so the baked block matches the on-screen dimension and the label
+    // doesn't shift when the file is saved and reopened. `None` = suppressed.
+    for mut tent in crate::entities::dimension::baked_dimension_text_entities(dim, doc, 1.0) {
+        // Apply the text colour / lineweight (DIMCLRT) onto the entity.
+        let tc = dim_common(&base.common, met.dimclrt, -2);
+        tent.common_mut().color = tc.color;
+        tent.common_mut().color_name = tc.color_name;
+        tent.common_mut().color_book_handle = tc.color_book_handle;
+        tent.common_mut().line_weight = tc.line_weight;
+        // The live-render text entity carries the dimension's dictionary;
+        // the baked copy must not share it (see above).
+        tent.common_mut().xdictionary_handle = None;
+        result.push(tent);
+    }
+
+    result
+}
+
+// ── Dimension block baking (DWG/DXF interop) ────────────────────────────────
+
+/// Mirror each dimension's authoritative geometric definition point into
+/// `base.definition_point`, which is the field the DWG/DXF writer emits as
+/// group 10. Edits (grips, properties, transforms) update the per-type struct
+/// field but not `base`, so without this the saved group 10 goes stale and the
+/// dimension's line / leader / origin jumps on reload (#181). Angular-2-line
+/// keeps a distinct base point (the second line's point) and is left alone.
+fn sync_dimension_base_points_and_collect_pending(doc: &mut Document) -> Vec<Handle> {
+    let existing_blocks: rustc_hash::FxHashSet<String> = doc
+        .block_records
+        .iter()
+        .map(|record| record.name.to_ascii_lowercase())
+        .collect();
+    let dimensions: Vec<(Handle, Option<Vector3>, bool)> = doc
+        .entities()
+        .filter_map(|entity| {
+            let EntityType::Dimension(dimension) = entity else {
+                return None;
+            };
+            let definition_point = match &**dimension {
+                Dimension::Linear(value) => Some(value.definition_point),
+                Dimension::Aligned(value) => Some(value.definition_point),
+                Dimension::Radius(value) => Some(value.definition_point),
+                Dimension::Diameter(value) => Some(value.definition_point),
+                Dimension::Ordinate(value) => Some(value.definition_point),
+                Dimension::Angular3Pt(value) => Some(value.definition_point),
+                Dimension::Arc(value) => Some(value.definition_point),
+                Dimension::LargeRadial(value) => Some(value.definition_point),
+                Dimension::Angular2Ln(_) => None,
+            };
+            let base = dimension.base();
+            let needs_sync = definition_point.filter(|point| *point != base.definition_point);
+            let block_missing = base.block_name.trim().is_empty()
+                || !existing_blocks.contains(&base.block_name.to_ascii_lowercase());
+            Some((base.common.handle, needs_sync, block_missing))
+        })
+        .collect();
+
+    let mut pending = Vec::new();
+    for (handle, definition_point, block_missing) in dimensions {
+        if let Some(point) = definition_point {
+            if let Some(EntityType::Dimension(dimension)) = doc.get_entity_mut(handle) {
+                dimension.base_mut().definition_point = point;
+            }
+        }
+        if block_missing {
+            pending.push(handle);
+        }
+    }
+    pending
+}
+
+/// Remove `*D` pictures no dimension or insert names any more: a rotated
+/// or mirrored dimension detaches its old one (kept in the open drawing so an
+/// undo can point back to it), which a saved file should not carry.
+fn drop_detached_dimension_blocks(doc: &mut Document) {
+    let named: std::collections::HashSet<String> = doc
+        .entities()
+        .chain(
+            doc.block_records
+                .iter()
+                .flat_map(|record| record.entity_handles.iter())
+                .filter_map(|handle| doc.get_entity(*handle)),
+        )
+        .filter_map(|entity| match entity {
+            EntityType::Dimension(d) => Some(d.base().block_name.to_ascii_uppercase()),
+            EntityType::Insert(insert) => Some(insert.block_name.to_ascii_uppercase()),
+            _ => None,
+        })
+        .collect();
+    let detached: Vec<String> = doc
+        .block_records
+        .iter()
+        .map(|record| record.name.clone())
+        .filter(|name| {
+            let upper = name.to_ascii_uppercase();
+            upper.starts_with("*D") && !named.contains(&upper)
+        })
+        .collect();
+    for name in detached {
+        if let Some(record) = doc.block_records.remove(&name) {
+            let mut owned = record.entity_handles.clone();
+            owned.push(record.block_entity_handle);
+            owned.push(record.block_end_handle);
+            for handle in owned {
+                if !handle.is_null() {
+                    doc.remove_entity(handle);
+                }
+            }
+        }
+    }
+}
+
+/// Smallest free `*D<n>` anonymous block name in `doc`.
+fn next_dimension_block_name(doc: &Document, next: &mut u64) -> String {
+    loop {
+        let n = *next;
+        *next = (*next).saturating_add(1);
+        let cand = format!("*D{n}");
+        if doc.block_records.get(&cand).is_none() {
+            return cand;
+        }
+    }
+}
+
+/// Build missing anonymous dimension geometry blocks before writing.
+pub fn bake_dimension_blocks(doc: &mut Document) {
+    drop_detached_dimension_blocks(doc);
+    // Keep group-10 in step and find missing blocks in one entity pass. Existing
+    // `*D` blocks are the save cache: only invalidated/new dimensions enter the
+    // relatively expensive geometry generation below.
+    let pending = sync_dimension_base_points_and_collect_pending(doc);
+    let dimensions: Vec<(Handle, Dimension)> = pending
+        .into_iter()
+        .filter_map(|handle| match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => Some((handle, (**d).clone())),
+            _ => None,
+        })
+        .collect();
+
+    use crate::par::prelude::*;
+    let doc_ref: &Document = doc;
+    let generated: Vec<(Handle, Vec<EntityType>)> = dimensions
+        .par_iter()
+        .map(|(handle, dim)| (*handle, explode_dimension(dim, doc_ref)))
+        .collect();
+
+    let mut next_block_number = 0u64;
+    for (handle, subs) in generated {
+        if subs.is_empty() {
+            continue;
+        }
+
+        let name = next_dimension_block_name(doc, &mut next_block_number);
+        let next = doc.next_handle();
+        let br_handle = Handle::new(next);
+        let block_handle = Handle::new(next + 1);
+
+        let mut br = BlockRecord::new(&name);
+        br.handle = br_handle;
+        br.block_entity_handle = block_handle;
+        br.flags.anonymous = true;
+        if doc.block_records.add(br).is_err() {
+            continue;
+        }
+
+        let mut block = Block::new(&name, Vector3::new(0.0, 0.0, 0.0));
+        block.common.handle = block_handle;
+        block.common.owner_handle = br_handle;
+        let _ = doc.add_entity(EntityType::Block(block));
+
+        for mut sub in subs {
+            sub.common_mut().handle = Handle::NULL;
+            sub.common_mut().owner_handle = br_handle;
+            let _ = doc.add_entity(sub);
+        }
+
+        // The terminator is allocated after the body so handle order matches
+        // record order inside the definition.
+        let end_handle = doc.allocate_handle();
+        let mut block_end = BlockEnd::new();
+        block_end.common.handle = end_handle;
+        block_end.common.owner_handle = br_handle;
+        let _ = doc.add_entity(EntityType::BlockEnd(block_end));
+        if let Some(record) = doc.block_records.get_mut(&name) {
+            record.block_end_handle = end_handle;
+        }
+
+        if let Some(EntityType::Dimension(d)) = doc.get_entity_mut(handle) {
+            d.base_mut().block_name = name;
+            // Baked geometry uses absolute coordinates.
+            d.base_mut().insertion_point = Vector3::new(0.0, 0.0, 0.0);
+        }
+    }
+}
+
+/// Drop baked dimension geometry so the next save regenerates it.
+pub fn invalidate_dim_block(doc: &mut Document, handle: Handle) {
+    let bn = match doc.get_entity(handle) {
+        Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
+        _ => return,
+    };
+    if bn.trim().is_empty() {
+        return;
+    }
+    // Dimension graphics live in an anonymous "*D…" block, unique to the one
+    // dimension, so it is safe to delete along with its sub-entities. Guard on
+    // the anonymous prefix so a hand-referenced named block is never removed.
+    if bn.starts_with("*D") || bn.starts_with("*d") {
+        if let Some(rec) = doc.block_records.remove(&bn) {
+            let mut owned = rec.entity_handles.clone();
+            owned.push(rec.block_entity_handle);
+            owned.push(rec.block_end_handle);
+            for h in owned {
+                if !h.is_null() {
+                    doc.remove_entity(h);
+                }
+            }
+        }
+    }
+    if let Some(EntityType::Dimension(d)) = doc.get_entity_mut(handle) {
+        d.base_mut().block_name.clear();
+    }
+}
+
+// ── Command stub (kept for future interactive selection mode) ───────────────
+
+pub struct ExplodeCommand;
+
+impl ExplodeCommand {
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl CadCommand for ExplodeCommand {
+    fn name(&self) -> &'static str {
+        "EXPLODE"
+    }
+    fn prompt(&self) -> String {
+        t!("EXPLODE  Select objects to explode:").into_owned()
+    }
+
+    fn on_point(&mut self, _pt: DVec3) -> CmdResult {
+        CmdResult::Cancel
+    }
+    fn on_enter(&mut self) -> CmdResult {
+        CmdResult::Cancel
+    }
+    fn on_escape(&mut self) -> CmdResult {
+        CmdResult::Cancel
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codec::entities::DimensionLinear;
+
+    #[test]
+    fn minsert_too_large_to_materialize_is_left_intact() {
+        let mut doc = Document::new();
+        let mut block = codec::tables::BlockRecord::new("B1");
+        block.handle = doc.allocate_handle();
+        doc.block_records.add(block).unwrap();
+        let mut insert = codec::entities::Insert::new("B1", Vector3::new(0.0, 0.0, 0.0));
+        insert.row_count = u16::MAX;
+        insert.column_count = u16::MAX;
+        assert!(explode_entity(&EntityType::Insert(insert), &doc).is_empty());
+    }
+
+    /// A pattern hatch explodes into its pattern lines on the hatch plane,
+    /// inside the boundary; a solid fill does not explode.
+    #[test]
+    fn pattern_hatch_explodes_to_clipped_lines() {
+        use codec::entities::hatch::{BoundaryEdge, BoundaryPath, HatchPatternLine, LineEdge};
+        use codec::types::Vector2;
+        let mut path = BoundaryPath::new();
+        for (s, e) in [((0.0, 0.0), (10.0, 0.0)), ((10.0, 0.0), (10.0, 10.0))]
+            .into_iter()
+            .chain([((10.0, 10.0), (0.0, 10.0)), ((0.0, 10.0), (0.0, 0.0))])
+        {
+            path.edges.push(BoundaryEdge::Line(LineEdge {
+                start: Vector2::new(s.0, s.1),
+                end: Vector2::new(e.0, e.1),
+            }));
+        }
+        let mut hatch = codec::entities::Hatch::new();
+        hatch.paths.push(path);
+        hatch.elevation = 3.0;
+        hatch.common.layer = "HATCH".into();
+        let doc = Document::new();
+        assert!(explode_entity(&EntityType::Hatch(Box::new(hatch.clone())), &doc).is_empty());
+
+        hatch.is_solid = false;
+        hatch.pattern.name = "ANSI31".into();
+        hatch.pattern.lines = vec![HatchPatternLine {
+            angle: std::f64::consts::FRAC_PI_4,
+            base_point: Vector2::new(0.0, 0.0),
+            offset: Vector2::new(-1.0, 1.0),
+            dash_lengths: vec![],
+        }];
+        let pieces = explode_entity(&EntityType::Hatch(Box::new(hatch)), &doc);
+        assert!(pieces.len() > 5);
+        for piece in &pieces {
+            let EntityType::Line(line) = piece else {
+                panic!("hatch exploded into a non-line");
+            };
+            assert_eq!(line.common.layer, "HATCH");
+            for p in [line.start, line.end] {
+                assert!((p.z - 3.0).abs() < 1e-9);
+                assert!((-1e-6..=10.0 + 1e-6).contains(&p.x));
+                assert!((-1e-6..=10.0 + 1e-6).contains(&p.y));
+            }
+        }
+    }
+
+    /// EXPLODE resolves ByBlock transparency and linetype on the children it
+    /// produces, the same way the render path does, so an exploded entity does
+    /// not keep a ByBlock sentinel that nothing downstream resolves.
+    #[test]
+    fn explode_resolves_byblock_transparency_and_linetype() {
+        let mut doc = Document::new();
+
+        let mut block = BlockRecord::new("BYBLOCK_STYLE");
+        block.handle = doc.allocate_handle();
+
+        let mut child = codec::entities::Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+        );
+        child.common.color = codec::types::Color::ByBlock;
+        child.common.transparency = codec::types::Transparency::ByBlock;
+        child.common.linetype = "ByBlock".to_string();
+        let child_handle = doc.add_entity(EntityType::Line(child)).unwrap();
+        block.entity_handles.push(child_handle);
+        doc.block_records.add(block).unwrap();
+
+        let mut insert = codec::entities::Insert::new("BYBLOCK_STYLE", Vector3::new(0.0, 0.0, 0.0));
+        insert.common.color = codec::types::Color::from_index(1);
+        insert.common.transparency = codec::types::Transparency::new(96);
+        insert.common.linetype = "DASHED".to_string();
+
+        let out = explode_entity(&EntityType::Insert(insert), &doc);
+        assert_eq!(out.len(), 1, "the block's one child should come out");
+
+        let c = out[0].common();
+        assert_eq!(c.color, codec::types::Color::from_index(1));
+        assert_eq!(
+            c.transparency,
+            codec::types::Transparency::new(96),
+            "ByBlock transparency should take the insert's value"
+        );
+        assert_eq!(
+            c.linetype, "DASHED",
+            "ByBlock linetype should take the insert's linetype"
+        );
+    }
+
+    /// A child that already names its own transparency/linetype keeps them;
+    /// only the ByBlock sentinel is replaced.
+    #[test]
+    fn explode_keeps_explicit_child_transparency_and_linetype() {
+        let mut doc = Document::new();
+
+        let mut block = BlockRecord::new("EXPLICIT_STYLE");
+        block.handle = doc.allocate_handle();
+
+        let mut child = codec::entities::Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+        );
+        child.common.transparency = codec::types::Transparency::new(25);
+        child.common.linetype = "CONTINUOUS".to_string();
+        let child_handle = doc.add_entity(EntityType::Line(child)).unwrap();
+        block.entity_handles.push(child_handle);
+        doc.block_records.add(block).unwrap();
+
+        let mut insert =
+            codec::entities::Insert::new("EXPLICIT_STYLE", Vector3::new(0.0, 0.0, 0.0));
+        insert.common.transparency = codec::types::Transparency::new(96);
+        insert.common.linetype = "DASHED".to_string();
+
+        let out = explode_entity(&EntityType::Insert(insert), &doc);
+        assert_eq!(out.len(), 1);
+
+        let c = out[0].common();
+        assert_eq!(
+            c.transparency,
+            codec::types::Transparency::new(25),
+            "an explicit child transparency must survive"
+        );
+        assert_eq!(
+            c.linetype, "CONTINUOUS",
+            "an explicit child linetype must survive"
+        );
+    }
+
+    /// The flag, not an empty definition, decides: the same block with one
+    /// line inside explodes when `explodable` is set and stays whole when it
+    /// is cleared.
+    #[test]
+    fn unexplodable_block_is_not_exploded() {
+        fn explode_once(explodable: bool) -> Vec<EntityType> {
+            let mut doc = Document::new();
+            let mut block = codec::tables::BlockRecord::new("NO_EXPLODE");
+            block.handle = doc.allocate_handle();
+            block.explodable = explodable;
+            let child = doc
+                .add_entity(EntityType::Line(codec::entities::Line::from_points(
+                    Vector3::new(0.0, 0.0, 0.0),
+                    Vector3::new(10.0, 0.0, 0.0),
+                )))
+                .unwrap();
+            block.entity_handles.push(child);
+            doc.block_records.add(block).unwrap();
+
+            let insert = codec::entities::Insert::new("NO_EXPLODE", Vector3::new(0.0, 0.0, 0.0));
+            explode_entity(&EntityType::Insert(insert), &doc)
+        }
+
+        assert_eq!(
+            explode_once(true).len(),
+            1,
+            "the definition holds one line, so an explodable block has something to give"
+        );
+        assert!(
+            explode_once(false).is_empty(),
+            "clearing the flag is what stops the explosion"
+        );
+    }
+
+    /// A dimension created without a geometry block gets a real `*D` block on
+    /// bake, its `block_name` resolves to that block, and a second bake is a
+    /// no-op (already has a valid block).
+    #[test]
+    fn bakes_block_for_blockless_dimension_and_is_idempotent() {
+        let mut doc = Document::new();
+
+        let mut d = DimensionLinear::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 5.0, 0.0);
+        d.base.text_middle_point = Vector3::new(5.0, 5.0, 0.0);
+        // block_name is left empty — exactly what OCS-created dimensions carry.
+        let handle = doc
+            .add_entity(EntityType::Dimension(Box::new(Dimension::Linear(d))))
+            .unwrap();
+
+        bake_dimension_blocks(&mut doc);
+
+        let block_name = match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
+            _ => panic!("dimension missing"),
+        };
+        assert!(!block_name.trim().is_empty(), "block_name should be set");
+        assert!(
+            doc.block_records.get(&block_name).is_some(),
+            "baked block must exist in the block table"
+        );
+
+        // Second pass must not create another block for the same dimension.
+        let before = doc.block_records.len();
+        bake_dimension_blocks(&mut doc);
+        assert_eq!(
+            doc.block_records.len(),
+            before,
+            "a dimension that already owns a block must not be re-baked"
+        );
+    }
+
+    #[test]
+    fn a_baked_dimension_block_ends_after_its_body() {
+        let mut doc = Document::new();
+        let mut d = DimensionLinear::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 5.0, 0.0);
+        d.base.text_middle_point = Vector3::new(5.0, 5.0, 0.0);
+        let handle = doc
+            .add_entity(EntityType::Dimension(Box::new(Dimension::Linear(d))))
+            .unwrap();
+
+        bake_dimension_blocks(&mut doc);
+
+        let block_name = match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
+            _ => panic!("dimension missing"),
+        };
+        let record = doc
+            .block_records
+            .get(&block_name)
+            .expect("the baked block exists");
+        let marker = record.block_entity_handle.value();
+        let end = record.block_end_handle.value();
+        let body: Vec<_> = record
+            .entity_handles
+            .iter()
+            .map(|handle| handle.value())
+            .collect();
+        assert!(
+            body.iter().all(|handle| *handle > marker),
+            "body handles follow the BLOCK marker: {body:?}"
+        );
+        assert!(
+            end > *body.iter().max().expect("the baked block has geometry"),
+            "the ENDBLK handle follows the body: marker {marker}, body {body:?}, end {end}"
+        );
+    }
+
+    /// Baking a blockless dimension resets its group-12 insertion point to the
+    /// origin. OCS's commands seed it with the text anchor; left non-zero, a
+    /// reader that positions the absolute-WCS block by that point draws the
+    /// dimension shifted. Regression test for #181.
+    #[test]
+    fn bake_zeroes_insertion_point() {
+        let mut doc = Document::new();
+
+        let mut d = DimensionLinear::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 5.0, 0.0);
+        d.base.text_middle_point = Vector3::new(5.0, 5.0, 0.0);
+        // Exactly what OCS-created dimensions carry: insertion == text anchor.
+        d.base.insertion_point = d.base.text_middle_point;
+        let handle = doc
+            .add_entity(EntityType::Dimension(Box::new(Dimension::Linear(d))))
+            .unwrap();
+
+        bake_dimension_blocks(&mut doc);
+
+        let ins = match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => d.base().insertion_point,
+            _ => panic!("dimension missing"),
+        };
+        assert_eq!(
+            ins,
+            Vector3::new(0.0, 0.0, 0.0),
+            "baked dimension must carry a zero insertion point (#181)"
+        );
+    }
+
+    /// Invalidating a baked dimension removes its `*D` block record AND the
+    /// sub-entities it owned (no orphans), and clears `block_name` so the next
+    /// save re-bakes a fresh block. Guards the stale-export fix for #181.
+    #[test]
+    fn invalidate_removes_block_and_leaves_no_orphan() {
+        let mut doc = Document::new();
+
+        let mut d = DimensionLinear::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 5.0, 0.0);
+        d.base.text_middle_point = Vector3::new(5.0, 5.0, 0.0);
+        let handle = doc
+            .add_entity(EntityType::Dimension(Box::new(Dimension::Linear(d))))
+            .unwrap();
+
+        bake_dimension_blocks(&mut doc);
+        let block_name = match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
+            _ => panic!("dimension missing"),
+        };
+        assert!(!block_name.trim().is_empty());
+        let owned: Vec<Handle> = doc
+            .block_records
+            .get(&block_name)
+            .unwrap()
+            .entity_handles
+            .clone();
+        assert!(!owned.is_empty(), "baked block should own sub-entities");
+
+        invalidate_dim_block(&mut doc, handle);
+
+        // block_name cleared → the dimension is pending again.
+        match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => {
+                assert!(
+                    d.base().block_name.trim().is_empty(),
+                    "block_name must be cleared"
+                );
+            }
+            _ => panic!("dimension missing"),
+        }
+        // Block record gone.
+        assert!(
+            doc.block_records.get(&block_name).is_none(),
+            "stale block record must be removed"
+        );
+        // No orphaned sub-entities left behind.
+        for h in owned {
+            assert!(
+                doc.get_entity(h).is_none(),
+                "sub-entity {h:?} of the dropped block leaked"
+            );
+        }
+
+        // A fresh bake re-creates a block, so the round-trip stays valid.
+        bake_dimension_blocks(&mut doc);
+        let rebaked = match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
+            _ => panic!("dimension missing"),
+        };
+        assert!(
+            !rebaked.trim().is_empty(),
+            "re-bake must assign a new block"
+        );
+    }
+
+    // Collect the line segments baked into the dimension's `*D` block.
+    fn baked_segments(doc: &Document, block_name: &str) -> Vec<(Vector3, Vector3)> {
+        let rec = doc.block_records.get(block_name).expect("block record");
+        doc.entities()
+            .filter_map(|e| match e {
+                EntityType::Line(l) if l.common.owner_handle == rec.handle => {
+                    Some((l.start, l.end))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    // A horizontal (rotation = 0) linear dimension whose two measured points sit
+    // at *different* heights must still bake a level dimension line — both
+    // extension origins project onto the same line. Regression test for #181,
+    // where a shared offset tilted the dimension line.
+    #[test]
+    fn linear_dim_line_stays_level_over_sloped_points() {
+        let mut doc = Document::new();
+        let mut d = DimensionLinear::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 5.0, 0.0));
+        d.rotation = 0.0;
+        d.definition_point = Vector3::new(0.0, 8.0, 0.0);
+        let handle = doc
+            .add_entity(EntityType::Dimension(Box::new(Dimension::Linear(d))))
+            .unwrap();
+        bake_dimension_blocks(&mut doc);
+        let name = match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
+            _ => panic!("dimension missing"),
+        };
+        // The dimension line is the segment spanning both x extents; it must be
+        // horizontal at the definition-point level (y = 8).
+        let dim_line = baked_segments(&doc, &name)
+            .into_iter()
+            .find(|(a, b)| (a.x - 0.0).abs() < 1e-6 && (b.x - 10.0).abs() < 1e-6)
+            .expect("dimension line segment");
+        assert!(
+            (dim_line.0.y - 8.0).abs() < 1e-6 && (dim_line.1.y - 8.0).abs() < 1e-6,
+            "dimension line must be level at y=8, got {:?}",
+            dim_line
+        );
+    }
+
+    // A linear dimension bakes closed FILLED arrowheads (SOLID entities), not
+    // generic open strokes — so a saved+reloaded dim keeps the style's arrow
+    // type. (Default style: DIMTSZ=0 -> arrows, two of them.)
+    #[test]
+    fn linear_dim_bakes_filled_arrowheads() {
+        let mut doc = Document::new();
+        let mut d = DimensionLinear::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 5.0, 0.0);
+        let handle = doc
+            .add_entity(EntityType::Dimension(Box::new(Dimension::Linear(d))))
+            .unwrap();
+        bake_dimension_blocks(&mut doc);
+        let name = match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
+            _ => panic!("dimension missing"),
+        };
+        let rec = doc.block_records.get(&name).expect("block");
+        let solids = doc
+            .entities()
+            .filter(|e| matches!(e, EntityType::Solid(s) if s.common.owner_handle == rec.handle))
+            .count();
+        assert_eq!(
+            solids, 2,
+            "expected 2 filled (SOLID) arrowheads, got {solids}"
+        );
+    }
+
+    /// The line segments EXPLODE turns the dimension into.
+    fn exploded_segments(dim: &Dimension, doc: &Document) -> Vec<(DVec3, DVec3)> {
+        let point = |v: Vector3| DVec3::new(v.x, v.y, v.z);
+        explode_dimension(dim, doc)
+            .into_iter()
+            .filter_map(|entity| match entity {
+                EntityType::Line(line) => Some((point(line.start), point(line.end))),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// EXPLODE of a linear dimension in a working plane off world Z leaves
+    /// its lines in that plane. Turned 90° about X, the dimension has to
+    /// explode into the same lines turned with it; its offset, now along Z,
+    /// used to be read in world XY only.
+    #[test]
+    fn exploding_a_linear_dimension_off_world_z_keeps_its_plane() {
+        use crate::command::EntityTransform;
+        let doc = Document::new();
+        let mut d = DimensionLinear::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 5.0, 0.0);
+        let flat = Dimension::Linear(d);
+        let turn = glam::DQuat::from_axis_angle(DVec3::X, std::f64::consts::FRAC_PI_2);
+        let expected: Vec<(DVec3, DVec3)> = exploded_segments(&flat, &doc)
+            .into_iter()
+            .map(|(a, b)| (turn * a, turn * b))
+            .collect();
+        assert!(!expected.is_empty(), "the dimension explodes into no lines");
+
+        let mut turned = EntityType::Dimension(Box::new(flat));
+        crate::scene::view::dispatch::apply_transform(
+            &mut turned,
+            &EntityTransform::Rotate {
+                center: DVec3::ZERO,
+                axis: DVec3::X,
+                angle_rad: std::f64::consts::FRAC_PI_2,
+            },
+        );
+        let EntityType::Dimension(turned) = turned else {
+            panic!("dimension expected");
+        };
+        let lines = exploded_segments(&turned, &doc);
+        assert_eq!(lines.len(), expected.len(), "line count");
+        for (index, (got, want)) in lines.iter().zip(&expected).enumerate() {
+            assert!(
+                got.0.abs_diff_eq(want.0, 1e-9) && got.1.abs_diff_eq(want.1, 1e-9),
+                "line {index}: expected {want:?}, got {got:?}"
+            );
+        }
+    }
+
+    // An angular dimension must bake its swept ARC (not just two rays), else a
+    // saved+reloaded angular dim collapses to a V. The block should carry the
+    // two extension lines plus many arc chords.
+    #[test]
+    fn angular_dim_bakes_an_arc() {
+        use codec::entities::DimensionAngular3Pt;
+        let mut doc = Document::new();
+        let mut d = DimensionAngular3Pt::new(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+            Vector3::new(0.0, 10.0, 0.0),
+        );
+        d.definition_point = Vector3::new(5.0, 5.0, 0.0); // arc location
+        let handle = doc
+            .add_entity(EntityType::Dimension(Box::new(Dimension::Angular3Pt(d))))
+            .unwrap();
+        bake_dimension_blocks(&mut doc);
+        let name = match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
+            _ => panic!("dimension missing"),
+        };
+        let rec = doc.block_records.get(&name).expect("block");
+        let lines = doc
+            .entities()
+            .filter(|e| matches!(e, EntityType::Line(l) if l.common.owner_handle == rec.handle))
+            .count();
+        assert!(
+            lines > 5,
+            "angular bake must include arc chords, got {lines} lines"
+        );
+    }
+
+    // Diameter endpoints stay equidistant from the circle center.
+    #[test]
+    fn diameter_dim_bakes_through_center() {
+        use codec::entities::DimensionDiameter;
+        let mut doc = Document::new();
+        let center = Vector3::new(3.0, 4.0, 0.0);
+        let edge = Vector3::new(8.0, 4.0, 0.0); // radius 5 along +x
+        let far = Vector3::new(-2.0, 4.0, 0.0);
+        let mut d = DimensionDiameter::new(edge, far);
+        d.base.text_middle_point = Vector3::new(3.0, 9.0, 0.0);
+        let handle = doc
+            .add_entity(EntityType::Dimension(Box::new(Dimension::Diameter(d))))
+            .unwrap();
+        bake_dimension_blocks(&mut doc);
+        let name = match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
+            _ => panic!("dimension missing"),
+        };
+        // Each suppressible half must join an endpoint to the circle centre.
+        let segments = baked_segments(&doc, &name);
+        let connects = |expected: Vector3| {
+            segments.iter().any(|(a, b)| {
+                let near = |p: &Vector3, q: &Vector3| {
+                    (p.x - q.x).abs() < 1e-6 && (p.y - q.y).abs() < 1e-6 && (p.z - q.z).abs() < 1e-6
+                };
+                (near(a, &expected) && near(b, &center)) || (near(b, &expected) && near(a, &center))
+            })
+        };
+        assert!(connects(edge), "near diameter half missing");
+        assert!(connects(far), "far diameter half missing");
+    }
+
+    // A rotated linear dimension uses `rotation` directly (radians). Before the
+    // fix `to_radians()` shrank a 90° dim to ~1.57°, baking a nearly-horizontal
+    // line instead of a vertical one.
+    #[test]
+    fn rotated_linear_dim_bakes_at_its_angle() {
+        let mut doc = Document::new();
+        let mut d = DimensionLinear::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 10.0, 0.0));
+        d.rotation = std::f64::consts::FRAC_PI_2; // 90°, vertical dimension line
+        d.definition_point = Vector3::new(8.0, 0.0, 0.0);
+        let handle = doc
+            .add_entity(EntityType::Dimension(Box::new(Dimension::Linear(d))))
+            .unwrap();
+        bake_dimension_blocks(&mut doc);
+        let name = match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
+            _ => panic!("dimension missing"),
+        };
+        // Dimension line spans both y extents and must be vertical at x = 8.
+        let dim_line = baked_segments(&doc, &name)
+            .into_iter()
+            .find(|(a, b)| (a.y - 0.0).abs() < 1e-6 && (b.y - 10.0).abs() < 1e-6)
+            .expect("dimension line segment");
+        assert!(
+            (dim_line.0.x - 8.0).abs() < 1e-6 && (dim_line.1.x - 8.0).abs() < 1e-6,
+            "dimension line must be vertical at x=8, got {:?}",
+            dim_line
+        );
+    }
+
+    // EXPLODE replaces the polyline with fresh Line/Arc entities; each piece
+    // must carry the source thickness instead of resetting to 0 (#916).
+    #[test]
+    fn explode_keeps_lwpolyline_thickness() {
+        use codec::entities::LwVertex;
+        use codec::types::Vector2;
+
+        let mut pl = LwPolyline::new();
+        // One straight span + one bulged span, so the result holds a Line and
+        // an Arc and both paths through the rebuild are covered.
+        let mut v1 = LwVertex::new(Vector2::new(0.0, 0.0));
+        v1.bulge = 1.0; // semicircle to the next vertex
+        pl.vertices = vec![
+            v1,
+            LwVertex::new(Vector2::new(10.0, 0.0)),
+            LwVertex::new(Vector2::new(20.0, 0.0)),
+        ];
+        pl.thickness = 4.0;
+
+        let pieces = explode_polyline_segments(&EntityType::LwPolyline(pl));
+        assert!(pieces.len() >= 2, "expected a line and an arc piece");
+        for piece in &pieces {
+            match piece {
+                EntityType::Line(l) => assert!(
+                    (l.thickness - 4.0).abs() < 1e-12,
+                    "exploded line must keep thickness, got {}",
+                    l.thickness
+                ),
+                EntityType::Arc(a) => assert!(
+                    (a.thickness - 4.0).abs() < 1e-12,
+                    "exploded arc must keep thickness, got {}",
+                    a.thickness
+                ),
+                other => panic!("unexpected piece type: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn explode_keeps_polyline2d_extrusion() {
+        use codec::entities::Vertex2D;
+
+        let mut pl = Polyline2D::new();
+        pl.vertices = vec![
+            Vertex2D::new(Vector3::new(0.0, 0.0, 0.0)),
+            Vertex2D::new(Vector3::new(10.0, 0.0, 0.0)),
+        ];
+        pl.elevation = 2.0;
+        pl.thickness = -4.0;
+        pl.normal = Vector3::new(1.0, 0.0, 0.0);
+
+        let pieces = explode_polyline_segments(&EntityType::Polyline2D(pl));
+        let Some(EntityType::Line(line)) = pieces.first() else {
+            panic!("expected one line");
+        };
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(line.normal, Vector3::new(1.0, 0.0, 0.0));
+        assert!((line.thickness + 4.0).abs() < 1e-12);
+        assert!((line.start.x - 2.0).abs() < 1e-12);
+        assert!((line.end.x - 2.0).abs() < 1e-12);
+    }
+
+    // RED (TDD): a real DIMLINEAR must survive save -> reload with its baked
+    // *D geometry intact and a clean handle graph (no duplicates, no dangling
+    // owners). Headless codec round-trip, no GUI needed.
+    #[test]
+    fn dimlinear_survives_save_reload_with_baked_geometry() {
+        let mut failures = Vec::new();
+        for ext in ["dxf", "dwg"] {
+            let mut doc = Document::new();
+            let mut d =
+                DimensionLinear::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+            d.definition_point = Vector3::new(0.0, 5.0, 0.0);
+            d.base.text_middle_point = Vector3::new(5.0, 5.0, 0.0);
+            doc.add_entity(EntityType::Dimension(Box::new(Dimension::Linear(d))))
+                .unwrap();
+
+            let path =
+                std::env::temp_dir().join(format!("ocs_dim_rt_{}.{ext}", std::process::id()));
+            crate::io::save_as_version(&doc, &path, codec::DxfVersion::AC1032).expect("save");
+            let loaded = crate::io::load_file(&path).expect("load");
+            let _ = std::fs::remove_file(&path);
+
+            let mut seen = std::collections::HashSet::new();
+            for e in loaded.entities() {
+                if !seen.insert(e.common().handle) {
+                    failures.push(format!("{ext}: duplicate handle {:?}", e.common().handle));
+                }
+            }
+            let dims: Vec<_> = loaded
+                .entities()
+                .filter_map(|e| match e {
+                    EntityType::Dimension(d) => Some(d.clone()),
+                    _ => None,
+                })
+                .collect();
+            if dims.len() != 1 {
+                failures.push(format!("{ext}: dimension entity lost"));
+                continue;
+            }
+            let block_name = dims[0].base().block_name.clone();
+            if block_name.trim().is_empty() {
+                failures.push(format!("{ext}: dimension came back blockless"));
+                continue;
+            }
+            let Some(rec) = loaded.block_records.get(&block_name) else {
+                failures.push(format!("{ext}: *D block {block_name} missing after reload"));
+                continue;
+            };
+            let owned: Vec<Handle> = {
+                let mut h = rec.entity_handles.clone();
+                h.push(rec.block_entity_handle);
+                h.push(rec.block_end_handle);
+                h
+            };
+            if rec.entity_handles.is_empty() {
+                failures.push(format!("{ext}: baked block has no sub-entities"));
+            }
+            for h in &owned {
+                if h.is_null() || loaded.get_entity(*h).is_none() {
+                    failures.push(format!(
+                        "{ext}: dangling handle {h:?} in baked block {block_name}"
+                    ));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "round-trip failures:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    /// No extension dictionary may be referenced by more than one entity.
+    /// Shared xdict ownership fails file validation as
+    /// "Extension dictionary <H> Cannot access".
+    fn assert_no_shared_xdicts(doc: &Document) {
+        use std::collections::HashMap;
+        let mut owners: HashMap<codec::Handle, usize> = HashMap::new();
+        for entity in doc.entities() {
+            if let Some(xd) = entity.common().xdictionary_handle {
+                if !xd.is_null() {
+                    *owners.entry(xd).or_default() += 1;
+                }
+            }
+        }
+        let shared: Vec<_> = owners
+            .iter()
+            .filter(|(_, &n)| n > 1)
+            .map(|(h, n)| format!("{h:?} x{n}"))
+            .collect();
+        assert!(
+            shared.is_empty(),
+            "shared extension dictionaries: {}",
+            shared.join(", ")
+        );
+    }
+
+    /// Baked dimension children must not share the dimension's extension
+    /// dictionary. `dim_common` used to clone the dimension's full common
+    /// block (including `xdictionary_handle`) onto every baked child, so an
+    /// R2000 save of a drawing with N such children failed audit
+    /// with exactly N "Cannot access" errors.
+    #[test]
+    fn baked_children_do_not_share_dimension_xdict() {
+        let mut doc = Document::new();
+
+        // Made-up dictionary object for the dimension to own.
+        let dict_handle = doc.allocate_handle();
+        let mut dict = codec::objects::Dictionary::new();
+        dict.handle = dict_handle;
+        doc.objects
+            .insert(dict_handle, codec::objects::ObjectType::Dictionary(dict));
+
+        // Blockless dimension carrying that dictionary, as a file-read
+        // dimension with an extension dictionary would.
+        let mut d = DimensionLinear::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 5.0, 0.0);
+        d.base.text_middle_point = Vector3::new(5.0, 5.0, 0.0);
+        d.base.common.xdictionary_handle = Some(dict_handle);
+        let dim_handle = doc
+            .add_entity(EntityType::Dimension(Box::new(Dimension::Linear(d))))
+            .unwrap();
+
+        bake_dimension_blocks(&mut doc);
+
+        let block_name = match doc.get_entity(dim_handle) {
+            Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
+            _ => panic!("dimension missing"),
+        };
+        let owned: Vec<Handle> = doc
+            .block_records
+            .get(&block_name)
+            .unwrap()
+            .entity_handles
+            .clone();
+        assert!(
+            !owned.is_empty(),
+            "baked block should own sub-entities for the invariant to mean anything"
+        );
+        // (a) no shared dictionary anywhere in the document.
+        assert_no_shared_xdicts(&doc);
+        // (b) the dimension keeps its dictionary.
+        match doc.get_entity(dim_handle) {
+            Some(EntityType::Dimension(d)) => assert_eq!(
+                d.base().common.xdictionary_handle,
+                Some(dict_handle),
+                "the dimension must keep its own dictionary"
+            ),
+            _ => panic!("dimension missing"),
+        }
+        // (c) the baked children carry none.
+        for h in &owned {
+            match doc.get_entity(*h) {
+                Some(e) => assert!(
+                    e.common().xdictionary_handle.is_none(),
+                    "baked child {h:?} must not carry an extension dictionary"
+                ),
+                None => panic!("baked child {h:?} missing"),
+            }
+        }
+    }
+
+    fn explode_test_leader(arrow_enabled: bool) -> codec::entities::Leader {
+        let mut leader = codec::entities::Leader::new();
+        leader.vertices = vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 5.0, 0.0)];
+        leader.path_type = codec::entities::LeaderPathType::StraightLine;
+        leader.creation_type = codec::entities::LeaderCreationType::NoAnnotation;
+        leader.hookline_enabled = false;
+        leader.arrow_enabled = arrow_enabled;
+        leader.text_height = 1.0;
+        leader
+    }
+
+    #[test]
+    fn leader_explode_default_arrow_keeps_path_and_solid_at_first_vertex() {
+        let leader = explode_test_leader(true);
+        let pieces = explode_entity(&EntityType::Leader(leader.clone()), &Document::new());
+        assert_eq!(pieces.len(), 2, "one path and one filled arrowhead");
+        let EntityType::Line(path) = &pieces[0] else {
+            panic!("expected leader path")
+        };
+        assert_eq!(path.start, leader.vertices[0]);
+        assert_eq!(path.end, leader.vertices[1]);
+        let EntityType::Solid(arrow) = &pieces[1] else {
+            panic!("expected filled arrow")
+        };
+        assert_eq!(arrow.first_corner, leader.vertices[0]);
+        for corner in [arrow.second_corner, arrow.third_corner] {
+            let (dx, dy) = (corner.x - path.start.x, corner.y - path.start.y);
+            assert!(dx * 10.0 + dy * 5.0 > 0.0, "arrow body must face the path");
+        }
+        assert_ne!(arrow.second_corner, arrow.third_corner);
+    }
+
+    #[test]
+    fn leader_explode_arrow_off_keeps_only_path_and_attributes() {
+        let mut leader = explode_test_leader(false);
+        leader.common.layer = "LEADERS".into();
+        leader.common.color = codec::types::Color::from_index(3);
+        leader.common.linetype = "DASHED".into();
+        leader.common.line_weight = codec::types::LineWeight::from_value(35);
+        let pieces = explode_entity(&EntityType::Leader(leader.clone()), &Document::new());
+        assert_eq!(pieces.len(), 1);
+        let EntityType::Line(path) = &pieces[0] else {
+            panic!("expected leader path")
+        };
+        assert_eq!(path.start, leader.vertices[0]);
+        assert_eq!(path.end, leader.vertices[1]);
+        assert_eq!(path.common.handle, Handle::NULL);
+        assert_eq!(path.common.layer, leader.common.layer);
+        assert_eq!(path.common.color, leader.common.color);
+        assert_eq!(path.common.linetype, leader.common.linetype);
+        assert_eq!(path.common.line_weight, leader.common.line_weight);
+    }
+
+    #[test]
+    fn leader_explode_hookline_and_dimstyle_overrides_match_render() {
+        use crate::entities::dim_override as dov;
+        use codec::xdata::XDataValue;
+        let mut leader = explode_test_leader(false);
+        leader.hookline_enabled = true;
+        for (code, value) in [
+            (dov::DIMASZ, XDataValue::Real(2.0)),
+            (dov::DIMSCALE, XDataValue::Real(1.0)),
+            (dov::DIMCLRD, XDataValue::Integer16(1)),
+            (dov::DIMLWD, XDataValue::Integer16(50)),
+        ] {
+            dov::set_on_common(&mut leader.common, code, Some(value));
+        }
+        let pieces = explode_entity(&EntityType::Leader(leader), &Document::new());
+        assert_eq!(pieces.len(), 2);
+        let EntityType::Line(hook) = &pieces[1] else {
+            panic!("expected hookline")
+        };
+        assert_eq!(hook.start, Vector3::new(10.0, 5.0, 0.0));
+        assert_eq!(hook.end, Vector3::new(12.0, 5.0, 0.0));
+        for piece in pieces {
+            assert_eq!(piece.common().color, codec::types::Color::from_index(1));
+            assert_eq!(
+                piece.common().line_weight,
+                codec::types::LineWeight::from_value(50)
+            );
+        }
+    }
+
+    #[test]
+    fn multileader_explode_leader_type_none_keeps_only_content() {
+        // A leader of type None draws only its content, so that is all it
+        // explodes into: no arrowhead and no landing.
+        let mut ml = explode_test_multileader();
+        ml.path_type = codec::entities::MultiLeaderPathType::Invisible;
+        let pieces = explode_entity(&EntityType::MultiLeader(Box::new(ml)), &Document::new());
+        assert_eq!(pieces.len(), 1, "{pieces:?}");
+        assert!(matches!(pieces[0], EntityType::MText(_)));
+    }
+
+    #[test]
+    fn multileader_explode_mtext_keeps_path_landing_arrow_and_content() {
+        use codec::entities::mtext::AttachmentPoint;
+        let ml = explode_test_multileader();
+        let pieces = explode_entity(
+            &EntityType::MultiLeader(Box::new(ml.clone())),
+            &Document::new(),
+        );
+        assert_eq!(pieces.len(), 4, "path, landing, filled arrow and MTEXT");
+        let lines: Vec<_> = pieces
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Line(line) => Some((line.start, line.end)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                (Vector3::ZERO, Vector3::new(10.0, 5.0, 0.0)),
+                (Vector3::new(10.0, 5.0, 0.0), Vector3::new(12.0, 5.0, 0.0)),
+            ]
+        );
+        let arrow = pieces
+            .iter()
+            .find_map(|e| match e {
+                EntityType::Solid(solid) => Some(solid),
+                _ => None,
+            })
+            .expect("closed filled arrow must become a SOLID");
+        assert_eq!(arrow.first_corner, Vector3::ZERO);
+        assert_ne!(arrow.second_corner, arrow.third_corner);
+        for corner in [arrow.second_corner, arrow.third_corner] {
+            assert!(corner.x * 10.0 + corner.y * 5.0 > 0.0);
+        }
+        let text = pieces
+            .iter()
+            .find_map(|e| match e {
+                EntityType::MText(text) => Some(text),
+                _ => None,
+            })
+            .expect("content must remain MTEXT");
+        assert_eq!(text.value, ml.context.text_string);
+        assert_eq!(text.insertion_point, ml.context.text_location);
+        assert_eq!(text.height, ml.context.text_height);
+        assert_eq!(text.rectangle_width, ml.context.text_width);
+        assert_eq!(text.attachment_point, AttachmentPoint::TopLeft);
+        for piece in &pieces {
+            assert_eq!(piece.common().layer, ml.common.layer);
+            assert_eq!(piece.common().color, ml.common.color);
+            assert_eq!(piece.common().line_weight, ml.common.line_weight);
+            assert_eq!(piece.common().handle, Handle::NULL);
+        }
+    }
+
+    fn explode_test_multileader() -> codec::entities::MultiLeader {
+        use codec::entities::multileader::TextAttachmentPointType;
+        let mut ml = codec::entities::MultiLeader::with_text(
+            "note",
+            Vector3::new(13.0, 6.0, 0.0),
+            vec![Vector3::ZERO],
+        );
+        ml.common.layer = "MLEADERS".into();
+        ml.common.color = codec::types::Color::from_index(3);
+        ml.common.line_weight = codec::types::LineWeight::from_value(35);
+        ml.context.text_height = 2.0;
+        ml.context.text_width = 20.0;
+        ml.context.text_attachment_point = TextAttachmentPointType::Left;
+        ml.context.arrowhead_size = 2.0;
+        let root = &mut ml.context.leader_roots[0];
+        root.connection_point = Vector3::new(10.0, 5.0, 0.0);
+        root.direction = Vector3::new(1.0, 0.0, 0.0);
+        root.landing_distance = 2.0;
+        ml
+    }
+
+    #[test]
+    fn multileader_explode_arrow_off_keeps_lines_and_mtext_attributes() {
+        let doc = Document::new();
+        let mut ml = explode_test_multileader();
+        ml.context.arrowhead_size = 0.0;
+        ml.line_color = codec::types::Color::from_rgb(12, 34, 56);
+        ml.line_weight = codec::types::LineWeight::from_value(50);
+        ml.common.linetype = "DASHED".into();
+        let style = doc.text_styles.iter().next().expect("default text style");
+        ml.context.text_style_handle = Some(style.handle);
+        let style_name = style.name.clone();
+        ml.context.text_direction = Vector3::new(0.0, 1.0, 0.0);
+        let pieces = explode_entity(&EntityType::MultiLeader(Box::new(ml.clone())), &doc);
+        assert_eq!(pieces.len(), 3, "two LINEs and MTEXT even without an arrow");
+        assert!(!pieces.iter().any(|e| matches!(e, EntityType::Solid(_))));
+        assert_eq!(
+            pieces
+                .iter()
+                .filter(|e| matches!(e, EntityType::Line(_)))
+                .count(),
+            2
+        );
+        for piece in &pieces {
+            match piece {
+                EntityType::Line(line) => {
+                    assert_eq!(line.common.color, ml.line_color);
+                    assert_eq!(line.common.line_weight, ml.line_weight);
+                    assert_eq!(line.common.linetype, "Continuous");
+                }
+                EntityType::MText(text) => {
+                    assert_eq!(text.value, "note");
+                    assert_eq!(text.insertion_point, ml.context.text_location);
+                    assert_eq!(text.rotation, std::f64::consts::FRAC_PI_2);
+                    assert_eq!(
+                        text.attachment_point,
+                        codec::entities::mtext::AttachmentPoint::MiddleLeft
+                    );
+                    assert_eq!(text.style, style_name);
+                    assert_eq!(text.common.color, ml.common.color);
+                }
+                _ => panic!("unexpected replacement"),
+            }
+        }
+    }
+
+    #[test]
+    fn multileader_explode_followup_multiple_roots_and_lines() {
+        let mut ml = explode_test_multileader();
+        ml.context.arrowhead_size = 6.0;
+        let mut root = ml.context.leader_roots[0].clone();
+        root.connection_point = Vector3::new(10.0, 0.0, 0.0);
+        root.lines[0].points = vec![Vector3::ZERO];
+        let mut extra = root.lines[0].clone();
+        extra.points = vec![Vector3::new(0.0, -10.0, 0.0)];
+        root.lines.push(extra);
+        let mut other = root.clone();
+        // This path coincides with the first arrow's upper edge; it is still a LINE.
+        other.connection_point = Vector3::new(6.0, 1.0, 0.0);
+        other.lines[1].points = vec![Vector3::new(0.0, 10.0, 0.0)];
+        ml.context.leader_roots = vec![root, other];
+        let pieces = explode_entity(
+            &EntityType::MultiLeader(Box::new(ml.clone())),
+            &Document::new(),
+        );
+        let lines: Vec<_> = pieces
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Line(l) => Some((l.start, l.end)),
+                _ => None,
+            })
+            .collect();
+        for root in &ml.context.leader_roots {
+            for line in &root.lines {
+                assert!(
+                    lines.contains(&(line.points[0], root.connection_point)),
+                    "missing leader path"
+                );
+            }
+            assert!(
+                lines.contains(&(
+                    root.connection_point,
+                    root.connection_point + Vector3::new(2.0, 0.0, 0.0)
+                )),
+                "missing landing"
+            );
+        }
+        assert_eq!(lines.len(), 6);
+        assert_eq!(
+            pieces
+                .iter()
+                .filter(|e| matches!(e, EntityType::Solid(_)))
+                .count(),
+            4
+        );
+        assert_eq!(
+            pieces
+                .iter()
+                .filter(|e| matches!(e, EntityType::MText(_)))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn multileader_explode_followup_block_attributes() {
+        use codec::entities::{multileader::BlockAttribute, AttributeDefinition};
+        let mut doc = Document::new();
+        let mut style = doc.text_styles.iter().next().unwrap().clone();
+        style.name = "LABEL_STYLE".into();
+        style.handle = doc.allocate_handle();
+        doc.text_styles.add(style).unwrap();
+        let mut record = BlockRecord::new("LABEL");
+        record.handle = doc.allocate_handle();
+        record.base_point = Vector3::new(1.0, 2.0, 0.0);
+        for tag in ["ID", "TYPE"] {
+            let mut definition = AttributeDefinition::simple(tag);
+            definition.insertion_point = Vector3::new(2.0, 2.0, 0.0);
+            definition.height = 3.0;
+            definition.text_style = "LABEL_STYLE".into();
+            let handle = doc
+                .add_entity(EntityType::AttributeDefinition(definition))
+                .unwrap();
+            record.entity_handles.push(handle);
+        }
+        let mut ml = explode_test_multileader();
+        ml.content_type = codec::entities::LeaderContentType::Block;
+        ml.context.has_block_contents = true;
+        ml.block_content_handle = Some(record.handle);
+        ml.context.block_content_location = Vector3::new(20.0, 10.0, 0.0);
+        ml.block_connection_type = codec::entities::BlockContentConnectionType::BasePoint;
+        ml.block_scale = Vector3::new(2.0, 2.0, 2.0);
+        ml.block_rotation = std::f64::consts::FRAC_PI_2;
+        let mut value = BlockAttribute::new("stored ID");
+        value.attribute_definition_handle = Some(record.entity_handles[0]);
+        let mut indexed = BlockAttribute::new("stored TYPE");
+        indexed.index = 1;
+        ml.block_attributes = vec![indexed, value];
+        doc.block_records.add(record).unwrap();
+        let pieces = explode_entity(&EntityType::MultiLeader(Box::new(ml)), &doc);
+        let insert = pieces
+            .iter()
+            .find_map(|e| match e {
+                EntityType::Insert(i) => Some(i),
+                _ => None,
+            })
+            .expect("block content must become an INSERT");
+        assert_eq!(insert.block_name, "LABEL");
+        assert_eq!(insert.insert_point, Vector3::new(20.0, 10.0, 0.0));
+        assert_eq!(insert.x_scale(), 2.0);
+        assert_eq!(insert.rotation, std::f64::consts::FRAC_PI_2);
+        assert_eq!(insert.attributes.len(), 2);
+        for (attribute, tag, value) in [
+            (&insert.attributes[0], "ID", "stored ID"),
+            (&insert.attributes[1], "TYPE", "stored TYPE"),
+        ] {
+            assert_eq!(attribute.tag, tag);
+            assert_eq!(attribute.value, value);
+            assert_eq!(attribute.text_style, "LABEL_STYLE");
+            assert!((attribute.height - 6.0).abs() < 1e-9);
+            assert!((attribute.rotation - insert.rotation).abs() < 1e-9);
+            assert!((attribute.insertion_point - Vector3::new(20.0, 12.0, 0.0)).length() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn multileader_explode_followup_text_frame() {
+        let mut ml = explode_test_multileader();
+        ml.text_frame = true;
+        ml.context.landing_gap = 1.0;
+        let pieces = explode_entity(&EntityType::MultiLeader(Box::new(ml)), &Document::new());
+        let text = pieces
+            .iter()
+            .find_map(|e| match e {
+                EntityType::MText(t) => Some(t),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            text.background_fill_flags, 0,
+            "the frame stays out of the MTEXT"
+        );
+        let frame = pieces
+            .iter()
+            .find_map(|e| match e {
+                EntityType::LwPolyline(p) => Some(p),
+                _ => None,
+            })
+            .expect("the frame becomes its own polyline");
+        assert_eq!(frame.vertices.len(), 5);
+        assert_eq!(frame.vertices[0].location, frame.vertices[4].location);
+        let (p0, p2) = (frame.vertices[0].location, frame.vertices[2].location);
+        let above = p0.y - text.insertion_point.y;
+        assert!(
+            (0.9..=1.0 + 1e-9).contains(&above),
+            "frame top is the landing gap above the text: {above}"
+        );
+        assert!(p0.x < text.insertion_point.x && p2.x > text.insertion_point.x && p2.y < p0.y);
+    }
+
+    #[test]
+    fn multileader_explode_followup_annotation_scale() {
+        for annotative in [false, true] {
+            let mut ml = explode_test_multileader();
+            ml.enable_annotation_scale = annotative;
+            ml.scale_factor = 30.0;
+            ml.context.scale_factor = 4.0;
+            ml.extend_leader_to_text = true;
+            ml.context.landing_gap = 1.0;
+            ml.context.text_location.x = 20.0;
+            ml.context.text_height = 0.0;
+            ml.text_height = 2.0;
+            let pieces = explode_entity(&EntityType::MultiLeader(Box::new(ml)), &Document::new());
+            let text = pieces
+                .iter()
+                .find_map(|e| match e {
+                    EntityType::MText(t) => Some(t),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(text.height, if annotative { 8.0 } else { 60.0 });
+            assert_eq!(text.insertion_point, Vector3::new(20.0, 6.0, 0.0));
+            assert_eq!(text.rectangle_width, 20.0);
+            let arrow = pieces
+                .iter()
+                .find_map(|e| match e {
+                    EntityType::Solid(s) => Some(s),
+                    _ => None,
+                })
+                .unwrap();
+            let base = (arrow.second_corner + arrow.third_corner) * 0.5;
+            assert!(
+                (base.length() - 2.0).abs() < 1e-5,
+                "resolved arrow size must not change"
+            );
+            assert!(
+                pieces.iter().any(|e| matches!(e, EntityType::Line(l)
+                if l.start == Vector3::new(12.0, 5.0, 0.0)
+                && l.end == Vector3::new(19.0, 5.0, 0.0))),
+                "landing gap must stay resolved"
+            );
+        }
+    }
+
+    #[test]
+    fn multileader_explode_replacements_erase_only_replaced_source() {
+        let mut scene = crate::scene::Scene::new();
+        let ml = scene.add_entity(EntityType::MultiLeader(
+            Box::new(explode_test_multileader()),
+        ));
+        let untouched = scene.add_entity(EntityType::MText(Box::new(
+            codec::entities::MText::with_value("unselected", Vector3::new(100.0, 100.0, 0.0)),
+        )));
+        let unsupported = scene.add_entity(EntityType::Line(LineEnt::new()));
+        let handles = [ml, unsupported];
+        let selected: Vec<_> = handles
+            .iter()
+            .map(|h| (*h, scene.document.get_entity(*h).unwrap()))
+            .collect();
+        let replacements = plan_explode(&selected, &scene.document);
+        assert_eq!(replacements.len(), 1);
+        assert_eq!(replacements[0].0, ml);
+        assert_eq!(apply_explode_replacements(&mut scene, replacements), 1);
+        assert!(scene.document.get_entity(ml).is_none());
+        assert!(scene.document.get_entity(untouched).is_some());
+        assert!(scene.document.get_entity(unsupported).is_some());
+        assert_eq!(
+            scene
+                .document
+                .entities()
+                .filter(|e| matches!(e, EntityType::MText(text) if text.value == "note"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn leader_explode_replacements_preserve_unexploded_linked_entities() {
+        for (explode_leader, explode_annotation) in [(true, true), (true, false), (false, true)] {
+            let mut scene = crate::scene::Scene::new();
+            let mut mtext = codec::entities::MText::new();
+            mtext.value = "note".into();
+            let annotation = scene.add_entity(EntityType::MText(Box::new(mtext)));
+            let mut leader = explode_test_leader(true);
+            leader.annotation_handle = annotation;
+            let leader_handle = scene.add_entity(EntityType::Leader(leader));
+            // This linked leader is also selected but cannot produce any pieces.
+            let mut empty = codec::entities::Leader::new();
+            empty.vertices.clear();
+            empty.annotation_handle = annotation;
+            let empty_handle = scene.add_entity(EntityType::Leader(empty));
+            let mut handles = vec![empty_handle];
+            if explode_leader {
+                handles.push(leader_handle);
+            }
+            if explode_annotation {
+                handles.push(annotation);
+            }
+            let selected: Vec<_> = handles
+                .iter()
+                .map(|&h| (h, scene.document.get_entity(h).unwrap()))
+                .collect();
+            let replacements = plan_explode(&selected, &scene.document);
+            assert_eq!(
+                replacements.len(),
+                explode_leader as usize + explode_annotation as usize
+            );
+            apply_explode_replacements(&mut scene, replacements);
+            assert_eq!(
+                scene.document.get_entity(leader_handle).is_none(),
+                explode_leader
+            );
+            assert_eq!(
+                scene.document.get_entity(annotation).is_none(),
+                explode_annotation
+            );
+            assert!(scene.document.get_entity(empty_handle).is_some());
+            let entities: Vec<_> = scene.document.entities().collect();
+            assert_eq!(
+                entities
+                    .iter()
+                    .filter(|e| matches!(e, EntityType::Line(_)))
+                    .count(),
+                explode_leader as usize
+            );
+            assert_eq!(
+                entities
+                    .iter()
+                    .filter(|e| matches!(e, EntityType::Solid(_)))
+                    .count(),
+                explode_leader as usize
+            );
+            let notes: Vec<_> = entities
+                .iter()
+                .filter_map(|e| match e {
+                    EntityType::Text(text) => Some(text.value.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                notes,
+                if explode_annotation {
+                    vec!["note"]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod mline_tests {
+    use super::*;
+    use codec::entities::{MLineJustification, MLineVertex};
+    use codec::objects::{MLineStyle, MLineStyleElement, ObjectType};
+    use codec::types::Color;
+
+    /// A multiline built the way the MLINE command builds one, with its style
+    /// registered in the document.
+    fn mline_in(
+        doc: &mut Document,
+        mut style: MLineStyle,
+        points: &[(f64, f64)],
+        justification: MLineJustification,
+    ) -> MLine {
+        style.handle = doc.allocate_handle();
+        let mut mline = MLine::new();
+        mline.scale_factor = 1.0;
+        mline.justification = justification;
+        mline.style_name = style.name.clone();
+        mline.style_handle = Some(style.handle);
+        mline.style_element_count = style.elements.len();
+        for &(x, y) in points {
+            let mut vertex = MLineVertex::new(Vector3::new(x, y, 0.0));
+            vertex.init_segments(style.elements.len());
+            mline.vertices.push(vertex);
+        }
+        crate::entities::mline::rebuild_mline_geometry(&mut mline);
+        crate::modules::draw::draw::mline::sync_mline_element_parameters(&mut mline, &style);
+        doc.objects
+            .insert(style.handle, ObjectType::MLineStyle(style));
+        mline
+    }
+
+    fn lines(out: &[EntityType]) -> Vec<(Vector3, Vector3)> {
+        out.iter()
+            .map(|entity| match entity {
+                EntityType::Line(line) => (line.start, line.end),
+                other => panic!("expected only Lines, got {other:?}"),
+            })
+            .collect()
+    }
+
+    /// #2538: a two-element, top-justified multiline round a corner explodes
+    /// into its two drawn elements, square to the path and meeting at the
+    /// corner. The old code added a centre spine and offset by ±scale/2.
+    #[test]
+    fn explode_mline_follows_style_elements_and_justification() {
+        let mut doc = Document::new();
+        let mut style = MLineStyle::standard();
+        style.name = "EXPLODE_TOP".into();
+        let mline = mline_in(
+            &mut doc,
+            style,
+            &[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)],
+            MLineJustification::Top,
+        );
+
+        let out = explode_entity(&EntityType::MLine(mline), &doc);
+        let segments = lines(&out);
+        assert_eq!(
+            segments.len(),
+            4,
+            "two elements x two segments: {segments:?}"
+        );
+
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        let horizontal: Vec<_> = segments.iter().filter(|(s, e)| near(s.y, e.y)).collect();
+        let vertical: Vec<_> = segments.iter().filter(|(s, e)| near(s.x, e.x)).collect();
+        assert_eq!(
+            horizontal.len(),
+            2,
+            "first leg stays horizontal: {segments:?}"
+        );
+        assert_eq!(vertical.len(), 2, "second leg stays vertical: {segments:?}");
+
+        // Top justification: one element on the path, the other one unit off it.
+        let mut ys: Vec<f64> = horizontal.iter().map(|(s, _)| s.y.abs()).collect();
+        ys.sort_by(f64::total_cmp);
+        assert!(
+            near(ys[0], 0.0) && near(ys[1], 1.0),
+            "element offsets {ys:?}"
+        );
+
+        // Each element's two legs meet at its mitred corner.
+        for (_, end) in &horizontal {
+            assert!(
+                vertical.iter().any(|(start, _)| start.distance(end) < 1e-9),
+                "horizontal leg ending at {end:?} meets no vertical leg"
+            );
+        }
+    }
+
+    /// An element with its own colour and linetype keeps them; a ByLayer
+    /// element takes the multiline's.
+    #[test]
+    fn explode_mline_carries_element_colour_and_linetype() {
+        let mut doc = Document::new();
+        let mut style = MLineStyle::new("EXPLODE_TWO_TONE");
+        let mut red = MLineStyleElement::new(0.5);
+        red.color = Color::from_index(1);
+        red.linetype = "DASHED".into();
+        style.add_element(red);
+        style.add_element(MLineStyleElement::new(-0.5));
+        let mut mline = mline_in(
+            &mut doc,
+            style,
+            &[(0.0, 0.0), (10.0, 0.0)],
+            MLineJustification::Zero,
+        );
+        mline.common.color = Color::from_index(3);
+        mline.common.linetype = "ByLayer".into();
+
+        let out = explode_entity(&EntityType::MLine(mline), &doc);
+        assert_eq!(out.len(), 2, "one Line per element: {out:?}");
+        let mut styles: Vec<(Color, String)> = out
+            .iter()
+            .map(|entity| (entity.common().color, entity.common().linetype.clone()))
+            .collect();
+        styles.sort_by_key(|(_, linetype)| linetype.clone());
+        assert_eq!(
+            styles,
+            vec![
+                (Color::from_index(3), "ByLayer".to_string()),
+                (Color::from_index(1), "DASHED".to_string()),
+            ]
+        );
+    }
+}

@@ -1,0 +1,17 @@
+[package]
+name = "plugin-template-v2"
+version = "0.1.0"
+edition = "2021"
+description = "Example OpenCAD Studio plugin demonstrating the shared-memory DocumentReader API."
+license = "GPL-3.0-only"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ocs_plugin_api = { path = "../../crates/ocs_plugin_api", features = ["host"] }
+# Codec types are re-exported by ocs_plugin_api as `acadrust` so the plugin
+# and the host share one type identity — never add an acadrust git dependency
+# here (it would create mismatching types instead of an ABI check).
