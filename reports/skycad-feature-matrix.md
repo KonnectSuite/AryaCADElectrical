@@ -151,3 +151,25 @@ probe.exe --each rev_batch.txt         C:\Temp\proj\A002.dxf
 ```
 
 Batches used for this report are reproducible from the commands quoted in the matrix; the DXF read-back used `tools/dxfio.py` (`dxfio.load(path).entities`, filtering `e.s(8)` for layer and `e.s(330)` for owner). The tested binary hash/version is recorded in §0 — re-run before trusting this matrix after the in-flight rebuild.
+
+---
+
+## Status updates since this matrix was written
+
+These features landed after the audit; the rows above are the audit as it stood then.
+
+| # | Feature | New status | Evidence |
+|---|---|---|---|
+| 9 | Revision control and rollback | **Partial (working)** | `ELECREV SNAPSHOT/LIST/COMPARE/RESTORE` in `src/app/commands/elec_revision.rs`; snapshots under `<project>\.rev\`; `ELECPROJNEW/OPEN` now set the project folder so it works in the normal workflow; `RESTORE` fails closed. |
+| 12 | Wire processing | **Partial (label list added)** | `ELECWIRELABELS [out.csv]` exports 57 labels on `FC1000495-003`; `ELECWIRELIST`/`ELECWIRENUMBER` now produce real nets (T-junction merging). Wire colours/gauges still absent. |
+| 14 | Cabling and cable schedules | **Partial (schedule generation)** | `ELECCABLE` / `ELECCABLELIST` / `ELECCABLEDEL` + `<project>\cables.tsv`; CSV with SkyCAD's column set. Cables are not yet drawn as schematic objects. |
+| 15 | Built project modification control | **Partial** | `ELECBUILT on|off` writes `built yes`; `ELECNUMBER` then freezes references and `ELECPROJNUM` refuses to renumber. `WD_M` freeze still not honoured by `ELECPROJNUM`. |
+| 2 | BOMs and parts-lists | **Partial+** | Local parts catalogue (`ELECPARTS`/`ELECPARTLIST`/`ELECASSIGN`, 29 parts) feeds BOM part/manufacturer/description columns. |
+| 13 | Automated PLC drawings from an I/O list | **Partial (works)** | `ELECIOIMPORT xlsx` → 3 cards / 18 points on the sample list, verified in the saved DXF. |
+| 5 | No training required | **Partial+** | `ELECHELP` prints the grouped command reference; native ribbon with 35 icons; searchable palette. |
+
+Current honest score: **1 implemented, 13 partial, 4 missing, 1 not applicable.**
+
+Remaining true gaps: pin-level connectivity (nets do not reach devices), cables drawn as objects,
+navigation (highlight/jump), panel layout with footprints and cut-outs, configuration management,
+design-by-systems, and the `ELECPROJNUM` / `WD_M` interaction.
