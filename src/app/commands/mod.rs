@@ -27,6 +27,7 @@ mod mleader_layer;
 pub(crate) mod display;
 mod draw;
 mod elec;
+mod elec_cables;
 mod elec_ioimport;
 mod elec_parts_lib;
 mod elec_revision;
@@ -1300,6 +1301,9 @@ inventory::submit!(crate::command::CommandRegistration {
         "ELECPARTLIST",
         "ELECASSIGN",
         "ELECIOIMPORT",
+        "ELECCABLE",
+        "ELECCABLELIST",
+        "ELECCABLEDEL",
         "ELECREV",
         "ELECNUMBER",
         "ELECNUMBERPREVIEW",

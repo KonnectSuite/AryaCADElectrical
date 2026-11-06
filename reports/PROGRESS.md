@@ -202,3 +202,15 @@ Still not anchored: symbol **pins**. On the customer sheets the symbols were exp
 
 ### A reported bug that turned out to be already fixed
 `ELECINSERT` giving the same tag to consecutive placements no longer reproduces: three consecutive inserts now report `-K1`, `-K2`, `-K3`. The cause was the same collector divergence — tags were counted in model space while the new symbols landed on a layout sheet, so the counter never saw them. The all-space collector fix closed it.
+---
+
+## Round 5 — 2026-11-06 (cabling and cable schedules)
+
+The largest missing SkyCAD feature (Advanced tier: "Cabling and cable schedules generation") now exists:
+
+- New module [`src/app/commands/elec_cables.rs`](../src/app/commands/elec_cables.rs).
+- `ELECCABLE <tag> CORES=<n> [PART=] [MFG=] [LEN=] [DESC=<prose>]` adds or updates a cable record; `ELECCABLEDEL <tag>` removes one; `ELECCABLELIST [out.csv]` prints the schedule or writes it as CSV with SkyCAD's column set (`Cable, Description, Part Number, Manufacturer, Length, Conductor`).
+- Records live in `<project>\cables.tsv` — plain text next to the drawings, versioned with the project, inspectable without the app.
+- Reachable from the ribbon: Reports group → Cables menu (Cable Schedule / Add Cable), with a new cable icon.
+- Verified: two cables added, table and CSV written, one deleted, multi-word description ("Motor feeder from MCC") preserved; `ELECCABLELIST out.csv` row count reported.
+- Honest boundary: cables are schedule data attached to the project, not yet drawn as cable objects on the schematic with per-conductor connectivity. Drawing the cable and deriving conductor-level nets is the next step.

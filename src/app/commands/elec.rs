@@ -4606,6 +4606,9 @@ fn class_for_reference(tag: &str) -> &'static str {
         if let Some(task) = self.dispatch_elec_revision(cmd, i) {
             return Some(task);
         }
+        if let Some(task) = self.dispatch_elec_cables(cmd, i) {
+            return Some(task);
+        }
         match cmd {
             "ELECBOM" => Some(self.elec_bom(i, None)),
             "ELECLIST" => Some(self.elec_list(i)),

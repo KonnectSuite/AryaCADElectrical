@@ -110,6 +110,7 @@ mod icons {
     pub const BUILT: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/elec_built.svg"));
     pub const IO_IMPORT: IconKind =
         IconKind::Svg(include_bytes!("../../../assets/icons/elec_io_import.svg"));
+    pub const CABLE: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/elec_cable.svg"));
 }
 
 pub struct ElectricalModule;
@@ -272,6 +273,16 @@ impl CadModule for ElectricalModule {
                         RibbonItem::LargeTool(elec_tool("ELECWIRELIST", "Wire\nList", WIRE_LIST)),
                         RibbonItem::LabeledTool(elec_tool("ELECPANEL", "Panel Layout", PANEL)),
                         RibbonItem::LabeledTool(elec_tool("ELECPART", "Parts Catalogue", PART)),
+                        RibbonItem::LabeledDropdown {
+                            id: "ELEC_CABLES",
+                            label: "Cables",
+                            icon: CABLE,
+                            items: vec![
+                                menu_item("ELECCABLELIST", "Cable Schedule", CABLE),
+                                menu_item("ELECCABLE", "Add Cable", CABLE),
+                            ],
+                            default: "ELECCABLELIST",
+                        },
                     ],
                 },
                 // ── Project & Sheet ──────────────────────────────────────────
