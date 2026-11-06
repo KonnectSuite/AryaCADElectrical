@@ -352,3 +352,72 @@ identically against the 11/5 binary. The wire/net checks pass.
   definitions;
 * cables drawn as schematic objects, navigation (highlight/jump), panel footprints,
   configuration management, design-by-systems.
+
+---
+
+## Round 9 — 2026-11-06 (pin columns, library pins, navigation)
+
+Three of the remaining gaps closed in one build: the wire list now names the pin at each
+end of a conductor, the generated symbol library declares its pins the way ACADE does, and
+one device can be found and highlighted among the sheet's symbols.
+
+### The local library declares its pins
+
+`tools/make_library.py` now emits invisible `X*TERM*` ATTDEFs **at the true pin position**
+for every generated symbol (left point `X4TERM01` at the end of the left lead, right point
+`X1TERM02` at the right; two points per PLC channel, three on the terminal block, one on
+earth). The manifest documents them (`library.tsv` attributes column). Regenerated: 27
+symbols + manifest.
+
+Verified in the saved DXF after `ELECINSERT` on a blank sheet:
+
+```
+CONTACT_NO at (0.000,0.000) pins X4TERM01 (-0.5, 0.0), X1TERM02 (0.5, 0.0)
+CONTACT_NC at (40.000,0.000) pins X4TERM01 (39.5, 0.0), X1TERM02 (40.5, 0.0)
+```
+
+So a symbol placed on an app drawing has real pin numbers, not positional guesses.
+
+### Wire list with From pin / To pin
+
+`ELECWIRELIST [out.csv]` accepts a CSV path and writes the conductor list with the shop's
+columns (`Wire, Net, From pin, To pin, From X, From Y, To X, To Y`), and `ELECREPORT`'s
+XLSX wire sheet carries the same pin columns. On a two-symbol test drawing:
+
+```
+ELECWIRELIST: 1 wire segment(s), 4 pin(s) -> 1 net(s); 2 unconnected pin(s), 0 loose wire(s).
+  net 1: 1 wire(s) -> -K1:2, -K2:1
+  unconnected: -K1:1, -K2:2
+ELECWIRELIST: wrote 1 conductor row(s) to wirelist.csv.
+```
+
+```
+Wire,Net,From pin,To pin,From X,From Y,To X,To Y
+1,1,-K1:2,-K2:1,0.5000,0.0000,39.5000,0.0000
+```
+
+The crate grew `wire_rows_with_pins()` (a pin is the nearest anchor within 0.2 of the
+conductor end) and one test; 131 crate tests pass.
+
+### Navigation
+
+Two commands and a new **Navigation** ribbon group (two house-style icons,
+`elec_highlight.svg` and `elec_goto.svg`):
+
+* `ELECHIGHLIGHT <tag>` selects every part of one device — block inserts carrying the tag
+  and the plain `TEXT` a flattened sheet keeps;
+* `ELECGOTO <tag>` remembers the view and fits it to the device.
+
+Verified headless: `ELECHIGHLIGHT: selected 1 part(s) of -K1.` and
+`ELECGOTO: centred on -K1 (1 part(s)).`
+
+### Gate
+
+```
+cargo test -p elec --lib        131 passed
+cargo check --release --tests   exit 0
+cargo build --release -j 1      13 m 46 s (4-CPU affinity)
+```
+
+Round-8 real-sheet results are unchanged (003: 8 wires / 10 pins / 4 nets; 046: 53 / 39),
+and `tests/ecad/run_smoke.py` stays at 92/99 with the same seven pre-round-2 expectations.
