@@ -96,11 +96,11 @@ struct ProjectSheet {
 static PROJECT_FILE: std::sync::OnceLock<std::sync::RwLock<Option<std::path::PathBuf>>> =
     std::sync::OnceLock::new();
 
-pub(super) fn project_file() -> &'static std::sync::RwLock<Option<std::path::PathBuf>> {
+pub(crate) fn project_file() -> &'static std::sync::RwLock<Option<std::path::PathBuf>> {
     PROJECT_FILE.get_or_init(|| std::sync::RwLock::new(None))
 }
 
-fn project_dir() -> &'static std::sync::RwLock<Option<std::path::PathBuf>> {
+pub(crate) fn project_dir() -> &'static std::sync::RwLock<Option<std::path::PathBuf>> {
     PROJECT_DIR.get_or_init(|| std::sync::RwLock::new(None))
 }
 
@@ -5489,6 +5489,9 @@ fn class_for_reference(tag: &str) -> &'static str {
                 Some(Task::none())
             }
             "ELECNEW" => Some(self.elec_new(i, None)),
+            // Reopen the drafting-or-electrical start dialog after it has been
+            // dismissed once (the ribbon Help menu also reaches it).
+            "ELECSTART" => Some(self.open_start_hub()),
             "ELECWIRE" => Some(self.elec_wire(i)),
             "ELECJUNCTIONS" => Some(self.elec_junctions(i)),
             "ELECATTR" => {

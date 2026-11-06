@@ -24,11 +24,17 @@ dist\AryaCADElectrical-portable\OpenCADStudio.exe
 A sample project is in `samples\demo-line\`: open `project.eprj` (or the drawings directly),
 run `ELECLIST`, `ELECWIRELIST`, `ELECCABLELIST` and `ELECPANEL` to see the finished outputs.
 
+On launch the suite asks how you want to begin: **Drafting drawing** (plain CAD) or
+**Electrical drawing set**. The electrical path is a small setup panel: standard (IEC or
+NEC), sheet size, project/title/company/drawing number, drawn-by, number of sheets and the
+output folder. **Create** makes the sheet set from the bundled templates, fills the title
+block, writes the project file and opens the first sheet. `ELECSTART` reopens that chooser.
+
 ## 2. First schematic
 
 | step | command |
 |---|---|
-| start from a standard sheet | `ELECNEW templates\iec\A3_landscape.dxf` (IEC A4–A0, NEC ANSI A–E; see `templates\README.md`) |
+| start from a standard sheet | `ELECNEW templates\iec\A3_landscape.dxf` (IEC A4–A0 and B1, NEC ANSI A–E plus Legal; see `templates\README.md`) |
 | new drawing, electrical layers | `ELECNEW` |
 | load the symbol library | `ELECLIB library\starter` (or `library` for the harvested set) |
 | browse/place symbols | `ELECPALETTE`, or `ELECINSERT CONTACT_NO` |

@@ -1,5 +1,6 @@
-﻿pub mod about;
+pub mod about;
 pub mod alias_editor;
+pub(crate) mod start_hub;
 pub mod annotation_data;
 pub mod attdef_dialog;
 pub mod attman_dialog;

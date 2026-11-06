@@ -4253,6 +4253,7 @@ fn start_page_content<'a>(
 
     let primary_row = WrapFlow::new(vec![
         outline_btn(crate::tr!("start", "new-drawing"), Message::TabNew).into(),
+        outline_btn("Electrical drawing set".to_string(), Message::StartModeElectrical).into(),
         // The templates beside the default one, then Browse (NEW asks for a
         // .dwt, .dwg or .dxf); straight to NEW when there is no such folder.
         {

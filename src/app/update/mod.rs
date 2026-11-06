@@ -11528,6 +11528,44 @@ impl OpenCADStudio {
                     crate::ui::window::extraction_outdated::OutdatedChoice::SkipAll,
                 )
             }
+            // ── Start hub: drafting / electrical chooser and its wizard ──
+            Message::StartModeDrafting => self.start_drafting_session(),
+            Message::StartModeElectrical => {
+                self.start_hub.step = crate::app::elec_start::HubStep::Configure;
+                self.active_modal = Some(super::ModalKind::EcadSetup);
+                self.reset_modal_geometry();
+                Task::none()
+            }
+            Message::EcadStandard(standard) => {
+                self.start_hub.set_standard(standard);
+                Task::none()
+            }
+            Message::EcadSize(index) => {
+                self.start_hub.size = index;
+                Task::none()
+            }
+            Message::EcadFieldChanged(field, value) => {
+                use crate::app::elec_start::EcadField;
+                match field {
+                    EcadField::Project => self.start_hub.project = value,
+                    EcadField::Title => self.start_hub.title = value,
+                    EcadField::Company => self.start_hub.company = value,
+                    EcadField::Drawing => self.start_hub.drawing = value,
+                    EcadField::DrawnBy => self.start_hub.drawn_by = value,
+                    EcadField::Sheets => self.start_hub.sheets = value,
+                    EcadField::Folder => self.start_hub.folder = value,
+                }
+                self.start_hub.error = None;
+                Task::none()
+            }
+            Message::EcadBack => {
+                self.start_hub.step = crate::app::elec_start::HubStep::ChooseMode;
+                self.active_modal = Some(super::ModalKind::StartMode);
+                self.reset_modal_geometry();
+                Task::none()
+            }
+            Message::EcadCreate => self.create_electrical_set(),
+
             Message::CloseModal => {
                 if self.active_modal == Some(super::ModalKind::BlockLookup) {
                     self.block_lookup = None;

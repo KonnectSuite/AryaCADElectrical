@@ -1,4 +1,4 @@
-﻿pub(crate) mod alias;
+pub(crate) mod alias;
 mod automation;
 pub(crate) mod control;
 pub(crate) fn automation_action_names() -> &'static [&'static str] {
@@ -43,6 +43,7 @@ pub(crate) use command_driver::{
     copy_to_clipboard_kernel, define_block_raw_doc, paste_entities_kernel, PasteSpace,
 };
 pub(crate) mod commands;
+pub(crate) mod elec_start;
 #[cfg(test)]
 mod dim_constraint_value_tests;
 pub(crate) mod dim_viewport;
@@ -1508,6 +1509,8 @@ pub(super) struct OpenCADStudio {
     hyperlink_editor_dirty: bool,
     hyperlink_options: crate::ui::window::hyperlink_dialog::HyperlinkOptions,
     pending_startup_modals: std::collections::VecDeque<ModalKind>,
+    /// The drafting-or-electrical chooser and its electrical drawing-set wizard.
+    start_hub: elec_start::StartHub,
     /// What is drawing the scene, once the first frame has told us. Drives
     /// the graphics warning (popup, status-bar pill, command line).
     gpu_status: crate::scene::pipeline::GpuStatus,
@@ -3098,6 +3101,10 @@ pub enum ModalKind {
     AutosaveRestore,
     /// Declarative modal dialog opened by a plugin.
     PluginDialog,
+    /// The drafting-or-electrical chooser shown at a fresh launch.
+    StartMode,
+    /// The electrical drawing-set wizard behind the chooser.
+    EcadSetup,
 }
 
 /// A property group controlled by a layer state's restore mask.
@@ -3463,6 +3470,20 @@ pub enum Message {
     NewFromTemplate(Option<std::path::PathBuf>),
     /// Open (true) or close the start page's template list.
     StartTemplates(bool),
+    /// Start hub: begin a blank drafting drawing.
+    StartModeDrafting,
+    /// Start hub: go to the electrical drawing-set wizard.
+    StartModeElectrical,
+    /// Start hub: choose the IEC or NEC template family.
+    EcadStandard(elec_start::EcadStandard),
+    /// Start hub: choose a sheet size from the family's list.
+    EcadSize(usize),
+    /// Start hub: edit one wizard text field.
+    EcadFieldChanged(elec_start::EcadField, String),
+    /// Start hub: back to the drafting-or-electrical chooser.
+    EcadBack,
+    /// Start hub: create the drawing set and open its first sheet.
+    EcadCreate,
     /// Set the default type/version used when first saving a new drawing.
     DefaultSaveFormatChanged(String),
     /// Select one of Iced's built-in themes or the editable Custom theme.
@@ -6100,6 +6121,7 @@ impl OpenCADStudio {
             hyperlink_editor_dirty: false,
             hyperlink_options: Default::default(),
             pending_startup_modals: std::collections::VecDeque::new(),
+            start_hub: Default::default(),
             gpu_status: crate::scene::pipeline::GpuStatus::Unknown,
             gpu_status_generation: 0,
             gpu_warning_silenced: String::new(),

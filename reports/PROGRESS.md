@@ -899,3 +899,48 @@ fields are present, the `WD_M` attributes read back (`TAGFMT`, `XREFFMT`, `TAGMO
 
 No Rust source changed this round; the binary is unchanged and all prior gates stand
 (smoke 99/99, 37/37 headless checks).
+
+## Round 19 — 2026-11-06 (startup workspace chooser + new-set wizard)
+
+The suite now *begins* with a choice. Launching `OpenCADStudio.exe` with no file argument
+opens a modal:
+
+1. **"How do you want to begin?"** — *Drafting drawing* goes straight to a normal CAD tab;
+   *Electrical drawing set* opens the ECAD setup panel; *Continue to the start page* closes
+   the dialog. The start page also gained an **Electrical drawing set** button, and
+   `ELECSTART` reopens the chooser at any time (typed command or ribbon).
+2. **New electrical drawing set** — standard (IEC ISO 5457 metric / NEC ASME Y14.1), the
+   standard's size list (IEC A4-A0 plus B1; NEC ANSI A-E plus Legal and A portrait) with
+   real dimensions, then project, title, company, drawing number, drawn-by, sheet count and
+   output folder. **Create** writes one DXF per sheet from the matching template, fills the
+   title block (company, title, drawing number, sheet n / total, project and drawn-by
+   values), writes `project.eprj` with the sheet order, points the app at the project, and
+   opens the first sheet.
+
+Templates grew to **15**: added IEC B1 (1000x707) and NEC ANSI A portrait (215.9x279.4) and
+Legal (355.6x215.9) to `tools/make_templates.py` and regenerated `templates\`.
+
+New code: `src\app\elec_start.rs` (standard/size tables, setup state, drawing-set builder,
+title-block patching, project registration, 2 unit tests) and `src\ui\window\start_hub.rs`
+(the two views). Edits: `ModalKind::StartMode` / `EcadSetup`, matching `Message` variants,
+`start_hub` state on the app, startup queue entry (GUI, no file arguments, not under the
+automation host or tests), dispatch `ELECSTART`, a start-page button, and
+`commands::elec` made `pub(crate)` for project registration.
+
+Gates: `cargo check --release` clean; `cargo test --release --lib elec_start` 2/2 (one test
+builds a real two-sheet set under `target/tmp` and checks the DXFs, project file and title
+texts); release build 9m28s with the 4-CPU affinity workaround; smoke 84/84 in
+`--no-real-sheets` mode (CI mode); `verify9.py` 15/15 templates; portable rebuilt (79 files,
+151.3 MB).
+
+Two follow-up fixes after seeing the first launch: the chooser was being suppressed because
+`control.enabled` defaults to true, so the initial gate skipped it on every GUI launch — it now
+uses the same rule as the donation prompt (suppress only once automation traffic has been
+seen, `control.enabled && control.automation_seen`), and the dialog was given its own
+780x420 frame with the two choices side by side instead of stretching to the whole window.
+Verified in the running GUI: the chooser is the first thing shown (before the default-app
+prompt), *Electrical drawing set* opens the wizard with the IEC/NEC radios, the full size
+list, resolved template path and fields, and the start page keeps its "Electrical drawing
+set" button. Screenshots: `docs\screenshots\start-hub-chooser.png` and
+`docs\screenshots\start-hub-wizard.png`. Rebuilt exe, then smoke 84/84 again.
+

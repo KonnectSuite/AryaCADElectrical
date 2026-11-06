@@ -26,7 +26,7 @@ pub(crate) mod extraction_eval;
 mod mleader_layer;
 pub(crate) mod display;
 mod draw;
-mod elec;
+pub(crate) mod elec;
 mod elec_cables;
 mod elec_ioimport;
 mod elec_parts_lib;
@@ -1330,6 +1330,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "ELECPLACE",
         "ELECSETATTR",
         "ELECNEW",
+        "ELECSTART",
         "ELECPLC",
         "ELECPLCNEXT",
         "ELECPANEL",

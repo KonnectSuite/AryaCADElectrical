@@ -1,6 +1,6 @@
 # Starting templates — IEC and NEC
 
-Twelve ready-to-use sheet templates, one per standard size, each with a frame, zone
+Fifteen ready-to-use sheet templates, one per standard size, each with a frame, zone
 references, a standard title block and the numbering contract the electrical commands read.
 Units are millimetres (1 drawing unit = 1 mm); the NEC sheets use the ASME Y14.1 inch sizes
 converted to mm.
@@ -11,6 +11,11 @@ converted to mm.
 ELECNEW templates\iec\A3_landscape.dxf
 ELECNEW templates\nec\ANSI_B_tabloid.dxf
 ```
+
+The app's startup chooser (**Electrical drawing set**) does this for you: pick the standard,
+size, project/title/company/drawing number, sheet count and folder, and it creates the set
+from these templates with the title block filled and a `project.eprj` beside it. `ELECSTART`
+reopens the chooser.
 
 `ELECNEW <template.dxf>` copies the template's layers and every frame/title-block entity into
 the drawing, then creates/keeps the electrical layers and loads the remembered symbol
@@ -47,8 +52,8 @@ drawn/checked/approved, third-angle projection, `ASME Y14.1 / NEC`).
 
 | standard | files | sheet (mm) |
 |---|---|---|
-| IEC (ISO 5457) | `A4_landscape`, `A4_portrait`, `A3_landscape`, `A3_portrait`, `A2_landscape`, `A1_landscape`, `A0_landscape` | 297×210, 210×297, 420×297, 297×420, 594×420, 841×594, 1189×841 |
-| NEC (ASME Y14.1) | `ANSI_A_letter`, `ANSI_B_tabloid`, `ANSI_C`, `ANSI_D`, `ANSI_E` | 279.4×215.9, 431.8×279.4, 558.8×431.8, 863.6×558.8, 1117.6×863.6 |
+| IEC (ISO 5457) | `A4_landscape`, `A4_portrait`, `A3_landscape`, `A3_portrait`, `A2_landscape`, `A1_landscape`, `A0_landscape`, `B1_landscape` | 297×210, 210×297, 420×297, 297×420, 594×420, 841×594, 1189×841, 1000×707 |
+| NEC (ASME Y14.1) | `ANSI_A_letter`, `ANSI_A_letter_portrait`, `ANSI_Legal`, `ANSI_B_tabloid`, `ANSI_C`, `ANSI_D`, `ANSI_E` | 279.4×215.9, 215.9×279.4, 355.6×215.9, 431.8×279.4, 558.8×431.8, 863.6×558.8, 1117.6×863.6 |
 
 ## Customising for your company
 
@@ -72,4 +77,4 @@ attributes.
 Every template is checked by `target\tmp\pinprobe\verify9.py` (kept out of the repository
 because it is a scratch script): open a drawing from the template, save, read it back, and
 assert the paper extent, the standard title-block text, the `WD_M` values and that
-`ELECSETUP` reads them. All twelve pass — `12/12 templates verified`.
+`ELECSETUP` reads them. All fifteen pass — `15/15 templates verified`.

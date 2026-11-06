@@ -38,10 +38,13 @@ IEC_SIZES = [
     ("A2_landscape", 594.0, 420.0, "A2"),
     ("A1_landscape", 841.0, 594.0, "A1"),
     ("A0_landscape", 1189.0, 841.0, "A0"),
+    ("B1_landscape", 1000.0, 707.0, "B1"),
 ]
 
 NEC_SIZES = [
     ("ANSI_A_letter", 11.0 * MM_PER_INCH, 8.5 * MM_PER_INCH, "A"),
+    ("ANSI_A_letter_portrait", 8.5 * MM_PER_INCH, 11.0 * MM_PER_INCH, "A"),
+    ("ANSI_Legal", 14.0 * MM_PER_INCH, 8.5 * MM_PER_INCH, "Legal"),
     ("ANSI_B_tabloid", 17.0 * MM_PER_INCH, 11.0 * MM_PER_INCH, "B"),
     ("ANSI_C", 22.0 * MM_PER_INCH, 17.0 * MM_PER_INCH, "C"),
     ("ANSI_D", 34.0 * MM_PER_INCH, 22.0 * MM_PER_INCH, "D"),

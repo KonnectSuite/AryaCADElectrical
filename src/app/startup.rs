@@ -3,6 +3,18 @@ use crate::scene::pipeline::{GpuAdapter, GpuStatus};
 
 impl OpenCADStudio {
     pub(super) fn queue_startup_prompts(&mut self) {
+        // The front door: pick drafting or electrical before anything else.
+        // Only for a human GUI launch — a file argument means "open this", and
+        // an automation session (control traffic already seen) must not get a
+        // modal it would have to close before the first command; `cfg!(test)`
+        // keeps unit tests modal-free.
+        #[cfg(not(target_arch = "wasm32"))]
+        if !cfg!(test)
+            && !(self.control.enabled && self.control.automation_seen)
+            && std::env::args_os().len() <= 1
+        {
+            self.pending_startup_modals.push_back(ModalKind::StartMode);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if !self.default_assoc_prompted {
             self.pending_startup_modals

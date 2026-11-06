@@ -1,4 +1,4 @@
-﻿use super::super::{Message, OpenCADStudio};
+use super::super::{Message, OpenCADStudio};
 use crate::t;
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{Background, Element, Fill, Fit, Theme};
@@ -27,6 +27,8 @@ impl OpenCADStudio {
             Some(K::FindReplace) => crate::tr!("modal", "find-replace"),
             Some(K::Overkill) => crate::t!("Delete Duplicate Objects").into_owned(),
             Some(K::ElectricalLibrary) => crate::t!("Electrical Library").into_owned(),
+            Some(K::StartMode) => crate::t!("Open CAD Studio").into_owned(),
+            Some(K::EcadSetup) => crate::t!("New electrical drawing set").into_owned(),
             Some(K::PluginManager) => crate::tr!("modal", "plugin-manager"),
             Some(K::UpdateNotice) => crate::tr!("modal", "update-available"),
             Some(K::DonationPrompt) => crate::tr!("donation", "title"),
@@ -170,6 +172,14 @@ impl OpenCADStudio {
                     flow,
                 )
             }),
+            super::super::ModalKind::StartMode => {
+                sized_flow(ex, 780, 420, crate::ui::window::start_hub::mode_view)
+            }
+            super::super::ModalKind::EcadSetup => {
+                sized_flow(ex, 900, 780, |flow| {
+                    crate::ui::window::start_hub::setup_view(&self.start_hub, flow)
+                })
+            }
             super::super::ModalKind::About => {
                 automatic_flow(ex, crate::ui::window::about::view_window)
             }
