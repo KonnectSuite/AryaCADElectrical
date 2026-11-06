@@ -808,3 +808,51 @@ Smoke suite **99/99** on the new binary; verify8 covers the option filter.
 
 Click-through cross-reference labels (payload + double-click + PDF links); per-core cable
 nets; part-level panel footprints and a door elevation; optional installer script.
+
+---
+
+## Round 17 — 2026-11-06 (final verification of the completed objective)
+
+The objective set seven feature items, five packaging items and a green-gate requirement. All
+of them now have a working, measured implementation. Final evidence, gathered on the current
+tree (`61e4d1f`, clean):
+
+| gate | result |
+|---|---|
+| `cargo check --release --tests` | exit 0 (`Finished release profile in 52 s`) |
+| `cargo test -p elec --lib` | **131 passed**, 0 failed |
+| `cargo build --release -j 1` (4-CPU affinity) | 12 m 16 s, no crash (latest feature build) |
+| `tests/ecad/run_smoke.py` | **99/99** checks |
+| headless verification scripts `verify2`–`verify8` | **37 PASS / 0 FAIL** |
+| real-sheet regression (`verify`) | `-003`: 8 wires / 10 pins / 4 nets; `-046`: 53 wires / 39 nets |
+| portable packaging | 63 files, 151 MB, `dist\AryaCADElectrical-portable` with binary, library, sample, quick start |
+| CI | `.github/workflows/ecad.yml` runs check, crate tests, release build and the 84-check CI-mode smoke suite |
+| sample project | `samples\demo-line` (schematic, panel, cables, project, variant, README) |
+
+### Objective checklist
+
+* **wire-list From/To pin columns and library pin attributes** — round 9: starter library
+  declares `X*TERM` pins at true positions; `ELECWIRELIST <out.csv>` writes
+  `From pin`/`To pin` (`-K1:2 -> -K2:1`) and the XLSX wire sheet carries them.
+* **cables drawn as schematic objects** — round 10: `ELECCABLEDRAW` draws route/tag/shield on
+  `CABLES`; schedule length is measured (43.83) and ends resolve to pins; fourth report sheet.
+* **navigation highlight/jump** — round 9: `ELECHIGHLIGHT <tag>`, `ELECGOTO <tag>` and a
+  Navigation ribbon group.
+* **panel footprints and cut-outs** — round 11: footprint table (28 classes), DIN rails,
+  enclosure sizing, door cut-outs, project registration.
+* **configuration management/variants** — round 12 + 16: `ELECVARIANT`, `ELECOPTION`,
+  option-filtered `ELECBOM`.
+* **design-by-systems** — rounds 12 + 15: `ELECSYSTEM LIST/INSERT/SAVE`, two seeded starters.
+* **`ELECPROJNUM` respecting `WD_M`** — round 13: `TAGMODE=R` freezes references (file hash
+  unchanged), unfrozen drawings still renumber, `TAG-START` seeds the sequence.
+* **packaging** — quick start (`docs/QUICKSTART.md`), portable build
+  (`packaging/portable.ps1`), sample project (`samples/demo-line`), refreshed smoke suite,
+  CI workflow.
+
+### What is still partial, honestly
+
+Feature matrix score: **1 implemented, 16 partial, 1 missing (harness, deferred), 1 N/A**.
+The depth items not required by the objective remain open and are listed in
+[`HANDOFF.md`](HANDOFF.md): click-through cross-reference labels and PDF links, per-core
+cable nets, part-level panel footprints and a separate door elevation, an optional installer
+script, and showing the sample/quick-start inside the in-app help.
