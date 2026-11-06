@@ -236,3 +236,20 @@ Current honest score: **1 implemented, 14 partial, 3 missing, 1 not applicable.*
 true gaps: configuration management / variants and design-by-systems (18, 19), the deferred
 harness (17), and inside the partial features the per-core cable nets, clickable
 cross-reference labels, and the `ELECPROJNUM` / `WD_M` interaction — plus packaging.
+
+---
+
+## Round 12 update — design by systems, variants and option codes (2026-11-06)
+
+| # | Feature | New status | Evidence |
+|---|---|---|---|
+| 19 | Design by systems / sub-assemblies | **Partial** | Reusable systems live as `library/systems/*.tsv` fragments (`device dx dy symbol`, `wire x1 y1 x2 y2`), overridable per project (`<project>/systems/`). `ELECSYSTEM LIST` shows the two seeded starters; `ELECSYSTEM INSERT <name> [x,y]` places the symbols with their full attribute set, draws the wires on `WIRES` and retags into the drawing's own sequences. Verified: three insertions → 14 inserts, 7 wires, tags -K1..-K7, -M1..-M3, -S1..-S4, second starter at x=200, reversing at y=-200. Missing: capturing the current drawing as a system (`ELECSYSTEM SAVE`). |
+| 18 | Configuration management (variants) | **Partial** | `ELECVARIANT NEW <name>` copies the master sheet list into `variant-<name>.eprj`; `LIST` shows name/sheet count/active; `USE <name>` switches the active project file so project commands work on that selection. `ELECOPTION <tag> <option>` records option codes in the active project file (`LIST`, `CLEAR <tag>`). Verified: variant file with copied sheet list, `option -K1 pump-set-B` recorded and listed, active project switched. Missing: reports/BOM filtering by variant or option code. |
+
+Current honest score: **1 implemented, 16 partial, 1 missing, 1 not applicable.**
+
+Only the deferred harness (17) remains without a working path; every other feature has at
+least a partial implementation, with the caveats listed above. Inside partials the remaining work is: report filtering by
+variant/option, `ELECSYSTEM SAVE`, per-core cable nets, clickable cross-reference labels,
+`ELECPROJNUM` honouring `WD_M`, and the packaging (installer, sample project, quick-start,
+refreshed smoke suite, CI).

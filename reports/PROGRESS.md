@@ -560,3 +560,62 @@ with the same seven pre-round-2 expectations.
 No part-level footprint overrides (a 2-pole breaker and a 4-pole breaker are both 18 mm
 today), no enclosure catalogue or wall-mount/door dimensioning, and the door devices are
 drawn on the plate view rather than on a separate door elevation.
+
+---
+
+## Round 12 — 2026-11-06 (design by systems, variants, option codes)
+
+Two configuration-management features the products this compares to ship, both built on
+plain files so a project stays inspectable and diffable.
+
+### Reusable systems (`library/systems/*.tsv`)
+
+A system is a text fragment: `device <dx> <dy> <symbol>` and `wire <x1> <y1> <x2> <y2>`
+lines, relative to an insertion point. Two seeded systems: `dol_starter` (contactor,
+overload, motor, button, 2 wires) and `reversing_starter` (two contactors, overload, motor,
+two buttons, 3 wires). A project can override either with `<project>/systems/`.
+
+```
+ELECSYSTEM: 2 system(s) available (library/systems).
+  DOL_STARTER          4 device(s), 2 wire(s)
+  REVERSING_STARTER    6 device(s), 3 wire(s)
+ELECSYSTEM: inserted DOL_STARTER at 0.00,0.00 — 4 device(s) (-K1, -K2, -M1, -S1), 2 wire(s).
+ELECSYSTEM: inserted DOL_STARTER at 200.00,0.00 — 4 device(s) (-K3, -K4, -M2, -S2), 2 wire(s).
+ELECSYSTEM: inserted REVERSING_STARTER at 0.00,-200.00 — 6 device(s) (-K5, -K6, -K7, -M3, -S3, -S4), 3 wire(s).
+```
+
+Each insertion retags into the drawing's own sequences (`next_tag` per IEC prefix), places
+the symbols with their full attribute set (from the block's ATTDEFs), and draws the wires on
+`WIRES`. Read back from the saved drawing: **14 inserts, 7 wire lines**, tags -K1..-K7,
+-M1..-M3, -S1..-S4, with the second starter at x=200 and the reversing one at y=-200.
+
+### Project variants and option codes
+
+`ELECVARIANT NEW <name>` copies the master project's sheet list into
+`variant-<name>.eprj` beside it; `ELECVARIANT LIST` shows name, sheet count and which one is
+active; `ELECVARIANT USE <name>` switches the active project file, so `ELECPROJNUM`,
+`ELECPROJECT` and the reports work on that sheet set. `ELECOPTION <tag> <option>` appends an
+`option <tag> <option>` line to the active project file (`LIST` shows them, `CLEAR <tag>`
+removes a device's codes).
+
+Verified end to end: variant file created with the copied sheet list, option code
+`-K1 pump-set-B` recorded in the master project and listed, then the active project
+switched to `variant-pumpset_b.eprj`.
+
+### Gate
+
+```
+cargo check --release --tests   exit 0
+cargo test -p elec --lib        131 passed
+cargo build --release -j 1      14 m 29 s (4-CPU affinity)
+```
+
+Rounds 8–11 regression all green (real sheets 8/10/4 and 53/39 nets; declared pins, pin
+columns, navigation, drawn cable, footprint panel). Smoke suite unchanged at 92/99 with the
+same stale seven.
+
+### Still open in configuration management
+
+Variants select sheets but reports do not yet filter by variant or by option code, there is
+no `ELECSYSTEM SAVE` to capture the current drawing as a new system, and the harness design
+feature stays deferred.
