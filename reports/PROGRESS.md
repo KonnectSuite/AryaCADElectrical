@@ -214,3 +214,16 @@ The largest missing SkyCAD feature (Advanced tier: "Cabling and cable schedules 
 - Reachable from the ribbon: Reports group → Cables menu (Cable Schedule / Add Cable), with a new cable icon.
 - Verified: two cables added, table and CSV written, one deleted, multi-word description ("Motor feeder from MCC") preserved; `ELECCABLELIST out.csv` row count reported.
 - Honest boundary: cables are schedule data attached to the project, not yet drawn as cable objects on the schematic with per-conductor connectivity. Drawing the cable and deriving conductor-level nets is the next step.
+
+---
+
+## Round 6 — 2026-11-06 (discoverability: the command reference)
+
+SkyCAD lists "no training required" as a feature; the equivalent here is being able to find
+out what a tool is called without a manual. `ELECHELP` prints every electrical command with
+a one-line usage, grouped the way the ribbon is organised (Symbols, Local parts, Wiring,
+Devices, Terminals, Cross-reference, Cables, Reports, Project & sheet). It is reachable from
+the ribbon too (Project & Sheet -> Drawing -> Command Reference), and every line names a
+command the dispatcher really handles, so the reference cannot drift silently.
+
+Verified headless: `ELECHELP` prints the full grouped reference.

@@ -1296,6 +1296,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "ELECBOM",
         "ELECLIST",
         "ELECSETUP",
+        "ELECHELP",
         "ELECBUILT",
         "ELECPARTS",
         "ELECPARTLIST",

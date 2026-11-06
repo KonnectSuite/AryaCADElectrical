@@ -587,6 +587,111 @@ fn class_for_reference(tag: &str) -> &'static str {
         Self::components_of(&self.tabs[i].scene.document)
     }
 
+    /// `ELECHELP` lists the electrical commands with a one-line usage each.
+    ///
+    /// The ribbon is the fast path; this is what a user reaches for when they know the job
+    /// but not the command name. Every line names a command the dispatcher really handles,
+    /// so the reference cannot drift without the list looking obviously wrong in review.
+    pub(super) fn elec_help(&mut self) -> Task<Message> {
+        let sections: [(&str, &[&str]); 10] = [
+            (
+                "Symbols",
+                &[
+                    "ELECLIB <folder>              load a folder of symbol DXFs",
+                    "ELECPALETTE                   browse the loaded symbols",
+                    "ELECINSERT <symbol>           place a symbol",
+                    "ELECMAKESYMBOL <name>         turn the selection into a symbol",
+                    "ELECSETATTR <tag> NAME=value  edit a device's attributes",
+                ],
+            ),
+            (
+                "Local parts",
+                &[
+                    "ELECPARTS [folder]            load the local parts catalogue",
+                    "ELECPARTLIST [filter]         search the catalogue",
+                    "ELECASSIGN <tag> <part>       attach a catalogue part to a device",
+                ],
+            ),
+            (
+                "Wiring",
+                &[
+                    "ELECWIRE                      draw conductors (chained)",
+                    "ELECJUNCTIONS                 place junction dots",
+                    "ELECWIRELIST                  report the nets",
+                    "ELECWIRENUMBER                number the nets",
+                ],
+            ),
+            (
+                "Devices",
+                &[
+                    "ELECLIST                      list the drawing's components",
+                    "ELECNUMBER / ELECNUMBERPREVIEW  number devices / preview",
+                    "ELECPLC <tag> <points> <base> place a PLC module",
+                    "ELECPLCNEXT <tag> <points>    continue I/O addressing",
+                    "ELECIO                        per-point cross references",
+                    "ELECIOIMPORT <xlsx> [x,y]     generate PLC drawings from an I/O list",
+                ],
+            ),
+            (
+                "Terminals",
+                &[
+                    "ELECTERMINALS                 report terminal strips",
+                    "ELECTSIDES                    assign terminal sides",
+                ],
+            ),
+            (
+                "Cross-reference",
+                &[
+                    "ELECXREF                      contact-level references",
+                    "ELECXREFWRITE                 write the labels on the drawing",
+                ],
+            ),
+            (
+                "Cables",
+                &[
+                    "ELECCABLE <tag> CORES=<n> [PART=] [MFG=] [LEN=] [DESC=]",
+                    "ELECCABLELIST [out.csv]       print or export the cable schedule",
+                    "ELECCABLEDEL <tag>            remove a cable",
+                ],
+            ),
+            (
+                "Reports",
+                &[
+                    "ELECBOM [out.csv]             bill of material",
+                    "ELECPANEL <out.dxf>           panel arrangement drawing",
+                    "ELECREPORT <out.xlsx>         workbook report",
+                    "ELECPART <parts.csv>          load a plain parts catalogue",
+                ],
+            ),
+            (
+                "Project & sheet",
+                &[
+                    "ELECSHEET [A4|A3|A2|A1] [title]  frame and title block",
+                    "ELECNEW [template.dxf]        new drawing",
+                    "ELECPROJNEW/OPEN/LIST         project file commands",
+                    "ELECPROJNUM [apply]           renumber across the project",
+                    "ELECPROJECT [out.xlsx]        project report",
+                    "ELECBUILT [on|off]            built-project control",
+                    "ELECREV SNAPSHOT|LIST|COMPARE|RESTORE  revision control",
+                    "ELECSETUP                     show this drawing's electrical setup",
+                ],
+            ),
+            (
+                "This list",
+                &["ELECHELP                      this reference"],
+            ),
+        ];
+        self.command_line
+            .push_output("ELECHELP: electrical commands (each is also on the Electrical ribbon)");
+        for (title, lines) in sections {
+            self.command_line.push_output(&format!("  {title}"));
+            for line in lines {
+                self.command_line.push_output(&format!("    {line}"));
+            }
+        }
+        Task::none()
+    }
+
     /// `ELECSETUP` reports the drawing's electrical setup and the loaded symbol library.
     ///
     /// This is the read-only face of what an AutoCAD Electrical drawing keeps on `WD_M`:
@@ -4613,6 +4718,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             "ELECBOM" => Some(self.elec_bom(i, None)),
             "ELECLIST" => Some(self.elec_list(i)),
             "ELECSETUP" => Some(self.elec_setup(i)),
+            "ELECHELP" => Some(self.elec_help()),
             "ELECBUILT" => Some(self.elec_built(None)),
             "ELECWIRELIST" => Some(self.elec_wirelist(i)),
             "ELECWIRENUMBER" => Some(self.elec_wirenumber(i)),
