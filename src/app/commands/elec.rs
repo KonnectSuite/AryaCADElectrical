@@ -644,6 +644,13 @@ fn wire_graph(document: &codec::Document) -> WireGraph {
                 .iter()
                 .any(|(seen, _)| (seen.x - endpoint.x).abs() <= 1e-6 && (seen.y - endpoint.y).abs() <= 1e-6)
             {
+                // Two pins of one symbol can reach the same wire end (a contact's pins sit
+                // 0.125 apart, so both are within PIN_ASSOC of the one end the wire reaches).
+                // The declared pin that did not get the wire keeps its own position and is
+                // reported unconnected rather than vanishing from the list.
+                if !number.is_empty() {
+                    accepted.push((*point, number.clone()));
+                }
                 continue;
             }
             accepted.push((endpoint, number.clone()));
