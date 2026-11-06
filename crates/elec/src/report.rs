@@ -96,13 +96,19 @@ pub fn wire_sheet(net_of_wire: &[(u64, u64, Point, Point)]) -> Sheet {
     sheet
 }
 
-/// Wire list derived from the geometry rows.
+/// Wire list derived from the geometry rows: one conductor per row, with the device pin at
+/// each end when the drawing says it.
 pub fn wire_sheet_from(rows: &[GeoWireRow]) -> Sheet {
-    let mut sheet = Sheet::new("Wire List", &["Wire", "Net", "From X", "From Y", "To X", "To Y"]);
+    let mut sheet = Sheet::new(
+        "Wire List",
+        &["Wire", "Net", "From pin", "To pin", "From X", "From Y", "To X", "To Y"],
+    );
     for row in rows {
         sheet.push(vec![
             Cell::number(row.wire as f64),
             Cell::number(row.net as f64),
+            Cell::text(row.from_pin.clone().unwrap_or_else(|| "-".to_string())),
+            Cell::text(row.to_pin.clone().unwrap_or_else(|| "-".to_string())),
             Cell::number(row.from.x),
             Cell::number(row.from.y),
             Cell::number(row.to.x),
@@ -202,15 +208,32 @@ mod tests {
     }
 
     #[test]
-    fn wire_sheet_has_one_row_per_wire() {
+    fn wire_sheet_has_one_row_per_wire_and_names_its_pins() {
         let rows = vec![
-            GeoWireRow { wire: 1, net: 1, from: Point::new(0.0, 0.0), to: Point::new(10.0, 0.0) },
-            GeoWireRow { wire: 2, net: 1, from: Point::new(10.0, 0.0), to: Point::new(20.0, 0.0) },
+            GeoWireRow {
+                wire: 1,
+                net: 1,
+                from: Point::new(0.0, 0.0),
+                to: Point::new(10.0, 0.0),
+                from_pin: Some("-K1:1".to_string()),
+                to_pin: None,
+            },
+            GeoWireRow {
+                wire: 2,
+                net: 1,
+                from: Point::new(10.0, 0.0),
+                to: Point::new(20.0, 0.0),
+                from_pin: None,
+                to_pin: Some("-M1:2".to_string()),
+            },
         ];
         let sheet = wire_sheet_from(&rows);
         assert_eq!(sheet.body_len(), 2);
         assert_eq!(sheet.rows[1][0], Cell::Number(1.0));
-        assert_eq!(sheet.rows[2][4], Cell::Number(20.0));
+        assert_eq!(sheet.rows[1][2], Cell::text("-K1:1"));
+        assert_eq!(sheet.rows[1][3], Cell::text("-"));
+        assert_eq!(sheet.rows[2][3], Cell::text("-M1:2"));
+        assert_eq!(sheet.rows[2][6], Cell::Number(20.0));
     }
 
     #[test]

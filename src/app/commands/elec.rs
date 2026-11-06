@@ -444,6 +444,41 @@ fn insert_pins(
         .collect()
 }
 
+/// Every entity that draws one device: the block inserts carrying its tag, plus any `TEXT`
+/// that spells the tag (a flattened sheet keeps only the text).
+fn device_entities(document: &codec::Document, tag: &str) -> Vec<codec::Handle> {
+    let wanted = tag.trim();
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let mut handles = Vec::new();
+    for entity in document.entities() {
+        if !OpenCADStudio::in_drawing_space(document, entity.common().owner_handle) {
+            continue;
+        }
+        match entity {
+            codec::EntityType::Insert(insert) => {
+                let matches = insert.attributes.iter().any(|attribute| {
+                    is_tag_attribute(&attribute.tag)
+                        && attribute.value.trim().eq_ignore_ascii_case(wanted)
+                });
+                if matches {
+                    handles.push(insert.common.handle);
+                }
+            }
+            codec::EntityType::Text(text) => {
+                if !text.common.layer.eq_ignore_ascii_case("TITLE_BLOCK")
+                    && text.value.trim().eq_ignore_ascii_case(wanted)
+                {
+                    handles.push(text.common.handle);
+                }
+            }
+            _ => {}
+        }
+    }
+    handles
+}
+
 /// Build the drawing's wires, device pins and connectivity hints.
 ///
 /// The wire rule is the one measured on the customer's drawings: a sheet that keeps its
@@ -990,7 +1025,7 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// but not the command name. Every line names a command the dispatcher really handles,
     /// so the reference cannot drift without the list looking obviously wrong in review.
     pub(super) fn elec_help(&mut self) -> Task<Message> {
-        let sections: [(&str, &[&str]); 10] = [
+        let sections: [(&str, &[&str]); 11] = [
             (
                 "Symbols",
                 &[
@@ -1014,7 +1049,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                 &[
                     "ELECWIRE                      draw conductors (chained)",
                     "ELECJUNCTIONS                 place junction dots",
-                    "ELECWIRELIST                  report the nets",
+                    "ELECWIRELIST [out.csv]        report the nets, optionally export the wire list",
                     "ELECWIRENUMBER                number the nets",
                 ],
             ),
@@ -1041,6 +1076,13 @@ fn class_for_reference(tag: &str) -> &'static str {
                 &[
                     "ELECXREF                      contact-level references",
                     "ELECXREFWRITE                 write the labels on the drawing",
+                ],
+            ),
+            (
+                "Navigation",
+                &[
+                    "ELECHIGHLIGHT <tag>           select every part of one device",
+                    "ELECGOTO <tag>                centre the view on a device",
                 ],
             ),
             (
@@ -1525,15 +1567,19 @@ fn class_for_reference(tag: &str) -> &'static str {
         Task::none()
     }
 
-    /// `ELECWIRELIST` derives connectivity from the drawn wires and reports the nets.
+    /// `ELECWIRELIST [out.csv]` derives connectivity from the drawn wires and reports the nets.
     ///
     /// Wires are the drawing's `WIRES` layer (or, on a flattened print, layer-0 lines long
     /// enough to be a conductor); a device anchors to a net at its **pin**, not at the
     /// symbol's insertion point. Points within `tolerance` are the same node, a terminal
     /// pass-through bridges the two ends on either side of it, and a T-junction only
     /// connects where a junction dot marks it.
-    pub(super) fn elec_wirelist(&mut self, i: usize) -> Task<Message> {
+    ///
+    /// With a path, the conductor list is written as CSV with the columns the shop needs:
+    /// `Wire, Net, From pin, To pin, From X, From Y, To X, To Y`.
+    pub(super) fn elec_wirelist(&mut self, i: usize, out: Option<&str>) -> Task<Message> {
         use ::elec::infer_tag_prefix;
+        use ::elec::wire_rows_with_pins;
 
         const TOLERANCE: f64 = 0.05;
 
@@ -1585,6 +1631,46 @@ fn class_for_reference(tag: &str) -> &'static str {
                 .collect();
             let line = format!("  unconnected: {}", names.join(", "));
             self.command_line.push_output(&line);
+        }
+
+        if let Some(path) = out.map(str::trim).filter(|path| !path.is_empty()) {
+            let rows = wire_rows_with_pins(&graph.wires, &netlist, &graph.anchors);
+            match std::fs::File::create(path) {
+                Ok(file) => {
+                    use std::io::Write as _;
+                    let mut writer = std::io::BufWriter::new(file);
+                    let mut text = String::from(
+                        "Wire,Net,From pin,To pin,From X,From Y,To X,To Y\n",
+                    );
+                    for row in &rows {
+                        text.push_str(&format!(
+                            "{},{},{},{},{:.4},{:.4},{:.4},{:.4}\n",
+                            row.wire,
+                            row.net,
+                            csv_field(row.from_pin.as_deref().unwrap_or("-")),
+                            csv_field(row.to_pin.as_deref().unwrap_or("-")),
+                            row.from.x,
+                            row.from.y,
+                            row.to.x,
+                            row.to.y
+                        ));
+                    }
+                    if let Err(error) = writer.write_all(text.as_bytes()) {
+                        let message = format!("ELECWIRELIST: cannot write {path}: {error}");
+                        self.command_line.push_output(&message);
+                        return Task::none();
+                    }
+                    let message = format!(
+                        "ELECWIRELIST: wrote {} conductor row(s) to {path}.",
+                        rows.len()
+                    );
+                    self.command_line.push_output(&message);
+                }
+                Err(error) => {
+                    let message = format!("ELECWIRELIST: cannot write {path}: {error}");
+                    self.command_line.push_output(&message);
+                }
+            }
         }
 
         // A drawing that names its devices is a drawing we can sanity-check: report the
@@ -1762,6 +1848,56 @@ fn class_for_reference(tag: &str) -> &'static str {
     ) {
         let graph = wire_graph(&self.tabs[i].scene.document);
         (graph.wires, graph.anchors)
+    }
+
+    /// `ELECHIGHLIGHT <tag>` selects every part of one device.
+    ///
+    /// A multi-part device (a coil, its contacts, its overload) is scattered over the sheet;
+    /// picking it out by tag is the one navigation move an electrician asks for first. Both
+    /// the block inserts that carry the tag and the plain TEXT a flattened sheet keeps are
+    /// selected, so the same command works on the customer's prints.
+    pub(super) fn elec_highlight(&mut self, i: usize, tag: &str) -> Task<Message> {
+        let handles = {
+            let doc = &self.tabs[i].scene.document;
+            device_entities(doc, tag)
+        };
+        let wanted = tag.trim();
+        if handles.is_empty() {
+            let message = format!("ELECHIGHLIGHT: no device tagged {wanted}.");
+            self.command_line.push_output(&message);
+            return Task::none();
+        }
+        self.tabs[i].scene.deselect_all();
+        self.tabs[i].scene.select_entities(&handles);
+        let message = format!(
+            "ELECHIGHLIGHT: selected {} part(s) of {wanted}.",
+            handles.len()
+        );
+        self.command_line.push_output(&message);
+        Task::none()
+    }
+
+    /// `ELECGOTO <tag>` centres the view on a device and its parts.
+    pub(super) fn elec_goto(&mut self, i: usize, tag: &str) -> Task<Message> {
+        let handles = {
+            let doc = &self.tabs[i].scene.document;
+            device_entities(doc, tag)
+        };
+        let wanted = tag.trim();
+        if handles.is_empty() {
+            let message = format!("ELECGOTO: no device tagged {wanted}.");
+            self.command_line.push_output(&message);
+            return Task::none();
+        }
+        self.tabs[i].scene.remember_current_view();
+        if self.tabs[i].scene.zoom_to_entities(&handles) {
+            let message = format!("ELECGOTO: centred on {wanted} ({} part(s)).", handles.len());
+            self.command_line.push_output(&message);
+        } else {
+            let message = format!("ELECGOTO: {wanted} has no visible bounds.");
+            self.command_line.push_output(&message);
+        }
+        Task::none()
     }
 
     /// `ELECTERMINALS` reports the terminal strips in the drawing.
@@ -2117,7 +2253,7 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// material (enriched from the parts catalogue when one is loaded), the wire list, and
     /// the terminal strips.
     pub(super) fn elec_report(&mut self, i: usize, path: &str) -> Task<Message> {
-        use ::elec::{bom_sheet, terminal_sheet, wire_rows, wire_sheet_from};
+        use ::elec::{bom_sheet, terminal_sheet, wire_rows_with_pins, wire_sheet_from};
 
         const TOLERANCE: f64 = 0.05;
 
@@ -2136,7 +2272,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             wire_graph(doc)
         };
         let netlist = graph.netlist(TOLERANCE);
-        let wire_rows = wire_rows(&graph.wires, &netlist);
+        let wire_rows = wire_rows_with_pins(&graph.wires, &netlist, &graph.anchors);
         let anchors = &graph.anchors;
         let label_of = |id: u64| graph.label_of(id);
         let mut terminals: Vec<(String, Vec<String>)> = Vec::new();
@@ -5023,7 +5159,17 @@ fn class_for_reference(tag: &str) -> &'static str {
             "ELECHELP" => Some(self.elec_help()),
             "ELECWIRELABELS" => Some(self.elec_wire_labels(i, None)),
             "ELECBUILT" => Some(self.elec_built(None)),
-            "ELECWIRELIST" => Some(self.elec_wirelist(i)),
+            "ELECWIRELIST" => Some(self.elec_wirelist(i, None)),
+            "ELECHIGHLIGHT" => {
+                self.command_line
+                    .push_output("ELECHIGHLIGHT: ELECHIGHLIGHT <tag>  (selects every part of one device)");
+                Some(Task::none())
+            }
+            "ELECGOTO" => {
+                self.command_line
+                    .push_output("ELECGOTO: ELECGOTO <tag>  (centres the view on a device)");
+                Some(Task::none())
+            }
             "ELECWIRENUMBER" => Some(self.elec_wirenumber(i)),
             "ELECTERMINALS" => Some(self.elec_terminals(i)),
             // The registry used to advertise only `ELECSIDES`, so the typed name failed
@@ -5104,6 +5250,24 @@ fn class_for_reference(tag: &str) -> &'static str {
             // mutates the drawing is worse than no preview at all.
             "ELECNUMBERPREVIEW" => Some(self.elec_number(i, true)),
             _ => {
+                if let Some(argument) = cmd.strip_prefix("ELECWIRELIST ") {
+                    let path = argument.trim();
+                    if !path.is_empty() {
+                        return Some(self.elec_wirelist(i, Some(path)));
+                    }
+                }
+                if let Some(argument) = cmd.strip_prefix("ELECHIGHLIGHT ") {
+                    let tag = argument.trim();
+                    if !tag.is_empty() {
+                        return Some(self.elec_highlight(i, tag));
+                    }
+                }
+                if let Some(argument) = cmd.strip_prefix("ELECGOTO ") {
+                    let tag = argument.trim();
+                    if !tag.is_empty() {
+                        return Some(self.elec_goto(i, tag));
+                    }
+                }
                 if let Some(argument) = cmd.strip_prefix("ELECWIRELABELS ") {
                     return Some(self.elec_wire_labels(i, Some(argument.trim())));
                 }

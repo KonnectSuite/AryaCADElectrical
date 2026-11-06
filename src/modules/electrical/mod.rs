@@ -1,4 +1,4 @@
-﻿//! Electrical (ECAD) ribbon tab.
+//! Electrical (ECAD) ribbon tab.
 //!
 //! The tab is the entry point for the electrical layer: symbols, conductors, the devices
 //! on them, and the numbering, cross-references and reports that make an electrical
@@ -55,6 +55,9 @@ mod icons {
     pub const BOM: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/elec_bom.svg"));
     pub const DEVICE_LIST: IconKind =
         IconKind::Svg(include_bytes!("../../../assets/icons/elec_device_list.svg"));
+    pub const GOTO: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/elec_goto.svg"));
+    pub const HIGHLIGHT: IconKind =
+        IconKind::Svg(include_bytes!("../../../assets/icons/elec_highlight.svg"));
     pub const INSERT: IconKind =
         IconKind::Svg(include_bytes!("../../../assets/icons/elec_insert.svg"));
     pub const IO: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/elec_io.svg"));
@@ -260,6 +263,20 @@ impl CadModule for ElectricalModule {
                             "Write Xrefs",
                             XREF_WRITE,
                         )),
+                    ],
+                },
+                // ── Navigation ───────────────────────────────────────────────
+                // Find one device among the sheet's other symbols: light up every
+                // part of it, or jump the view to it.
+                RibbonGroup {
+                    title: "Navigation",
+                    tools: vec![
+                        RibbonItem::LabeledTool(elec_tool(
+                            "ELECHIGHLIGHT",
+                            "Highlight\nDevice",
+                            HIGHLIGHT,
+                        )),
+                        RibbonItem::LabeledTool(elec_tool("ELECGOTO", "Go To\nDevice", GOTO)),
                     ],
                 },
                 // ── Reports ──────────────────────────────────────────────────

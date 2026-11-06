@@ -1,4 +1,4 @@
-﻿use super::{Message, OpenCADStudio};
+use super::{Message, OpenCADStudio};
 use crate::command::CadCommand;
 use iced::Task;
 use std::path::PathBuf;
@@ -1315,6 +1315,8 @@ inventory::submit!(crate::command::CommandRegistration {
         "ELECTSIDES",
         "ELECIO",
         "ELECXREF",
+        "ELECHIGHLIGHT",
+        "ELECGOTO",
         "ELECPART",
         "ELECXREFWRITE",
         "ELECREPORT",

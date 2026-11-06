@@ -347,10 +347,49 @@ pub struct GeoWireRow {
     pub net: u64,
     pub from: Point,
     pub to: Point,
+    /// Device pin at the `from` end, when an anchor pin sits on it (`-K1:1`).
+    pub from_pin: Option<String>,
+    /// Device pin at the `to` end.
+    pub to_pin: Option<String>,
+}
+
+/// The wire endpoint a pin anchor must be within to name that end of a conductor.
+const PIN_ON_WIRE: f64 = 0.2;
+
+fn pin_label_near(anchors: &[Anchor], point: Point) -> Option<String> {
+    let mut best: Option<(f64, String)> = None;
+    for anchor in anchors {
+        let distance = (anchor.at.x - point.x).hypot(anchor.at.y - point.y);
+        if distance <= PIN_ON_WIRE
+            && best.as_ref().map(|(seen, _)| distance < *seen).unwrap_or(true)
+        {
+            best = Some((distance, anchor.display_label()));
+        }
+    }
+    best.map(|(_, label)| label)
 }
 
 /// Project the wires of a netlist into report rows, ordered by wire id.
+///
+/// The rows carry no pin names; use [`wire_rows_with_pins`] when the anchors are known.
 pub fn wire_rows(wires: &[WireSeg], netlist: &GeoNetlist) -> Vec<GeoWireRow> {
+    wire_rows_impl(wires, netlist, &[])
+}
+
+/// Wire-list rows that also name the device pin at each end of the conductor.
+///
+/// A wire list an electrician can pull from says `-K1:2 -> -M1:1`, not two coordinates.
+/// The pin is the label of the nearest anchor within [`PIN_ON_WIRE`]; an end with no device
+/// on it (a wire to a terminal block, a spare) stays empty.
+pub fn wire_rows_with_pins(
+    wires: &[WireSeg],
+    netlist: &GeoNetlist,
+    anchors: &[Anchor],
+) -> Vec<GeoWireRow> {
+    wire_rows_impl(wires, netlist, anchors)
+}
+
+fn wire_rows_impl(wires: &[WireSeg], netlist: &GeoNetlist, anchors: &[Anchor]) -> Vec<GeoWireRow> {
     let mut net_of_wire: BTreeMap<u64, u64> = BTreeMap::new();
     for net in &netlist.nets {
         for wire in &net.wires {
@@ -365,6 +404,8 @@ pub fn wire_rows(wires: &[WireSeg], netlist: &GeoNetlist) -> Vec<GeoWireRow> {
                 net: *net,
                 from: wire.from,
                 to: wire.to,
+                from_pin: pin_label_near(anchors, wire.from),
+                to_pin: pin_label_near(anchors, wire.to),
             })
         })
         .collect();
@@ -588,5 +629,24 @@ mod tests {
         let netlist = netlist_from_geometry_with_wire_runs(&wires, &[], 0.05);
         // The two halves of the horizontal run stay separate; the vertical is its own net.
         assert!(netlist.nets.len() >= 2);
+    }
+
+    #[test]
+    fn wire_rows_name_the_pin_at_each_end() {
+        let wires = vec![WireSeg::new(1, p(0.0, 0.0), p(100.0, 0.0))];
+        let anchors = vec![
+            Anchor::new(10, "-K1", p(0.0, 0.0)).with_pin("1"),
+            Anchor::new(11, "-M1", p(100.0, 0.0)).with_pin("2"),
+        ];
+        let netlist = netlist_from_geometry_with_wire_runs(&wires, &anchors, 0.01);
+        let rows = wire_rows_with_pins(&wires, &netlist, &anchors);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].from_pin.as_deref(), Some("-K1:1"));
+        assert_eq!(rows[0].to_pin.as_deref(), Some("-M1:2"));
+
+        // Without the anchors the pin columns stay empty (the plain rows).
+        let bare = wire_rows(&wires, &netlist);
+        assert_eq!(bare[0].from_pin, None);
+        assert_eq!(bare[0].to_pin, None);
     }
 }

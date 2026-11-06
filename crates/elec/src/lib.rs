@@ -26,8 +26,8 @@ pub mod xref;
 pub use catalogue::{Catalogue, CatalogueError, PartRecord};
 pub use component::{bill_of_materials, BomRow, Component};
 pub use geometry::{
-    netlist_from_geometry, netlist_with_hints, wire_rows, Anchor, GeoNet, GeoNetlist,
-    GeoWireRow, NetlistHints, Point, WireSeg,
+    netlist_from_geometry, netlist_with_hints, wire_rows, wire_rows_with_pins, Anchor, GeoNet,
+    GeoNetlist, GeoWireRow, NetlistHints, Point, WireSeg,
 };
 pub use pins::{is_non_device_block, is_wire_layer, parse_point, pin_number};
 pub use junction::junction_points;

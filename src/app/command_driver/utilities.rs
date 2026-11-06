@@ -1,4 +1,4 @@
-﻿use super::*;
+use super::*;
 
 impl OpenCADStudio {
     pub(in crate::app) fn reject_locked_edit(&mut self, i: usize, handle: Handle) -> bool {
@@ -1112,6 +1112,9 @@ impl OpenCADStudio {
             || tokens[0].eq_ignore_ascii_case("ELECBUILT")
             || tokens[0].eq_ignore_ascii_case("ELECPROJNEW")
             || tokens[0].eq_ignore_ascii_case("ELECPROJOPEN")
+            || tokens[0].eq_ignore_ascii_case("ELECWIRELIST")
+            || tokens[0].eq_ignore_ascii_case("ELECHIGHLIGHT")
+            || tokens[0].eq_ignore_ascii_case("ELECGOTO")
         {
             return self.dispatch_command(cmd);
         }

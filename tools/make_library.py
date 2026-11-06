@@ -71,9 +71,22 @@ HEADER = "symbol\tclass\tattributes\tscale"
 A_2TERM = ["TAG1", "CAT", "MFG", "DESC1", "LOC", "TERM01", "TERM02"]
 A_DEVICE = ["TAG1", "CAT", "MFG", "DESC1", "LOC"]
 A_TERMINAL = ["TAG1", "CAT", "MFG", "DESC1", "LOC", "XREF"]
-A_PLC = ["TAG1", "CAT", "MFG", "DESC1", "LOC", "ADDR01", "ADDR02", "X1TERM01", "X1TERM02"]
+A_PLC = ["TAG1", "CAT", "MFG", "DESC1", "LOC", "ADDR01", "ADDR02"]
 A_LABEL = ["TAG1", "DESC1"]
 A_EARTH = ["TAG1", "DESC1"]
+
+# Wire connection points, in the 10-unit design canvas.  These are emitted as
+# invisible ATTDEFs at the actual pin position, the way AutoCAD Electrical stores
+# them (`X4TERM01` on the left, `X1TERM02` on the right); the electrical layer
+# reads that insertion point as the pin, so a wire ending on it joins the net
+# and the wire list can say `-K1:1 -> -M1:2`.
+PINS_2TERM = [(-5.0, 0.0, "X4TERM01"), (5.0, 0.0, "X1TERM02")]
+PINS_EARTH = [(0.0, 3.5, "X4TERM01")]
+PINS_PLC_DI = [(-5.0, 1.0, "X4TERM01"), (-5.0, -1.0, "X4TERM02")]
+PINS_PLC_DO = [(5.0, 1.0, "X1TERM01"), (5.0, -1.0, "X1TERM02")]
+PINS_TERMINAL_BLOCK = [(-5.0, 0.5, "X4TERM01"), (0.0, 0.5, "X4TERM02"), (5.0, 0.5, "X1TERM03")]
+PINS_CABLE_ENTRY = [(-5.0, 0.0, "X4TERM01")]
+PINS_NONE = []
 
 
 def L(x1, y1, x2, y2):
@@ -218,22 +231,26 @@ SYMBOLS = [
     dict(
         name="TERMINAL_BLOCK", cls="Terminal", attrs=A_TERMINAL,
         desc="Three-way terminal block: rail with three terminal circles",
+        pins=PINS_TERMINAL_BLOCK,
         geom=rect(-5.0, -1.5, 5.0, 2.5) + [C(-3.0, 0.5, 0.8), C(0.0, 0.5, 0.8), C(3.0, 0.5, 0.8)],
     ),
     dict(
         name="EARTH", cls="Earth", attrs=A_EARTH,
         desc="Earth / ground: three shrinking bars",
+        pins=PINS_EARTH,
         geom=[L(0.0, 3.5, 0.0, 0.0), L(-3.0, 0.0, 3.0, 0.0),
               L(-2.0, -1.2, 2.0, -1.2), L(-1.0, -2.4, 1.0, -2.4)],
     ),
     dict(
         name="JUNCTION", cls="Junction", attrs=A_EARTH,
         desc="Junction dot (drawn where three or more wires meet)",
+        pins=PINS_NONE,
         geom=[C(0.0, 0.0, 1.0)],
     ),
     dict(
         name="PLC-DI", cls="PLC Digital Input", attrs=A_PLC,
         desc="PLC digital input module: body with two input arrows and pins",
+        pins=PINS_PLC_DI,
         geom=rect(-4.0, -3.0, 4.0, 3.0)
         + [P([(-5.0, 1.0), (-4.0, 1.0)]), P([(-5.0, -1.0), (-4.0, -1.0)]),
            T("DI", -1.2, 1.0, 1.2)],
@@ -241,6 +258,7 @@ SYMBOLS = [
     dict(
         name="PLC-DO", cls="PLC Digital Output", attrs=A_PLC,
         desc="PLC digital output module: body with two output arrows and pins",
+        pins=PINS_PLC_DO,
         geom=rect(-4.0, -3.0, 4.0, 3.0)
         + [P([(4.0, 1.0), (5.0, 1.0)]), P([(4.0, -1.0), (5.0, -1.0)]),
            T("DO", -1.2, 1.0, 1.2)],
@@ -267,6 +285,7 @@ SYMBOLS = [
     dict(
         name="CABLE_ENTRY", cls="Cable", attrs=A_DEVICE,
         desc="Cable entry: gland circle with a cable stub",
+        pins=PINS_CABLE_ENTRY,
         geom=[L(-5.0, 0.0, -2.0, 0.0), C(0.0, 0.0, 2.0), L(1.4, 1.4, 3.5, 3.5),
               L(0.0, -2.0, 0.0, -3.5)],
     ),
@@ -384,6 +403,7 @@ def build_symbol(entry):
     name = entry["name"]
     geom = scale_ops(entry["geom"], UNIT_SCALE)
     attrs = entry["attrs"]
+    pins = entry.get("pins", PINS_2TERM)
 
     doc = dxfio.DxfDocument()
     for op in geom:
@@ -407,8 +427,24 @@ def build_symbol(entry):
             )
         )
 
+    # Wire connection points sit ON the geometry (the end of a lead), and are
+    # invisible: they are electrical data, not text on the drawing.
+    for px, py, tag in pins:
+        doc.entities.append(
+            dxfio.DxfDocument.attdef(
+                tag=tag,
+                prompt=_prompt_for(tag),
+                default="",
+                height=height,
+                x=px * UNIT_SCALE,
+                y=py * UNIT_SCALE,
+                flags=1,
+            )
+        )
+
     sector = 0
-    return doc, (name, entry["cls"], "|".join(attrs), "1")
+    documented = attrs + [tag for _, _, tag in pins]
+    return doc, (name, entry["cls"], "|".join(documented), "1")
 
 
 PROMPTS = {

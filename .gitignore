@@ -50,6 +50,8 @@ import/
 tests/ecad/_probe*/
 tests/ecad/_work/
 reports/_tmp/
+# Symbol-preview cache the app writes beside the drawing folder
+.ecad/
 
 # macOS Finder metadata
 .DS_Store
