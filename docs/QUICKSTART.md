@@ -27,8 +27,11 @@ run `ELECLIST`, `ELECWIRELIST`, `ELECCABLELIST` and `ELECPANEL` to see the finis
 On launch the suite asks how you want to begin: **Drafting drawing** (plain CAD) or
 **Electrical drawing set**. The electrical path is a small setup panel: standard (IEC or
 NEC), sheet size, project/title/company/drawing number, drawn-by, number of sheets and the
-output folder. **Create** makes the sheet set from the bundled templates, fills the title
-block, writes the project file and opens the first sheet. `ELECSTART` reopens that chooser.
+output folder. **Browse…** opens the Windows folder picker, so the location is chosen rather
+than typed. **Create** makes the sheet set from the bundled templates, fills the title
+block, writes the project file and opens the first sheet. If Windows protects the chosen
+folder, the set is written to a writable fallback (the app's per-user folder, then temp) and
+the command line says where it went; `ELECSTART` reopens that chooser.
 
 ## 2. First schematic
 

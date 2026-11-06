@@ -11565,6 +11565,26 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::EcadCreate => self.create_electrical_set(),
+            Message::EcadBrowseFolder => {
+                let start = self.start_hub.folder_path();
+                Task::perform(
+                    async move {
+                        crate::io::pick_folder(
+                            crate::t!("Choose a folder for the drawing set").as_ref(),
+                            Some(start.as_path()),
+                        )
+                        .await
+                    },
+                    Message::EcadFolderPicked,
+                )
+            }
+            Message::EcadFolderPicked(folder) => {
+                if let Some(folder) = folder {
+                    self.start_hub.folder = folder.to_string_lossy().into_owned();
+                    self.start_hub.error = None;
+                }
+                Task::none()
+            }
 
             Message::CloseModal => {
                 if self.active_modal == Some(super::ModalKind::BlockLookup) {

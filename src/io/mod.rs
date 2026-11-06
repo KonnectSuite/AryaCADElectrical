@@ -243,6 +243,27 @@ pub async fn pick_layer_standard_path() -> Option<PathBuf> {
     Some(crate::sys::handle_path(&handle))
 }
 
+/// Pick a folder, starting at `start` when it is an existing directory. The
+/// browser build has no native folder picker, so it reports "cancelled".
+pub async fn pick_folder(title: &str, start: Option<&std::path::Path>) -> Option<PathBuf> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (title, start);
+        None
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut dialog = crate::sys::file_dialog().set_title(title);
+        if let Some(dir) = start {
+            if dir.is_dir() {
+                dialog = dialog.set_directory(dir);
+            }
+        }
+        let handle = dialog.pick_folder().await?;
+        Some(crate::sys::handle_path(&handle))
+    }
+}
+
 /// Pick where a set of layer mappings is written, or read back from.
 pub async fn pick_layer_mapping_path(save: bool) -> Option<PathBuf> {
     let dialog = crate::sys::file_dialog()

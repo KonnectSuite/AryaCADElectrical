@@ -168,12 +168,67 @@ impl StartHub {
     }
 }
 
+/// Where a new set goes when the folder box is empty: the user's Documents
+/// folder, else the per-user application folder. No probe here — `Create`
+/// falls back to a writable place when Windows protects the chosen folder.
 fn default_folder() -> String {
-    let base = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("Documents").join("AryaCAD").join("Project1").to_string_lossy().into_owned()
+    if let Some(documents) = crate::sys::documents_dir() {
+        return documents
+            .join("AryaCAD")
+            .join("Projects")
+            .join("Project1")
+            .to_string_lossy()
+            .into_owned();
+    }
+    if let Some(config) = crate::config::config_dir() {
+        return config.join("Projects").join("Project1").to_string_lossy().into_owned();
+    }
+    "Project1".to_string()
+}
+
+/// Fallback locations tried when the chosen folder is protected by Windows:
+/// the per-user application folder, then the temp folder, then the current
+/// directory. Duplicates of the requested folder are skipped.
+fn fallback_folders(requested: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(config) = crate::config::config_dir() {
+        candidates.push(config.join("Projects").join("Project1"));
+    }
+    candidates.push(std::env::temp_dir().join("AryaCAD").join("Project1"));
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("Project1"));
+    }
+    candidates.retain(|path| path != requested);
+    candidates
+}
+
+/// Create `requested`, or — if Windows denies access there — the first
+/// writable fallback. Returns the folder actually used plus a note when the
+/// requested folder could not be used.
+fn prepare_folder(requested: &Path) -> Result<(PathBuf, Option<String>), String> {
+    match std::fs::create_dir_all(requested) {
+        Ok(()) => return Ok((requested.to_path_buf(), None)),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let mut denied = error;
+            for candidate in fallback_folders(requested) {
+                match std::fs::create_dir_all(&candidate) {
+                    Ok(()) => {
+                        return Ok((
+                            candidate.clone(),
+                            Some(format!(
+                                "{} is protected ({denied}); the set was created in {} instead.",
+                                requested.display(),
+                                candidate.display()
+                            )),
+                        ));
+                    }
+                    Err(error) => denied = error,
+                }
+            }
+            Err(format!("cannot create {}: {denied}", requested.display()))
+        }
+        Err(error) => Err(format!("cannot create {}: {error}", requested.display())),
+    }
 }
 
 /// Find the shipped `templates/` folder: beside the executable, a few levels up
@@ -208,8 +263,10 @@ fn stem(text: &str) -> String {
 }
 
 /// Create the drawing set described by `hub`: one DXF per sheet, titled, plus
-/// the `project.eprj` that makes the folder an electrical project.
-pub fn build_drawing_set(hub: &StartHub) -> Result<(PathBuf, Vec<PathBuf>), String> {
+/// the `project.eprj` that makes the folder an electrical project. The third
+/// element is a note when Windows protected the requested folder and the set
+/// went to a fallback location instead.
+pub fn build_drawing_set(hub: &StartHub) -> Result<(PathBuf, Vec<PathBuf>, Option<String>), String> {
     let template = hub
         .template_path()
         .ok_or_else(|| format!("template {} / {} was not found beside the executable", hub.standard.label(), hub.size().label))?;
@@ -221,9 +278,7 @@ pub fn build_drawing_set(hub: &StartHub) -> Result<(PathBuf, Vec<PathBuf>), Stri
     if !(1..=200).contains(&total) {
         return Err("sheet count must be between 1 and 200".to_string());
     }
-    let folder = hub.folder_path();
-    std::fs::create_dir_all(&folder)
-        .map_err(|error| format!("cannot create {}: {error}", folder.display()))?;
+    let (folder, note) = prepare_folder(&hub.folder_path())?;
 
     let stem = stem(&hub.drawing);
     let mut files = Vec::new();
@@ -232,9 +287,12 @@ pub fn build_drawing_set(hub: &StartHub) -> Result<(PathBuf, Vec<PathBuf>), Stri
             .map_err(|error| format!("cannot read {}: {error}", template.display()))?;
         patch_title_block(&mut document, hub, number, total);
         let path = folder.join(format!("{stem}-{number:02}.dxf"));
-        crate::io::save(&document, &path)
-            .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-        files.push(path);
+        match crate::io::save(&document, &path) {
+            Ok(()) => files.push(path),
+            // The folder was usable a moment ago but is not now (catalog policy,
+            // AV, disk) — surface it rather than pretending the set is whole.
+            Err(error) => return Err(format!("cannot write {}: {error}", path.display())),
+        }
     }
 
     let project = folder.join("project.eprj");
@@ -247,7 +305,7 @@ pub fn build_drawing_set(hub: &StartHub) -> Result<(PathBuf, Vec<PathBuf>), Stri
     std::fs::write(&project, text)
         .map_err(|error| format!("cannot write {}: {error}", project.display()))?;
     register_project(&project, &folder);
-    Ok((project, files))
+    Ok((project, files, note))
 }
 
 fn register_project(project: &Path, folder: &Path) {
@@ -335,7 +393,7 @@ impl OpenCADStudio {
     /// `Create` in the wizard: build the set, load the first sheet, and report.
     pub(super) fn create_electrical_set(&mut self) -> Task<Message> {
         match build_drawing_set(&self.start_hub) {
-            Ok((project, files)) => {
+            Ok((project, files, note)) => {
                 self.start_hub.step = HubStep::Configure;
                 self.start_hub.error = None;
                 self.active_modal = None;
@@ -343,6 +401,15 @@ impl OpenCADStudio {
                     .parent()
                     .map(|path| path.display().to_string())
                     .unwrap_or_default();
+                // Remember where the set actually landed: if Windows protected the
+                // requested folder this is the fallback, so the next wizard opens
+                // on a folder that works.
+                if !folder.is_empty() {
+                    self.start_hub.folder = folder.clone();
+                }
+                if let Some(note) = note {
+                    self.command_line.push_output(&note);
+                }
                 self.command_line.push_output(&format!(
                     "ECAD: {} sheet(s) created in {folder} (project {}).",
                     files.len(),
@@ -401,7 +468,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&folder);
         hub.folder = folder.to_string_lossy().into_owned();
 
-        let (project, files) = build_drawing_set(&hub).expect("set builds");
+        let (project, files, note) = build_drawing_set(&hub).expect("set builds");
+        assert!(note.is_none(), "a writable folder must not fall back");
         assert_eq!(files.len(), 2);
         assert!(files[0].is_file() && files[1].is_file());
         let text = std::fs::read_to_string(&project).expect("project file");

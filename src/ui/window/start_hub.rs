@@ -160,12 +160,19 @@ pub(crate) fn setup_view<'a>(hub: &'a StartHub, sizing: ModalSizing) -> Element<
             }),
         ]
         .spacing(12),
-        field(
-            "Folder for the drawing set",
-            &hub.folder,
-            "C:\\Users\\...\\Documents\\AryaCAD\\Project1",
-            |value| Message::EcadFieldChanged(EcadField::Folder, value),
-        ),
+        row![
+            field(
+                "Folder for the drawing set",
+                &hub.folder,
+                "C:\\Users\\...\\Documents\\AryaCAD\\Project1",
+                |value| Message::EcadFieldChanged(EcadField::Folder, value),
+            ),
+            button("Browse\u{2026}")
+                .on_press(Message::EcadBrowseFolder)
+                .padding([8, 12]),
+        ]
+        .spacing(8)
+        .align_y(iced::Bottom),
         Space::new().height(4),
         match hub.template_path() {
             Some(path) => text(format!("Template: {}", path.display())).size(11),

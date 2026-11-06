@@ -944,3 +944,26 @@ list, resolved template path and fields, and the start page keeps its "Electrica
 set" button. Screenshots: `docs\screenshots\start-hub-chooser.png` and
 `docs\screenshots\start-hub-wizard.png`. Rebuilt exe, then smoke 84/84 again.
 
+
+## Round 20 — folder browser and resilient drawing-set creation
+
+The new-set wizard's folder box gained **Browse…**, which opens the Windows folder picker
+(`rfd` async `pick_folder`) and writes the chosen directory back into the field, so the
+location is selected instead of typed. `crate::io::pick_folder(title, start)` owns the dialog
+(cancelled or unavailable on the web build); the new `EcadBrowseFolder` / `EcadFolderPicked`
+messages carry the request and the result, and a cancelled dialog changes nothing.
+
+Creation no longer dead-ends when Windows protects the chosen folder. `prepare_folder` tries
+the typed folder first and, on a permission denial, walks the per-user application folder,
+the temp folder and the current directory; the set is written to the first writable one and
+the command line reports `"<chosen> is protected (<error>); the set was created in <folder>
+instead."`. The wizard then remembers the folder that actually worked. The default stays
+`Documents\AryaCAD\Projects\Project1` (no probing at startup), so the first run is
+predictable. The wizard also states the folder failure reason without losing the entered
+values.
+
+Verified: `cargo check --release` clean; `cargo test --release --lib elec_start` 2/2 including
+a full two-sheet set build with title-block values and `project.eprj`; smoke 84/84 on the
+rebuilt exe; portable folder rebuilt (79 files / 151.3 MB). A wizard-created
+`AR-0001-01.dxf` + `project.eprj` pair was confirmed on disk. Screenshot:
+`docs\screenshots\wizard-browse-folder.png`.

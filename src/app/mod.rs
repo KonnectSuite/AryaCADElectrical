@@ -3484,6 +3484,10 @@ pub enum Message {
     EcadBack,
     /// Start hub: create the drawing set and open its first sheet.
     EcadCreate,
+    /// Start hub: open the folder browser for the drawing-set folder.
+    EcadBrowseFolder,
+    /// Start hub: the folder browser returned a directory (None = cancelled).
+    EcadFolderPicked(Option<std::path::PathBuf>),
     /// Set the default type/version used when first saving a new drawing.
     DefaultSaveFormatChanged(String),
     /// Select one of Iced's built-in themes or the editable Custom theme.
