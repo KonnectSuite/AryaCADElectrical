@@ -1,4 +1,4 @@
-﻿//! Click-to-place for library symbols.
+//! Click-to-place for library symbols.
 //!
 //! The palette can only say *what* to insert; this command asks *where*. Everything that
 //! needs the app - the library's attribute template, the next free tag, the catalogue -
@@ -16,6 +16,10 @@ use crate::command::{CadCommand, CmdResult};
 pub struct PlacedAttribute {
     pub tag: String,
     pub value: String,
+    /// Where the block's attribute definition sits, in symbol units. When present the
+    /// attribute is placed there (scaled with the insert) instead of stacked under the
+    /// insertion point - that is what keeps a custom module's pin attributes on its edges.
+    pub offset: Option<(f64, f64)>,
 }
 
 pub struct PlaceSymbolCommand {
@@ -56,8 +60,14 @@ impl PlaceSymbolCommand {
             let mut entity =
                 codec::entities::AttributeEntity::new(attribute.tag.clone(), attribute.value.clone());
             entity.height = self.height;
-            entity.insertion_point =
-                Vector3::new(at.x, at.y - self.height - row as f64 * step, at.z);
+            entity.insertion_point = match attribute.offset {
+                Some((x, y)) => Vector3::new(
+                    at.x + x * self.scale,
+                    at.y + y * self.scale,
+                    at.z,
+                ),
+                None => Vector3::new(at.x, at.y - self.height - row as f64 * step, at.z),
+            };
             entity.alignment_point = entity.insertion_point;
             insert.attributes.push(entity);
         }
@@ -104,10 +114,12 @@ mod tests {
                 PlacedAttribute {
                     tag: "TAG1".to_string(),
                     value: "-K7".to_string(),
+                    offset: None,
                 },
                 PlacedAttribute {
                     tag: "CAT".to_string(),
                     value: "3RT".to_string(),
+                    offset: None,
                 },
             ],
             2.5,
@@ -128,6 +140,36 @@ mod tests {
             _ => panic!("expected a CommitAndExit(Insert) from a picked point"),
         }
         assert!(command.prompt().contains("placed"));
+    }
+
+    #[test]
+    fn definition_offsets_are_scaled_with_the_symbol() {
+        let mut command = PlaceSymbolCommand::new(
+            "IO16".to_string(),
+            vec![
+                PlacedAttribute {
+                    tag: "TAG1".to_string(),
+                    value: "-A1".to_string(),
+                    offset: None,
+                },
+                PlacedAttribute {
+                    tag: "X1TERM01".to_string(),
+                    value: String::new(),
+                    offset: Some((2.0, 1.0)),
+                },
+            ],
+            0.4,
+            25.4,
+        );
+        match command.on_point(DVec3::new(10.0, 20.0, 0.0)) {
+            CmdResult::CommitAndExit(EntityType::Insert(insert)) => {
+                let pin = &insert.attributes[1];
+                assert_eq!(pin.tag, "X1TERM01");
+                assert!((pin.insertion_point.x - (10.0 + 2.0 * 25.4)).abs() < 1e-9);
+                assert!((pin.insertion_point.y - (20.0 + 1.0 * 25.4)).abs() < 1e-9);
+            }
+            _ => panic!("expected a CommitAndExit(Insert) from a picked point"),
+        }
     }
 
     #[test]

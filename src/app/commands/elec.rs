@@ -77,6 +77,10 @@ struct LibraryEntry {
     label_height: f64,
     /// Scale the source drawings insert this block at; 1.0 when they use none.
     scale: f64,
+    /// Attribute definitions recorded in the block, as (tag, x, y) in symbol units.
+    /// `ELECPLACE` uses these so pins and labels land where the symbol author drew them
+    /// instead of stacking on the insertion point.
+    attribute_offsets: Vec<(String, f64, f64)>,
 }
 
 /// Folder the last `ELECPROJECT` scanned, so module addressing can continue the
@@ -184,6 +188,7 @@ fn read_library_manifest(
                 // Measured once the geometry is loaded, not by the manifest reader.
                 label_height: 0.0,
                 scale,
+                attribute_offsets: Vec::new(),
             },
         );
     }
@@ -1324,7 +1329,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                     "ELECLIB <folder>              load a folder of symbol DXFs",
                     "ELECPALETTE                   browse the loaded symbols",
                     "ELECINSERT <symbol>           place a symbol",
-                    "ELECMAKESYMBOL <name>         turn the selection into a symbol",
+                    "ELECMAKESYMBOL <name> [CLASS=x] [PINS=n]  turn the selection into a symbol",
                     "ELECSETATTR <tag> NAME=value  edit a device's attributes",
                 ],
             ),
@@ -3127,6 +3132,9 @@ fn class_for_reference(tag: &str) -> &'static str {
 
         let mut loaded = 0usize;
         let mut skipped = 0usize;
+        let mut offset_points = 0usize;
+        let mut measured_offsets: std::collections::BTreeMap<String, Vec<(String, f64, f64)>> =
+            std::collections::BTreeMap::new();
         let mut failed: Vec<String> = Vec::new();
         let manifest = read_library_manifest(directory);
 
@@ -3209,12 +3217,42 @@ fn class_for_reference(tag: &str) -> &'static str {
                             entities.push(codec::EntityType::AttributeDefinition(definition));
                         }
                     }
+                    // Read the attribute definition points from the entity list that is about
+                    // to become the block: looking them up by handle afterwards depends on
+                    // block-definition indexing that the loader does not maintain here.
+                    let offsets: Vec<(String, f64, f64)> = entities
+                        .iter()
+                        .filter_map(|entity| match entity {
+                            codec::EntityType::AttributeDefinition(definition) => {
+                                let tag = definition.tag.trim();
+                                if tag.is_empty() {
+                                    None
+                                } else {
+                                    Some((
+                                        tag.to_string(),
+                                        definition.insertion_point.x,
+                                        definition.insertion_point.y,
+                                    ))
+                                }
+                            }
+                            _ => None,
+                        })
+                        .collect();
                     match self.tabs[i].scene.define_block_from_owned_entities(
                         entities,
                         &stem,
                         glam::DVec3::ZERO,
                     ) {
-                        Ok(_) => loaded += 1,
+                        Ok(_) => {
+                            loaded += 1;
+                            offset_points += offsets.len();
+                            // Remember where the block's own attribute definitions sit, so
+                            // ELECPLACE can put pins on the symbol's edges instead of
+                            // stacking every attribute on the insertion point. The catalogue
+                            // index is only filled after the whole folder has loaded, so keep
+                            // these aside and merge them below.
+                            measured_offsets.insert(stem.to_ascii_uppercase(), offsets);
+                        }
                         Err(error) => failed.push(format!("{stem}: {error}")),
                     }
                 }
@@ -3228,7 +3266,17 @@ fn class_for_reference(tag: &str) -> &'static str {
         remember_library(directory);
         let manifest_count = manifest.len();
         if let Ok(mut guard) = library_index().write() {
-            *guard = manifest;
+            // The manifest is the catalogue's source of truth for class/attributes/scale,
+            // but the definition points were measured while the blocks were loaded above:
+            // keep them instead of replacing the whole index with fresh entries.
+            for (symbol, mut entry) in manifest {
+                if let Some(offsets) = measured_offsets.remove(&symbol) {
+                    entry.attribute_offsets = offsets;
+                } else if let Some(existing) = guard.get(&symbol) {
+                    entry.attribute_offsets = existing.attribute_offsets.clone();
+                }
+                guard.insert(symbol, entry);
+            }
         }
 
         // Measure each symbol so its attribute text suits its own size: a drive and a
@@ -3268,7 +3316,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             .map(|row| row.2.len())
             .sum();
         let summary = format!(
-            "ELECLIB: loaded {loaded} symbol(s) from {folder}; {skipped} already in this drawing, {} failed, {manifest_count} in the catalogue, {preview_segments} preview segment(s).",
+            "ELECLIB: loaded {loaded} symbol(s) from {folder}; {skipped} already in this drawing, {} failed, {manifest_count} in the catalogue, {offset_points} attribute definition point(s), {preview_segments} preview segment(s).",
             failed.len()
         );
         self.command_line.push_output(&summary);
@@ -3387,20 +3435,25 @@ fn class_for_reference(tag: &str) -> &'static str {
         let tag_refs: Vec<&str> = tags.iter().map(String::as_str).collect();
         let new_tag = ::elec::next_tag(&tag_refs, &class);
 
-        let mut template: Vec<String> = library_index()
+        let entry = library_index()
             .read()
             .ok()
-            .and_then(|index| {
-                index
-                    .get(&block.to_ascii_uppercase())
-                    .map(|entry| entry.attributes.clone())
-            })
+            .and_then(|index| index.get(&block.to_ascii_uppercase()).cloned());
+        let mut template: Vec<String> = entry
+            .as_ref()
+            .map(|entry| entry.attributes.clone())
             .filter(|attributes| !attributes.is_empty())
             .unwrap_or_else(|| vec!["TAG1".to_string(), "CAT".to_string()]);
         if !template.iter().any(|tag| is_tag_attribute(tag)) {
             template.insert(0, "TAG1".to_string());
         }
 
+        // Attribute definitions recorded in the block travel with the symbol; placing the
+        // insert puts each attribute on its own definition point instead of stacking them.
+        let offsets = entry
+            .as_ref()
+            .map(|entry| entry.attribute_offsets.clone())
+            .unwrap_or_default();
         let attributes: Vec<PlacedAttribute> = template
             .iter()
             .map(|tag| PlacedAttribute {
@@ -3410,20 +3463,19 @@ fn class_for_reference(tag: &str) -> &'static str {
                 } else {
                     String::new()
                 },
+                offset: offsets
+                    .iter()
+                    .find(|(defined, _, _)| defined.eq_ignore_ascii_case(tag))
+                    .map(|(_, x, y)| (*x, *y)),
             })
             .collect();
 
         self.active_modal = None;
         // Label height comes from the symbol's own size, measured when the library loaded;
         // the scale is the one the source drawings insert it at.
-        let (label_height, symbol_scale) = library_index()
-            .read()
-            .ok()
-            .and_then(|index| {
-                index
-                    .get(&block.to_ascii_uppercase())
-                    .map(|entry| (entry.label_height, entry.scale))
-            })
+        let (label_height, symbol_scale) = entry
+            .as_ref()
+            .map(|entry| (entry.label_height, entry.scale))
             .unwrap_or((0.125, 1.0));
         // The measured height is in symbol units; the sheet sees them through the
         // library scale, so the text must be scaled with the geometry.
@@ -3723,14 +3775,27 @@ fn class_for_reference(tag: &str) -> &'static str {
         }
     }
 
-    /// `ELECMAKESYMBOL <name>` turns the selected geometry into a reusable symbol.
+    /// `ELECMAKESYMBOL <name> [CLASS=<class>]` turns the selected geometry into a symbol.
     ///
     /// The block is defined in this drawing and written to the loaded library as its own
     /// DXF, so it can be inserted into any drawing afterwards - that is what makes it a
     /// module rather than a one-off. The geometry is not consumed: the originals stay where
     /// they were, because deleting a user's work on a naming typo is not recoverable in a
     /// way they would thank you for.
-    pub(super) fn elec_make_symbol(&mut self, i: usize, name: &str) -> Task<Message> {
+    ///
+    /// Attribute definitions that are already part of the selection are kept, in order, and
+    /// their tags are written to the library manifest as well. That is what lets a custom
+    /// IO module, drive or switch declare its own `X1TERM01`-style pins: the tags travel
+    /// with the symbol, so `ELECLIB` recreates the attributes and the netlist can find the
+    /// pins after a reload. The four component attributes are only added when the selection
+    /// does not already define them.
+    pub(super) fn elec_make_symbol(
+        &mut self,
+        i: usize,
+        name: &str,
+        class: Option<&str>,
+        pins: Option<usize>,
+    ) -> Task<Message> {
         const DEFAULT_HEIGHT: f64 = 2.0;
 
         let name = name.trim();
@@ -3773,23 +3838,38 @@ fn class_for_reference(tag: &str) -> &'static str {
             return Task::none();
         };
 
-        // Add the attribute definitions the electrical layer needs, sized to the symbol so
-        // the tag does not dwarf the drawing.
+        // Keep the attribute definitions the author already drew; only add the four
+        // component attributes that are missing. Every tag, including the pin attributes,
+        // is written to the library manifest so a reload recreates the same set.
+        let mut attributes = authored_attribute_tags(&entities);
+        let authored_count = attributes.len();
+        for required in ["TAG1", "CAT", "MFG", "DESC1"] {
+            if !attributes
+                .iter()
+                .any(|tag| tag.eq_ignore_ascii_case(required))
+            {
+                attributes.push(required.to_string());
+            }
+        }
         let span = (max_x - min_x).max(max_y - min_y);
         let height = (span / 8.0).clamp(1.0, 4.0).min(if span > 0.0 { span } else { 1.0 });
         let mut with_attributes = entities.clone();
-        for (row, (tag, prompt)) in [
+        let mut row = 0usize;
+        for (tag, prompt) in [
             ("TAG1", "Tag"),
             ("CAT", "Part number"),
             ("MFG", "Manufacturer"),
             ("DESC1", "Description"),
-        ]
-        .iter()
-        .enumerate()
-        {
+        ] {
+            if attributes[..authored_count]
+                .iter()
+                .any(|authored| authored.eq_ignore_ascii_case(tag))
+            {
+                continue;
+            }
             let mut definition = codec::entities::AttributeDefinition::new(
-                (*tag).to_string(),
-                (*prompt).to_string(),
+                tag.to_string(),
+                prompt.to_string(),
                 String::new(),
             );
             definition.height = height;
@@ -3800,6 +3880,43 @@ fn class_for_reference(tag: &str) -> &'static str {
             );
             definition.alignment_point = definition.insertion_point;
             with_attributes.push(codec::EntityType::AttributeDefinition(definition));
+            row += 1;
+        }
+
+        // PINS= writes the invisible terminal attributes a module needs. They are spread
+        // evenly down the symbol's right (X1) and left (X2) edges, which is the convention
+        // the starter symbols use (terminals on both sides), and ELECLIB records their
+        // definition points so the netlist anchors each wire to the edge it reaches.
+        // `n` is the total pin count: the odd pin goes to the right edge.
+        if let Some(count) = pins {
+            let count = count.clamp(1, 128);
+            let span_y = (max_y - min_y).max(1.0);
+            let pin_height = (span_y / (count as f64 * 3.0)).clamp(0.1, 2.5);
+            let right = count.div_ceil(2);
+            let left = count / 2;
+            for (side, x, on_side) in [("X1", max_x, right), ("X2", min_x, left)] {
+                for index in 0..on_side {
+                    let y = min_y + (index as f64 + 0.5) * span_y / on_side as f64;
+                    let tag = format!("{side}TERM{:02}", index + 1);
+                    if attributes
+                        .iter()
+                        .any(|existing| existing.eq_ignore_ascii_case(&tag))
+                    {
+                        continue;
+                    }
+                    let mut definition = codec::entities::AttributeDefinition::new(
+                        tag.clone(),
+                        "Terminal".to_string(),
+                        String::new(),
+                    );
+                    definition.height = pin_height;
+                    definition.flags.invisible = true;
+                    definition.insertion_point = codec::types::Vector3::new(x, y, 0.0);
+                    definition.alignment_point = definition.insertion_point;
+                    with_attributes.push(codec::EntityType::AttributeDefinition(definition));
+                    attributes.push(tag);
+                }
+            }
         }
         let _ = DEFAULT_HEIGHT;
 
@@ -3842,7 +3959,8 @@ fn class_for_reference(tag: &str) -> &'static str {
                 }
             }
             if ok && crate::io::save(&document, &path).is_ok() {
-                let tags = "TAG1|CAT|MFG|DESC1";
+                let class = class.map(str::trim).filter(|value| !value.is_empty()).unwrap_or("Symbol");
+                let tags = attributes.join("|");
                 let manifest = folder.join("library.tsv");
                 let mut text = std::fs::read_to_string(&manifest).unwrap_or_else(|_| {
                     "symbol\tclass\tattributes\tsheets\n".to_string()
@@ -3850,7 +3968,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                 if !text.ends_with('\n') {
                     text.push('\n');
                 }
-                text.push_str(&format!("{safe}\tSymbol\t{tags}\t1\n"));
+                text.push_str(&format!("{safe}\t{class}\t{tags}\t1\n"));
                 let _ = std::fs::write(&manifest, text);
                 written = Some(path.display().to_string());
             }
@@ -5963,9 +6081,27 @@ fn class_for_reference(tag: &str) -> &'static str {
                     }
                 }
                 if let Some(argument) = cmd.strip_prefix("ELECMAKESYMBOL ") {
-                    let name = argument.trim();
+                    let mut words = Vec::new();
+                    let mut class = None;
+                    let mut pins = None;
+                    for word in argument.split_whitespace() {
+                        if let Some(value) = word
+                            .strip_prefix("CLASS=")
+                            .or_else(|| word.strip_prefix("class="))
+                        {
+                            class = Some(value);
+                        } else if let Some(value) = word
+                            .strip_prefix("PINS=")
+                            .or_else(|| word.strip_prefix("pins="))
+                        {
+                            pins = value.parse::<usize>().ok();
+                        } else {
+                            words.push(word);
+                        }
+                    }
+                    let name = words.join(" ");
                     if !name.is_empty() {
-                        return Some(self.elec_make_symbol(i, name));
+                        return Some(self.elec_make_symbol(i, &name, class, pins));
                     }
                 }
                 if let Some(argument) = cmd.strip_prefix("ELECSETATTR ") {
@@ -6414,6 +6550,26 @@ fn trailing_number(tag: &str) -> Option<u32> {
     }
 }
 
+/// Attribute tags the author already put in the selected geometry, in drawing order.
+///
+/// `ELECMAKESYMBOL` writes this list into `library.tsv`, so pin declarations such as
+/// `X1TERM01` survive the round trip through the library. Duplicates are folded
+/// case-insensitively; the four standard component attributes are added by the caller.
+fn authored_attribute_tags(entities: &[codec::EntityType]) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    for entity in entities {
+        let codec::EntityType::AttributeDefinition(definition) = entity else {
+            continue;
+        };
+        let tag = definition.tag.trim();
+        if tag.is_empty() || tags.iter().any(|existing| existing.eq_ignore_ascii_case(tag)) {
+            continue;
+        }
+        tags.push(tag.to_string());
+    }
+    tags
+}
+
 /// True when an attribute carries the device tag.
 fn is_tag_attribute(tag: &str) -> bool {
     matches!(
@@ -6640,3 +6796,28 @@ fn xml_escape(text: &str) -> String {
 
 
 
+
+#[cfg(test)]
+mod elec_make_symbol_tests {
+    use super::*;
+
+    fn attribute(tag: &str) -> codec::EntityType {
+        codec::EntityType::AttributeDefinition(codec::entities::AttributeDefinition::new(
+            tag.to_string(),
+            "Attribute".to_string(),
+            String::new(),
+        ))
+    }
+
+    #[test]
+    fn authored_attribute_tags_keep_pin_attributes_in_drawing_order() {
+        let tags = authored_attribute_tags(&[attribute("TAG1"), attribute("X1TERM01")]);
+        assert_eq!(tags, vec!["TAG1".to_string(), "X1TERM01".to_string()]);
+    }
+
+    #[test]
+    fn authored_attribute_tags_fold_duplicates_and_blank_tags() {
+        let tags = authored_attribute_tags(&[attribute("tag1"), attribute("TAG1"), attribute("  ")]);
+        assert_eq!(tags, vec!["tag1".to_string()]);
+    }
+}

@@ -592,9 +592,15 @@ def run_makesymbol(baseline):
     code, text = run(baseline, [baseline, "--each", batch2, sheet2], "reload")
     check("reload batch exits 0", code == 0, f"exit {code}")
     match = re.search(r"ELECLIB: loaded (\d+) symbol", text)
+    # The copied starter library count grows whenever symbols are added to
+    # library\starter; ELECMAKESYMBOL has already written its own DXF into the
+    # copy, so the expected count is simply the folder's DXF count.
+    expected_reloaded = len(
+        [name for name in os.listdir(lib_copy) if name.lower().endswith(".dxf")]
+    )
     check("the rewritten library reloads with the new symbol",
-          match is not None and int(match.group(1)) == 28,
-          f"loaded {match.group(1) if match else '?'} of 28")
+          match is not None and int(match.group(1)) == expected_reloaded,
+          f"loaded {match.group(1) if match else '?'} of {expected_reloaded}")
     drawing2 = dxfio.load(sheet2)
     placed = insert_of_block(drawing2, "SMOKE_SYM")
     check("the authored symbol can be placed with ELECINSERT",

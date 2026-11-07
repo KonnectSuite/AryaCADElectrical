@@ -63,6 +63,10 @@ DEFAULT_OUT = os.path.join(ROOT, "library", "starter")
 # 10-unit design canvas -> 1-unit drawing symbols (see "Scale" above).
 UNIT_SCALE = 0.1
 
+# The symbols stay ~1 drawing unit (the harvested client convention), so on the
+# millimetre sheets the manifest asks ``ELECLIB``/``ELECPLACE`` for 25.4 x scale.
+LIBRARY_SCALE = 25.4
+
 HEADER = "symbol\tclass\tattributes\tscale"
 
 # Attribute sets.  ``field_for_attribute`` in elec.rs recognises the well-known
@@ -87,6 +91,27 @@ PINS_PLC_DO = [(5.0, 1.0, "X1TERM01"), (5.0, -1.0, "X1TERM02")]
 PINS_TERMINAL_BLOCK = [(-5.0, 0.5, "X4TERM01"), (0.0, 0.5, "X4TERM02"), (5.0, 0.5, "X1TERM03")]
 PINS_CABLE_ENTRY = [(-5.0, 0.0, "X4TERM01")]
 PINS_NONE = []
+PINS_NETWORK_SWITCH = [
+    (-5.0, 1.0, "X4TERM01"),
+    (-5.0, -1.0, "X4TERM02"),
+    (5.0, 1.0, "X1TERM01"),
+    (5.0, -1.0, "X1TERM02"),
+]
+PINS_HMI = [
+    (-5.0, 1.5, "X4TERM01"),
+    (-5.0, -1.5, "X4TERM02"),
+    (5.0, 0.0, "X1TERM01"),
+]
+PINS_IO_MODULE = [
+    (-5.0, 3.0, "X4TERM01"),
+    (-5.0, 1.0, "X4TERM02"),
+    (-5.0, -1.0, "X4TERM03"),
+    (-5.0, -3.0, "X4TERM04"),
+    (5.0, 3.0, "X1TERM01"),
+    (5.0, 1.0, "X1TERM02"),
+    (5.0, -1.0, "X1TERM03"),
+    (5.0, -3.0, "X1TERM04"),
+]
 
 
 def L(x1, y1, x2, y2):
@@ -306,6 +331,34 @@ SYMBOLS = [
         geom=leads(inner=1.0) + rect(-1.0, -2.0, 3.0, 2.0)
         + [L(1.5, 2.0, 1.5, 3.5), L(0.0, -2.0, 0.0, -3.0)],
     ),
+    dict(
+        name="NETWORK_SWITCH", cls="Network Switch", attrs=A_DEVICE,
+        desc="Managed Ethernet switch: body with four port leads",
+        pins=PINS_NETWORK_SWITCH,
+        geom=rect(-3.0, -2.5, 3.0, 2.5)
+        + [L(-5.0, 1.0, -3.0, 1.0), L(-5.0, -1.0, -3.0, -1.0),
+           L(3.0, 1.0, 5.0, 1.0), L(3.0, -1.0, 5.0, -1.0),
+           T("SW", -1.3, -0.7, 1.2)],
+    ),
+    dict(
+        name="HMI", cls="HMI", attrs=A_DEVICE,
+        desc="Operator panel: screen body with power and network leads",
+        pins=PINS_HMI,
+        geom=rect(-3.0, -4.0, 3.0, 4.0) + rect(-2.2, -2.8, 2.2, 2.2)
+        + [L(-5.0, 1.5, -3.0, 1.5), L(-5.0, -1.5, -3.0, -1.5),
+           L(3.0, 0.0, 5.0, 0.0), T("HMI", -1.8, -1.4, 1.2)],
+    ),
+    dict(
+        name="IO_MODULE", cls="IO Module", attrs=A_DEVICE,
+        desc="Field I/O module: eight terminals on a slim body",
+        pins=PINS_IO_MODULE,
+        geom=rect(-3.5, -4.0, 3.5, 4.0)
+        + [L(-5.0, 3.0, -3.5, 3.0), L(-5.0, 1.0, -3.5, 1.0),
+           L(-5.0, -1.0, -3.5, -1.0), L(-5.0, -3.0, -3.5, -3.0),
+           L(3.5, 3.0, 5.0, 3.0), L(3.5, 1.0, 5.0, 1.0),
+           L(3.5, -1.0, 5.0, -1.0), L(3.5, -3.0, 5.0, -3.0),
+           T("I/O", -1.5, -0.9, 1.2)],
+    ),
 ]
 
 
@@ -444,7 +497,7 @@ def build_symbol(entry):
 
     sector = 0
     documented = attrs + [tag for _, _, tag in pins]
-    return doc, (name, entry["cls"], "|".join(documented), "1")
+    return doc, (name, entry["cls"], "|".join(documented), str(LIBRARY_SCALE))
 
 
 PROMPTS = {

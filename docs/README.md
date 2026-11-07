@@ -66,9 +66,13 @@ a themed table. The command line still receives the same text, so scripts keep w
 - **Templates** — fifteen ready-to-use sheets: IEC A4–A0 and B1, NEC ANSI A–E and Legal,
   each with a frame, zone references, revision table, projection symbol and a real title
   block.
-- **Symbols and devices** — a local symbol library (`library/starter`, `library`) with
-  preview, insert-and-place and automatic tagging. Symbols carry pin attributes so
-  connectivity reaches `-K1:2` level, not just "this wire touches that block".
+- **Symbols and devices** — a local symbol library (`library/starter`, 30 symbols including
+  PLC I/O, VFDs, network switches, HMIs and field I/O modules, plus `library`) with preview,
+  insert-and-place and automatic tagging. Symbols carry pin attributes so connectivity
+  reaches `-K1:2` level, not just "this wire touches that block". Custom modules come from
+  `ELECMAKESYMBOL <name> CLASS=… PINS=n` — the pins are written onto the symbol's edges and
+  the symbol joins the same palette and reports. See
+  [QUICKSTART §10](QUICKSTART.md#10-custom-blocks-symbols-and-modules).
 - **Wiring** — drawn conductors become a netlist with junctions and terminal bridges;
   device pins are labelled, wires can be numbered, and unconnected pins are reported.
 - **Documentation output** — component and terminal lists, a bill of material that can be
