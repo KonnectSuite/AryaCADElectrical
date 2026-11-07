@@ -1280,6 +1280,29 @@ def run_uniqueness_scope(binary):
     check("numbering by segment labels each conductor",
           labels == ["1", "2", "3"], f"{labels}")
 
+def run_export(binary):
+    """ELECEXPORT publishes every project sheet, converted to the asked format."""
+    print("\n-- export --")
+    folder = os.path.join(WORK, "export_src")
+    os.makedirs(folder, exist_ok=True)
+    first = blank_drawing(os.path.join(folder, "E001.dxf"))
+    blank_drawing(os.path.join(folder, "E002.dxf"))
+    out = os.path.join(WORK, "export_out")
+    batch = write_inline_batch("export_batch.txt", [
+        f"ELECPROJECT {folder}",
+        f"ELECEXPORT {out} dwg",
+        f"SAVEAS {first}",
+    ])
+    code, text = run(binary, [binary, "--each", batch, first], "export")
+    check("ELECEXPORT reports the sheets it published",
+          "ELECEXPORT: 2 sheet(s) ->" in text, text.strip().splitlines()[-1] if text.strip() else "")
+    published = sorted(os.listdir(out)) if os.path.isdir(out) else []
+    check("ELECEXPORT wrote one DWG per project sheet",
+          published == ["E001.dwg", "E002.dwg"], f"{published}")
+    check("the published DWGs are real files",
+          all(os.path.getsize(os.path.join(out, name)) > 1024 for name in published),
+          "")
+
 def run_machine_files():
     section("14. the machine-readable artifacts")
     # WD_M profile
@@ -1399,6 +1422,7 @@ def main(argv=None):
         run_client_library(baseline, current, client_symbols)
         run_numbering_setup(current)
         run_uniqueness_scope(current)
+        run_export(current)
         if args.no_real_sheets:
             section("13. baseline on the real client sheets (skipped: --no-real-sheets)")
             run_machine_files()

@@ -519,3 +519,29 @@ segments, one net) plus a loose conductor and assert `WIREWEB=Yes` labels twice 
 | `docs/screenshots/ecad-numbering-setup.png` | re-captured with the `Unique` row |
 
 **Still open**: `ELECLIST` prints the block name as the class for library-less symbols.
+
+## 16. Round 28 (2026-11-07): batch sheet publish, smoke 116/116
+
+The project already knew its sheets (`project_sheets()` reads the project file, or the
+folder `ELECPROJECT <dir>` points at) and the codec already writes DWG and DXF, but handing
+the customer the set still meant one open-save per file.
+
+**`ELECEXPORT <folder> [dxf|dwg]`** loads every project sheet, creates the output folder, and
+writes `<stem>.<format>` next to each other with each sheet's own DXF version preserved.
+Format defaults to `dxf`; the summary line is `ELECEXPORT: N sheet(s) -> <folder> (format).`
+and a sheet that fails to load or write is listed as `failed <path>: <error>` instead of
+aborting the batch. It is on the ribbon at *Electrical -> Project & Sheet -> Project Files ->
+Publish Sheets*, and in `ELECHELP`.
+
+**Tests.** New smoke section `run_export` writes two blank sheets, runs `ELECPROJECT <folder>`
+then `ELECEXPORT <out> dwg`, and asserts the summary, that the folder holds exactly
+`E001.dwg`/`E002.dwg`, and that both are real files.
+
+| Check | Result |
+|---|---|
+| `cargo check --release` | clean |
+| `cargo build --release -j 4` | finished in 4 m 48 s |
+| `py -3.13 tests\ecadun_smoke.py` | **116/116 checks passed** |
+
+**Still open**: `ELECLIST` prints the block name as the class for library-less symbols, and
+`EXPORTPDF` produces searchable text but no clickable cross-reference links.

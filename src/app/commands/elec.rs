@@ -1716,6 +1716,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                 &[
                     "ELECLIST                      list the drawing's components",
                     "ELECNUMBER / ELECNUMBERPREVIEW  number devices / preview",
+"ELECEXPORT <folder> [dxf|dwg]    publish every project sheet",
                     "ELECPLC <tag> <points> <base> place a PLC module",
                     "ELECPLCNEXT <tag> <points>    continue I/O addressing",
                     "ELECIO                        per-point cross references",
@@ -1947,6 +1948,76 @@ fn class_for_reference(tag: &str) -> &'static str {
         Task::none()
     }
 
+
+    /// `ELECEXPORT <folder> [dxf|dwg]` publishes every project sheet into a folder.
+    ///
+    /// The per-sheet route already existed (`SAVEAS` one drawing at a time); what a
+    /// project hands the customer is the whole set, converted in one step. The sheet
+    /// keeps its own name and its own DXF version, so a project split between an old
+    /// and a new sheet stays readable.
+    pub(super) fn elec_export(&mut self, _i: usize, argument: &str) -> Task<Message> {
+        let mut words: Vec<String> = argument
+            .split_whitespace()
+            .map(|word| word.to_string())
+            .collect();
+        let mut format = "dxf".to_string();
+        if let Some(last) = words.last() {
+            if last.eq_ignore_ascii_case("dxf") || last.eq_ignore_ascii_case("dwg") {
+                format = last.to_ascii_lowercase();
+                words.pop();
+            }
+        }
+        let folder = words.join(" ").trim().to_string();
+        if folder.is_empty() {
+            self.command_line.push_output(
+                "ELECEXPORT: give a folder, e.g. ELECEXPORT publish dxf  (or ... dwg).",
+            );
+            return Task::none();
+        }
+        let sheets = Self::project_sheets();
+        if sheets.is_empty() {
+            self.command_line.push_output(
+                "ELECEXPORT: no project sheets found \u{2014} run ELECPROJECT <folder> first.",
+            );
+            return Task::none();
+        }
+        let folder = std::path::PathBuf::from(folder);
+        if let Err(error) = std::fs::create_dir_all(&folder) {
+            self.command_line.push_output(&format!(
+                "ELECEXPORT: cannot create {}: {error}",
+                folder.display()
+            ));
+            return Task::none();
+        }
+        let mut written = 0usize;
+        let mut failures: Vec<String> = Vec::new();
+        for sheet in &sheets {
+            let document = match crate::io::load_file(sheet) {
+                Ok(document) => document,
+                Err(error) => {
+                    failures.push(format!("{}: {error}", sheet.display()));
+                    continue;
+                }
+            };
+            let stem = sheet
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().to_string())
+                .unwrap_or_else(|| "sheet".to_string());
+            let target = folder.join(format!("{stem}.{format}"));
+            match crate::io::save_as_version(&document, &target, document.version) {
+                Ok(()) => written += 1,
+                Err(error) => failures.push(format!("{}: {error}", target.display())),
+            }
+        }
+        self.command_line.push_output(&format!(
+            "ELECEXPORT: {written} sheet(s) -> {} ({format}).",
+            folder.display()
+        ));
+        for failure in failures.iter().take(8) {
+            self.command_line.push_output(&format!("  failed {failure}"));
+        }
+        Task::none()
+    }
 
     /// `ELECSETUPEDIT` opens the dialog that edits the numbering contract.
     pub(super) fn elec_setup_edit(&mut self, i: usize) -> Task<Message> {
@@ -6677,6 +6748,7 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
             "ELECBOM" => Some(self.elec_bom(i, None, None)),
             "ELECLIST" => Some(self.elec_list(i)),
             "ELECSETUP" => Some(self.elec_setup(i)),
+        "ELECEXPORT" => Some(self.elec_export(i, "")),
             "ELECSETUPEDIT" => Some(self.elec_setup_edit(i)),
             "ELECHELP" => Some(self.elec_help()),
             "ELECWIRELABELS" => Some(self.elec_wire_labels(i, None)),
@@ -6802,6 +6874,9 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
                 }
                 if let Some(argument) = cmd.strip_prefix("ELECSETUP ") {
                     return Some(self.elec_setup_assign(i, argument.trim()));
+                }
+                if let Some(argument) = cmd.strip_prefix("ELECEXPORT ") {
+                    return Some(self.elec_export(i, argument.trim()));
                 }
                 if let Some(argument) = cmd.strip_prefix("ELECBUILT ") {
                     return Some(self.elec_built(Some(argument)));

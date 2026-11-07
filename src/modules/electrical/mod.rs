@@ -333,6 +333,7 @@ impl CadModule for ElectricalModule {
                                 menu_item("ELECSYSTEM", "Insert System", LIBRARY_FOLDER),
                                 menu_item("ELECVARIANT", "Variants", PROJECT),
                                 menu_item("ELECOPTION", "Option Codes", ATTRIBUTES),
+                                menu_item("ELECEXPORT", "Publish Sheets", PROJECT),
                             ],
                             default: "ELECPROJLIST",
                         },
