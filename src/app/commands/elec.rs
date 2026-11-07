@@ -241,6 +241,10 @@ struct ElecSetup {
     wire_alphabetical: bool,
     /// Leave the first wire number blank (SkyCAD's "Empty first value").
     wire_empty_first: bool,
+    /// SkyCAD's "Uniqueness scope": `Global` keeps a number from being reused on
+    /// another sheet of the project, `Local` only inside this drawing, and `None`
+    /// does not consult other tags at all.
+    tag_unique: String,
 }
 
 impl Default for ElecSetup {
@@ -261,6 +265,7 @@ impl Default for ElecSetup {
             wire_increment: 1,
             wire_alphabetical: false,
             wire_empty_first: false,
+            tag_unique: "Global".to_string(),
         }
     }
 }
@@ -270,6 +275,21 @@ impl ElecSetup {
     fn references_are_fixed(&self) -> bool {
         self.tag_mode.eq_ignore_ascii_case("R") || self.wire_mode.eq_ignore_ascii_case("R")
     }
+
+    /// True when a number may not be reused on another sheet of the project.
+    fn uniqueness_is_global(&self) -> bool {
+        self.tag_unique.eq_ignore_ascii_case("Global")
+    }
+}
+
+/// One of SkyCAD's three uniqueness scopes, whatever spelling came in.
+fn canonical_uniqueness(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "local" => "Local",
+        "none" => "None",
+        _ => "Global",
+    }
+    .to_string()
 }
 
 /// Read the electrical setup off the first `WD_M` block in the document.
@@ -372,6 +392,9 @@ fn read_setup(document: &codec::Document) -> ElecSetup {
         if let Some(value) = property("ELEC_WIREEMPTY") {
             setup.wire_empty_first = value.eq_ignore_ascii_case("Yes");
         }
+        if let Some(value) = property("ELEC_TAGUNIQ") {
+            setup.tag_unique = canonical_uniqueness(&value);
+        }
     }
     setup
 }
@@ -411,6 +434,7 @@ fn write_setup_properties(document: &mut codec::Document, setup: &ElecSetup) {
             "ELEC_WIREEMPTY",
             if setup.wire_empty_first { "Yes" } else { "No" }.to_string(),
         ),
+        ("ELEC_TAGUNIQ", canonical_uniqueness(&setup.tag_unique)),
     ];
     for (key, value) in values {
         if let Some(entry) = document
@@ -1879,13 +1903,14 @@ fn class_for_reference(tag: &str) -> &'static str {
         self.command_line
             .push_output(&format!("ELECSETUP: {origin}"));
         self.command_line.push_output(&format!(
-            "  tag   {}  mode {}{}  start {}  step {}  follow through {}  suffixes {suffixes}",
+            "  tag   {}  mode {}{}  start {}  step {}  follow through {}  unique {}  suffixes {suffixes}",
             setup.tag_format,
             setup.tag_mode,
             fixed,
             setup.tag_start,
             setup.tag_increment,
-            if setup.tag_fallthrough { "yes" } else { "no" }
+            if setup.tag_fallthrough { "yes" } else { "no" },
+            setup.tag_unique
         ));
         self.command_line.push_output(&format!(
             "  wire  {}  mode {}  start {}  step {}  numbers {}  empty first {}",
@@ -1926,6 +1951,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             sheet: setup.sheet,
             tag_increment: setup.tag_increment.to_string(),
             tag_fallthrough: if setup.tag_fallthrough { "Yes" } else { "No" }.to_string(),
+            tag_unique: setup.tag_unique,
             wire_increment: setup.wire_increment.to_string(),
             wire_kind: if setup.wire_alphabetical {
                 "Alphabetical"
@@ -1958,6 +1984,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             SetupMsg::TagSuffixes(value) => state.tag_suffixes = value,
             SetupMsg::TagIncrement(value) => state.tag_increment = value,
             SetupMsg::TagFallthrough(value) => state.tag_fallthrough = value,
+        SetupMsg::TagUnique(value) => state.tag_unique = value,
             SetupMsg::WireFormat(value) => state.wire_format = value,
             SetupMsg::WireMode(value) => state.wire_mode = value,
             SetupMsg::WireStart(value) => state.wire_start = value,
@@ -2033,6 +2060,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                 .trim()
                 .eq_ignore_ascii_case("Alphabetical"),
             wire_empty_first: state.wire_empty_first.trim().eq_ignore_ascii_case("Yes"),
+            tag_unique: canonical_uniqueness(&state.tag_unique),
         };
         write_setup_properties(&mut self.tabs[i].scene.document, &stored);
         self.tabs[i].dirty = true;
@@ -2060,7 +2088,7 @@ fn class_for_reference(tag: &str) -> &'static str {
     pub(super) fn elec_setup_assign(&mut self, i: usize, argument: &str) -> Task<Message> {
         use crate::ui::window::elec_setup::{mode_label, mode_letter};
 
-        const VALID: &str = "TAGFMT, TAGMODE, TAGSTART, TAGSUF, TAGINC, TAGFALL, \
+        const VALID: &str = "TAGFMT, TAGMODE, TAGSTART, TAGSUF, TAGINC, TAGFALL, TAGUNIQ, \
 WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, XREFFMT, SHEET";
 
         let mut setup = read_setup(&self.tabs[i].scene.document);
@@ -2094,6 +2122,15 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, XREFFMT, SHEET";
                 }
                 "TAGINC" => counter(&mut setup.tag_increment),
                 "TAGFALL" => setup.tag_fallthrough = !value.eq_ignore_ascii_case("No"),
+                "TAGUNIQ" => {
+                    if !matches!(
+                        value.to_ascii_lowercase().as_str(),
+                        "global" | "local" | "none"
+                    ) {
+                        error = Some("TAGUNIQ must be Global, Local or None.".to_string());
+                    }
+                    setup.tag_unique = canonical_uniqueness(value);
+                }
                 "WIREFMT" => setup.wire_format = value.to_string(),
                 "WIREMODE" => setup.wire_mode = mode_letter(value),
                 "WIRESTART" => counter(&mut setup.wire_start),
@@ -2132,11 +2169,12 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, XREFFMT, SHEET";
         }
         self.tabs[i].scene.bump_geometry();
         self.command_line.push_output(&format!(
-            "ELECSETUP: tag {} mode {} start {} step {}; wire {} mode {} start {} step {} ({}); saved on this drawing.",
+            "ELECSETUP: tag {} mode {} start {} step {} (unique {}); wire {} mode {} start {} step {} ({}); saved on this drawing.",
             setup.tag_format,
             mode_label(&setup.tag_mode),
             setup.tag_start,
             setup.tag_increment,
+            setup.tag_unique,
             setup.wire_format,
             mode_label(&setup.wire_mode),
             setup.wire_start,
@@ -2424,6 +2462,38 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, XREFFMT, SHEET";
             by_class.entry(prefix).or_default().push(index);
         }
 
+        // SkyCAD's uniqueness scope decides where a number may be reused. `Global`
+        // reserves every tag already used by the other sheets of the project, so a
+        // second sheet does not hand out -K1 again; `Local` and `None` only look at
+        // this drawing (which the numbering pass already does).
+        let reserved: BTreeSet<String> = if setup.uniqueness_is_global() {
+            let open = self.tabs[i]
+                .current_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_ascii_lowercase());
+            let mut tags = BTreeSet::new();
+            for path in Self::project_sheets() {
+                if open
+                    .as_deref()
+                    .is_some_and(|open| path.to_string_lossy().eq_ignore_ascii_case(open))
+                {
+                    continue;
+                }
+                let Ok(document) = crate::io::load_file(&path) else {
+                    continue;
+                };
+                for component in Self::components_of(&document) {
+                    let tag = component.tag.trim();
+                    if !tag.is_empty() {
+                        tags.insert(tag.to_ascii_uppercase());
+                    }
+                }
+            }
+            tags
+        } else {
+            BTreeSet::new()
+        };
+
         let mut changes: Vec<(codec::Handle, String)> = Vec::new();
         let mut report: Vec<String> = Vec::new();
         let mut skipped: Vec<String> = Vec::new();
@@ -2501,10 +2571,30 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, XREFFMT, SHEET";
                 })
                 .collect();
             let results = renumber(&format, &numbered);
+            // Numbers already spoken for: the other sheets (global scope) and the
+            // tags a frozen device keeps. `renumber` numbers by ordinal, so a
+            // collision is resolved by stepping the ordinal until the label is free.
+            let mut taken: BTreeSet<String> = reserved.clone();
+            for item in &numbered {
+                if item.frozen {
+                    if let Some(tag) = &item.current {
+                        taken.insert(tag.trim().to_ascii_uppercase());
+                    }
+                }
+            }
             let mut assigned = Vec::new();
             let mut changed = 0usize;
-            for result in &results {
-                let label = result.value.clone();
+            for result in results {
+                let mut label = result.value.clone();
+                let frozen = numbered[result.id as usize].frozen;
+                if !frozen {
+                    let mut ordinal = result.id as u32;
+                    while taken.contains(&label.trim().to_ascii_uppercase()) {
+                        ordinal += 1;
+                        label = format.value(ordinal);
+                    }
+                }
+                taken.insert(label.trim().to_ascii_uppercase());
                 // One result per device; every part of that device takes the same tag.
                 let parts = &device_list[result.id as usize];
                 for part in parts {
@@ -7499,6 +7589,7 @@ mod elec_setup_tests {
             ("ELEC_WIREINC".to_string(), "2".to_string()),
             ("ELEC_WIREKIND".to_string(), "Alphabetical".to_string()),
             ("ELEC_WIREEMPTY".to_string(), "Yes".to_string()),
+            ("ELEC_TAGUNIQ".to_string(), "Local".to_string()),
         ];
         let setup = read_setup(&document);
         assert_eq!(setup.tag_format, "%N");
@@ -7513,6 +7604,8 @@ mod elec_setup_tests {
         assert_eq!(setup.wire_increment, 2);
         assert!(setup.wire_alphabetical);
         assert!(setup.wire_empty_first);
+        assert_eq!(setup.tag_unique, "Local");
+        assert!(!setup.uniqueness_is_global());
     }
 
     #[test]
@@ -7538,6 +7631,9 @@ mod elec_setup_tests {
             crate::ui::window::elec_setup::SetupMsg::TagFallthrough("No".into()),
         ));
         let _ = app.update(Message::ElecSetup(
+            crate::ui::window::elec_setup::SetupMsg::TagUnique("None".into()),
+        ));
+        let _ = app.update(Message::ElecSetup(
             crate::ui::window::elec_setup::SetupMsg::WireKind("Alphabetical".into()),
         ));
         let _ = app.update(Message::ElecSetup(
@@ -7553,6 +7649,7 @@ mod elec_setup_tests {
         assert!(!setup.tag_fallthrough);
         assert!(setup.wire_alphabetical);
         assert!(setup.wire_empty_first);
+        assert_eq!(setup.tag_unique, "None");
         assert!(app.tabs[i].dirty);
     }
 

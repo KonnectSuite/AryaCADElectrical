@@ -31,6 +31,7 @@ pub struct State {
     /// numbering kind, and whether the first wire is left blank.
     pub tag_increment: String,
     pub tag_fallthrough: String,
+    pub tag_unique: String,
     pub wire_increment: String,
     pub wire_kind: String,
     pub wire_empty_first: String,
@@ -45,6 +46,7 @@ pub enum SetupMsg {
     TagSuffixes(String),
     TagIncrement(String),
     TagFallthrough(String),
+    TagUnique(String),
     WireFormat(String),
     WireMode(String),
     WireStart(String),
@@ -59,6 +61,10 @@ pub enum SetupMsg {
 /// Two-value pick lists for the SkyCAD numbering options.
 pub fn yes_no_options() -> Vec<String> {
     vec!["Yes".to_string(), "No".to_string()]
+}
+
+pub fn uniqueness_options() -> Vec<String> {
+    vec!["Global".to_string(), "Local".to_string(), "None".to_string()]
 }
 
 pub fn wire_kind_options() -> Vec<String> {
@@ -150,6 +156,19 @@ pub(crate) fn view(state: &State, sizing: ModalSizing) -> Element<'_, Message> {
                 |value| Message::ElecSetup(SetupMsg::TagFallthrough(value)),
                 Length::Fixed(120.0),
             ),
+        ]
+        .spacing(14),
+        row![
+            labeled_pick_list(
+                "Unique".into(),
+                uniqueness_options(),
+                Some(state.tag_unique.clone()),
+                |value| Message::ElecSetup(SetupMsg::TagUnique(value)),
+                Length::Fixed(120.0),
+            ),
+            text("Global skips numbers used on other sheets.")
+                .size(10)
+                .style(muted_style),
         ]
         .spacing(14),
         text("Comma-separated per-sheet suffixes, e.g. A,B. Follow through numbers a contact with its coil.")

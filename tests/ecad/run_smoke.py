@@ -1185,6 +1185,68 @@ def run_numbering_setup(binary):
           tags == ["-K1", "-K2"], f"{tags}")
 
 
+def run_uniqueness_scope(binary):
+    """SkyCAD uniqueness scope: global never reuses another sheet's number."""
+    section("16. numbering scope: global skips another sheet's tags, local restarts")
+    folder = os.path.join(WORK, "scope")
+    os.makedirs(folder, exist_ok=True)
+
+    def tags_of(path):
+        drawing = dxfio.load(path)
+        found = []
+        for entity in drawing.entities:
+            if entity.kind != "INSERT" or not entity.attributes:
+                continue
+            attrs = attribute_map(entity)
+            tag = attrs.get("TAG1")
+            if tag is not None and tag.s(1).startswith("-"):
+                found.append(tag.s(1))
+        return found
+
+    sheet_a = os.path.join(folder, "scope_a.dxf")
+    blank_drawing(sheet_a)
+    batch = write_inline_batch("scope_a_batch.txt", [
+        "ELECNEW",
+        f"ELECLIB {STARTER}",
+        "ELECINSERT CONTACT_NO",
+        "ELECINSERT CONTACT_NO",
+        "ELECNUMBER",
+        f"SAVEAS {sheet_a}",
+    ])
+    code, text = run(binary, [binary, "--each", batch, sheet_a], "scope_a")
+    check("the first sheet takes -K1 and -K2",
+          sorted(tags_of(sheet_a)) == ["-K1", "-K2"], f"{sorted(tags_of(sheet_a))}")
+
+    sheet_b = os.path.join(folder, "scope_b.dxf")
+    blank_drawing(sheet_b)
+    batch = write_inline_batch("scope_b_batch.txt", [
+        "ELECNEW",
+        f"ELECLIB {STARTER}",
+        f"ELECPROJECT {folder}",
+        "ELECSETUP TAGUNIQ=Global",
+        "ELECINSERT CONTACT_NO",
+        "ELECNUMBER",
+        f"SAVEAS {sheet_b}",
+    ])
+    code, text = run(binary, [binary, "--each", batch, sheet_b], "scope_b")
+    tags = tags_of(sheet_b)
+    check("a global scope numbers past the other sheet (-K3)", tags == ["-K3"], f"{tags}")
+
+    sheet_c = os.path.join(folder, "scope_c.dxf")
+    blank_drawing(sheet_c)
+    batch = write_inline_batch("scope_c_batch.txt", [
+        "ELECNEW",
+        f"ELECLIB {STARTER}",
+        f"ELECPROJECT {folder}",
+        "ELECSETUP TAGUNIQ=Local",
+        "ELECINSERT CONTACT_NO",
+        "ELECNUMBER",
+        f"SAVEAS {sheet_c}",
+    ])
+    code, text = run(binary, [binary, "--each", batch, sheet_c], "scope_c")
+    tags = tags_of(sheet_c)
+    check("a local scope restarts at -K1", tags == ["-K1"], f"{tags}")
+
 def run_machine_files():
     section("14. the machine-readable artifacts")
     # WD_M profile
@@ -1303,6 +1365,7 @@ def main(argv=None):
         run_fabricated(baseline)
         run_client_library(baseline, current, client_symbols)
         run_numbering_setup(current)
+        run_uniqueness_scope(current)
         if args.no_real_sheets:
             section("13. baseline on the real client sheets (skipped: --no-real-sheets)")
             run_machine_files()

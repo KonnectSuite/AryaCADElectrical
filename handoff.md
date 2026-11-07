@@ -429,7 +429,7 @@ only reading the format/mode/start triple.
 | Wire numbering format/mode/start | `ELEC_WIREFMT`, `ELEC_WIREMODE`, `ELEC_WIRE_START` |
 | Wire numbers: numerical/alphabetical | `ELEC_WIREKIND` -> `Kind::Alphabetical` |
 | Empty first value | `ELEC_WIREEMPTY` -> the first net gets no number |
-| Uniqueness scope | not exposed yet: the app groups per drawing, which is the "per sheet" scope |
+| Uniqueness scope | `ELEC_TAGUNIQ` -> `Global` skips tags used on the project's other sheets (Round 27) |
 
 Both `ELECNUMBER` and `ELECWIRENUMBER` used to apply the contract only when a `WD_M` block
 was present, so the dialog-written properties were silently ignored; they apply the values
@@ -475,6 +475,38 @@ against a GUI with more than one tab.
 | `py -3.13 tools\make_library.py --check` | in sync, 78 symbols |
 | `py -3.13 tools\parts_check.py` | passes |
 
-**Still open**: the SkyCAD uniqueness-scope field (global/parent-sheet/none) has no UI; and
-`ELECLIST` still prints the block name as the class for library-less symbols, which the
-reports render as-is.
+**Still open**: `ELECLIST` still prints the block name as the class for library-less
+symbols, which the reports render as-is.
+
+## 15. Round 27 (2026-11-07): uniqueness scope, smoke 111/111
+
+The last SkyCAD `NumberingFormat` field is now honoured end to end. ELECPANEL already read
+`library/panel/footprints.tsv`, so panel layout was not a gap.
+
+**Uniqueness scope.** `ElecSetup` gained `tag_unique` (`Global` default, plus `Local` and
+`None`, normalised by `canonical_uniqueness`), stored as `ELEC_TAGUNIQ` - the fifteenth
+`ELEC_*` property. With `Global`, `elec_number` first scans `project_sheets()` (the project
+file or, failing that, the folder set by `ELECPROJECT <dir>`), loads every other sheet, and
+collects the upper-cased tags it finds. Those become `reserved`; the assignment loop walks
+the ordinal forward until a label is free, so a new sheet continues past `-K1`/`-K2`
+instead of reusing them. `Local` and `None` skip the scan.
+
+**Everywhere it is exposed.** `ELECSETUP TAGUNIQ=Global|Local|None` (unknown values are
+refused with "TAGUNIQ must be Global, Local or None."), the `ELECSETUP` printout gained
+`unique <scope>` on the tag line, and the dialog has a `Unique` pick list under `Follow
+through` with the hint "Global skips numbers used on other sheets."
+
+**Tests.** Two unit assertions (`ELEC_TAGUNIQ` round-trip; the dialog stores `None`) in
+`mod elec_setup_tests` - 4 passed. New smoke section 16 (`run_uniqueness_scope`) numbers a
+first sheet `-K1`/`-K2`, then numbers a second sheet with `TAGUNIQ=Global` (expects `-K3`)
+and a third with `TAGUNIQ=Local` (expects `-K1`).
+
+| Check | Result |
+|---|---|
+| `cargo check --release` | clean |
+| `cargo test --release --lib elec_setup` | 4 passed |
+| `cargo build --release -j 4` | finished in 8 m 25 s |
+| `py -3.13 tests\ecad\run_smoke.py` | **111/111 checks passed** |
+| `docs/screenshots/ecad-numbering-setup.png` | re-captured with the `Unique` row |
+
+**Still open**: `ELECLIST` prints the block name as the class for library-less symbols.
