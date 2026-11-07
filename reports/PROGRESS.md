@@ -1,4 +1,10 @@
-# Progress log — AryaCADElectrical
+# Progress log — OpenCADElectrical
+
+OpenCADElectrical is the working name of this fork of Open CAD Studio. Earlier entries, and
+the companion reports in `reports/`, were written while the project was called
+AryaCADStudio/AryaCADElectrical and keep those names so the record stays accurate; see
+[`docs/CREDITS.md`](../docs/CREDITS.md#documentation-conventions). The repository, binary
+and portable folder keep their current names until the rename is permitted.
 
 Dated entries, newest last. Companion: [`STATUS.md`](STATUS.md) (the review that started this work).
 
@@ -981,3 +987,14 @@ Verification on the final exe: `cargo check --release` clean; release build 7m53
 Verification also caught four small things, all fixed: the MCP tool-list tests expected 20 tools (the new `ocs_electrical` intent makes 21), the tool instructions budget had to stay under 1100 bytes after naming the `ecad` guide (trimmed), the parts catalogue's header aliases did not accept `PN`/`Cat` the way its test (and real spreadsheets) do, and the save-warning dialog's bullet was double-encoded text. The full test suite passes after those fixes.
 
 Environment note worth keeping: files produced inside this workspace inherit a low mandatory integrity label, and a process launched from such an exe cannot write outside its own directory. That was the real reason the set wizard reported "Access is denied" in Documents and the automation bridge could not publish its descriptor. `icacls <exe> /setintegritylevel Medium` fixes a local build, and `packaging\portable.ps1` now relabels the shipped copy so a distributed portable folder behaves like a normally downloaded program.
+
+## Round 22 - documentation, naming and credits (2026-11-06)
+
+Documentation-only pass; no code, templates or tests changed.
+
+- Root `README.md` rebuilt for **OpenCADElectrical** (working name): what the project is, the fork relationship to Open CAD Studio, the work-in-progress status, the electrical feature overview with screenshots, build and run instructions, the documentation index and the test commands.
+- New `docs/README.md`: documentation index, feature overview, status table, and the naming/history note.
+- New `docs/CREDITS.md`: credits and thanks to **HakanSeven12 and the Open CAD Studio contributors** with links to the upstream repository, web application and discussions; independent-fork disclaimer; Autodesk trademark note; third-party Rust projects; documentation naming conventions.
+- Naming propagated to `docs/QUICKSTART.md`, `docs/automation/guides/ecad.md`, `templates/README.md`, `samples/demo-line/README.md`, and this log's heading. The ECAD guide's folder fallback wording now names the user's OpenCADStudio configuration folder.
+- The repository name, the `OpenCADStudio.exe` binary and the `dist\AryaCADElectrical-portable` folder keep their current names until the rename is permitted; historical reports under `reports/` keep the names that were in use when they were written.
+

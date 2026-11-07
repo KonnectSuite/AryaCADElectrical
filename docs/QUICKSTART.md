@@ -1,8 +1,14 @@
-# Quick start — AryaCADElectrical
+# Quick start — OpenCADElectrical
 
-The electrical layer lives inside OpenCADStudio: one `OpenCADStudio.exe`, an **Electrical**
-ribbon tab, and a set of `ELEC…` commands that also work from the command line and from
-headless batches. Everything is local and file-based; no account, no online catalogue.
+OpenCADElectrical (working name) is the Open CAD Studio editor with an electrical layer on
+top. The electrical layer lives in the same `OpenCADStudio.exe`: an **Electrical** ribbon
+tab and a set of `ELEC…` commands that also work from the command line and from headless
+batches. Everything is local and file-based; no account, no online catalogue.
+
+The base editor is the work of the Open CAD Studio project — see
+[CREDITS.md](CREDITS.md) and the upstream repository at
+<https://github.com/HakanSeven12/OpenCADStudio>. This fork is a work in progress, not an
+official Open CAD Studio release.
 
 ## 1. Run it
 
@@ -14,7 +20,8 @@ cargo build --release -j 4
 target\release\OpenCADStudio.exe
 ```
 
-or use the portable folder produced by `packaging/portable.ps1`:
+or use the portable folder produced by `packaging/portable.ps1` (the folder keeps its
+current name until the repository rename):
 
 ```powershell
 powershell -File packaging\portable.ps1

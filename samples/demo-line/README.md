@@ -1,8 +1,12 @@
-# Demo line — a finished AryaCADElectrical sample project
+# Demo line — a finished OpenCADElectrical sample project
 
 A small machine line drawn with the electrical layer, so the outputs can be inspected
 without drawing anything first. Open `project.eprj` (or `sheet1.dxf` directly) and run the
 commands from `docs/QUICKSTART.md`.
+
+This sample ships with OpenCADElectrical (working name), the Open CAD Studio fork described
+in [`docs/README.md`](../../docs/README.md); upstream credits are in
+[`docs/CREDITS.md`](../../docs/CREDITS.md).
 
 ## What is in here
 

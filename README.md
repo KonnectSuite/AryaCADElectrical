@@ -1,267 +1,129 @@
-<p align="center">
-  <a href="README.md">English</a> ·
-  <a href="docs/readme/README.bg.md">Български</a> ·
-  <a href="docs/readme/README.pt-BR.md">Português (Brasil)</a> ·
-  <a href="docs/readme/README.cs.md">Čeština</a> ·
-  <a href="docs/readme/README.nl.md">Nederlands</a> ·
-  <a href="docs/readme/README.fr.md">Français</a> ·
-  <a href="docs/readme/README.fi.md">Suomi</a> ·
-  <a href="docs/readme/README.de.md">Deutsch</a> ·
-  <a href="docs/readme/README.el.md">Ελληνικά</a> ·
-  <a href="docs/readme/README.hu.md">Magyar</a> ·
-  <a href="docs/readme/README.it.md">Italiano</a> ·
-  <a href="docs/readme/README.ja.md">日本語</a> ·
-  <a href="docs/readme/README.ko.md">한국어</a> ·
-  <a href="docs/readme/README.lo.md">ລາວ</a> ·
-  <a href="docs/readme/README.pl.md">Polski</a> ·
-  <a href="docs/readme/README.ru.md">Русский</a> ·
-  <a href="docs/readme/README.zh-CN.md">简体中文</a> ·
-  <a href="docs/readme/README.es.md">Español</a> ·
-  <a href="docs/readme/README.zh-TW.md">繁體中文</a> ·
-  <a href="docs/readme/README.tr.md">Türkçe</a> ·
-  <a href="docs/readme/README.hi.md">हिन्दी</a> ·
-  <a href="docs/readme/README.ar.md">العربية</a>
-</p>
+# OpenCADElectrical
 
-<p align="center">
-  <img src="assets/logo.svg" width="112" alt="Open CAD Studio logo">
-</p>
+**Open-source electrical CAD for schematics, panel layouts and drawing sets.**
+Working name — the repository rename follows when permitted.
 
-<h1 align="center">Open CAD Studio</h1>
+OpenCADElectrical is a fork of [Open CAD Studio](https://github.com/HakanSeven12/OpenCADStudio),
+the cross-platform DWG/DXF editor written in Rust, with an electrical layer built on top of
+it. It aims at the workflow AutoCAD Electrical users expect — project drawing sets, IEC and
+NEC title-block sheets, a symbol library with real pins, wire and net management, device
+tagging, bills of material, cables and panel layouts — while remaining a native drawing
+editor that reads and writes ordinary DWG and DXF files.
 
-<p align="center">
-  Open-source 2D drafting and 3D modeling for desktop and web, built with Rust.
-</p>
+> **Status: work in progress.** The base editor is mature; the electrical layer is under
+> active development. Do not make it the only record of a production drawing yet. The
+> current limits are listed at the end of the [quick start](docs/QUICKSTART.md#10-honest-limits).
 
-<p align="center">
-  <a href="https://github.com/HakanSeven12/OpenCADStudio/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/HakanSeven12/OpenCADStudio"></a>
-  <a href="https://github.com/HakanSeven12/OpenCADStudio/releases"><img alt="Release downloads" src="https://img.shields.io/github/downloads/HakanSeven12/OpenCADStudio/total"></a>
-  <a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/HakanSeven12/OpenCADStudio"></a>
-  <a href="LICENSE"><img alt="GPL-3.0 license" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
-</p>
+![Startup chooser](docs/screenshots/startup-chooser.png)
 
-<p align="center">
-  <a href="https://www.opencadstudio.com"><strong>Launch the web app</strong></a>
-  ·
-  <a href="https://github.com/HakanSeven12/OpenCADStudio/releases/latest"><strong>Download the desktop app</strong></a>
-  ·
-  <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>Join the discussion</strong></a>
-</p>
+## What the electrical layer adds
 
-<p align="center">
-  <img src="site/workspace.png" alt="Open CAD Studio workspace" width="100%">
-</p>
+- **A drawing set, not a blank drawing.** On launch the application asks whether you want a
+  normal drafting drawing or an electrical drawing set, then builds the set from a standard
+  template: standard, size, project fields, sheet count and folder.
+- **Real sheets.** Fifteen templates: IEC A4–A0 and B1 (ISO 5457 frame, first-angle title
+  block) and NEC ANSI A–E plus Legal (ASME Y14.1 frame, third-angle title block), each with
+  zone references, a revision table and a title block that is filled from the project data.
+- **Symbols with pins.** A local symbol library with previews, insert-and-place and
+  automatic tagging. Symbols carry their pin attributes, so connectivity resolves to a
+  device pin (`-K1:2`) instead of only "the wire touches the block".
+- **Wires, nets and junctions.** Drawn conductors become a netlist; junction dots and
+  terminal bridges are honoured; wire numbers and labels are generated from the sheet.
+- **Documentation output.** Component list, terminal list, wire list, a bill of material
+  that can be filtered by option code, an Excel workbook, and a panel layout generated from
+  the schematic.
+- **Cables.** A drawn cable route becomes a schedule row with a measured length and both
+  ends resolved to device pins.
+- **PLC and I/O.** PLC modules with addresses, project-wide address continuation, and
+  import of an I/O list.
+- **Reuse and variants.** Reusable starter circuits, variant sheet sets and option codes for
+  optional equipment.
+- **Automation.** The electrical command set is available headless, through the MCP bridge
+  (including a dedicated `electrical` read operation and the `cad://guides/ecad` guide), and
+  through a node-graph **Electrical** category that evaluates nets, pins and components.
 
-## Overview
+![IEC A3 template](docs/screenshots/template-iec-a3.png)
 
-Open CAD Studio is a cross-platform application for technical drawing, layout work, and solid modeling. It reads and writes DWG and DXF drawings natively, with a shared editing core across the desktop and browser versions.
+## Built on Open CAD Studio
 
-The project is under active development. Keep backups of important production drawings and report reproducible problems through [GitHub Issues](https://github.com/HakanSeven12/OpenCADStudio/issues).
+This project would not exist without **Open CAD Studio**, created and maintained by
+**HakanSeven12 and the Open CAD Studio contributors**. The drawing kernel, DWG/DXF codec,
+rendering, blocks and attributes, layers, printing, plugin system and MCP server are their
+work, and they released it under the GNU GPL so that projects like this one are possible.
 
-## Highlights
+Thank you. If OpenCADElectrical is useful to you, please also support the upstream project:
 
-- **Native drawing workflow** — open, edit, recover, and save DWG and DXF files without a conversion service.
-- **Precise 2D drafting** — lines, polylines, curves, splines, hatches, object snaps, tracking, layers, blocks, and external references.
-- **Documentation tools** — text, dimensions, leaders, tolerances, tables, model space, paper space, viewports, and plot styles.
-- **Kernel-backed 3D modeling** — solid primitives, extrusion, revolution, sweep, loft, Boolean operations, and ACIS entity tessellation.
-- **GPU rendering** — accelerated 2D and 3D viewports through `wgpu`, with orthographic and perspective cameras.
-- **Extensible workflows** — native plugins, command scripts, headless conversion, and a line-based JSON automation API.
+- Open CAD Studio: <https://github.com/HakanSeven12/OpenCADStudio>
+- Web application: <https://www.opencadstudio.com>
+- Discussions: <https://github.com/HakanSeven12/OpenCADStudio/discussions>
 
-<p align="center">
-  <img src="site/modeling.png" alt="3D model in Open CAD Studio" width="100%">
-</p>
+This repository is an independent fork, not an official Open CAD Studio release, and the
+upstream maintainers are not responsible for the electrical additions or for this fork's
+bugs. Full attribution and licence notes are in [docs/CREDITS.md](docs/CREDITS.md). The
+upstream project's translations of its own README remain under `docs/readme/`.
 
-## File workflows
+OpenCADElectrical is inspired by the workflow of AutoCAD Electrical but is an independent
+implementation; it contains no Autodesk code, symbols or data. AutoCAD and AutoCAD
+Electrical are trademarks of Autodesk, Inc.
 
-| Format or workflow | Support |
-| --- | --- |
-| DWG | Read and write; versioned save targets from R14 through 2018 |
-| DXF | Read and write; versioned save targets from R14 through 2018 |
-| BAK / SV$ | Open drawing backups and autosave files |
-| OBJ | Import polygon meshes |
-| SVG / SVGZ | Import vector shapes as a block (`SVGIN`, or `IMPORT`) |
-| LandXML | Import `CgPoint` survey points |
-| STL | Export 3D mesh data |
-| STEP AP203 | Export 3D mesh data |
-| PDF | Plot layouts and selected geometry on desktop |
-| CSV | Extract entity property data |
-| CTB / STB | Load and edit plot style tables |
+## Naming
 
-## Desktop or web
+The documentation calls the product **OpenCADElectrical** while the rename is pending. The
+repository, the executable (`OpenCADStudio.exe`) and the portable folder
+(`dist/AryaCADElectrical-portable`) keep their current names until the rename is permitted.
+Historical engineering reports under `reports/` keep the names used at the time.
 
-Use the [web app](https://www.opencadstudio.com) for immediate access with no installation. Drawings are selected through the browser and saved as local downloads.
+## Build and run
 
-Use the desktop application for native file associations, file-manager thumbnails, system printing, PDF output, external plugins, command scripts, and headless automation. Release builds are available for Windows, Linux, and Apple Silicon macOS.
+Desktop builds target Windows first; the upstream application also builds for Linux, macOS
+and the web. A Rust toolchain is required.
 
-## Install
-
-Download the package for your computer from the [download page](https://www.opencadstudio.com/download/); every link there is the latest release. All files are also on the [latest release](https://github.com/HakanSeven12/OpenCADStudio/releases/latest) page.
-
-### Windows
-
-Choose one of these signed packages, `x86_64` for Intel and AMD processors or `arm64` for ARM processors:
-
-- `OpenCADStudio-*-windows-x86_64-installer.msi` / `…-windows-arm64-installer.msi` — recommended installer with Start Menu shortcuts, DWG/DXF file associations, and drawing thumbnails.
-- `OpenCADStudio-*-windows-x86_64-portable.exe` / `…-windows-arm64-portable.exe` — standalone application; no installation required.
-
-### Linux
-
-Download the AppImage (`linux-x86_64` or `linux-aarch64` for ARM), make it executable, and run it:
-
-```bash
-chmod +x OpenCADStudio-*-linux-x86_64.AppImage
-./OpenCADStudio-*-linux-x86_64.AppImage
+```powershell
+cargo build --release
+target\release\OpenCADStudio.exe
 ```
 
-Or install it as a Flatpak from [FlatPark](https://flatpark.org/apps/io.github.HakanSeven12.OpenCadStudio), which installs the official AppImage and follows new releases:
+Or build the self-contained portable folder:
 
-```bash
-flatpak remote-add --if-not-exists flatpark https://dl.flatpark.org/flatpark.flatpakrepo
-flatpak install flatpark io.github.HakanSeven12.OpenCadStudio
+```powershell
+powershell -File packaging\portable.ps1
+dist\AryaCADElectrical-portable\OpenCADStudio.exe
 ```
 
-The Flatpak opens and saves drawings through the file chooser. External references and underlays that point at other files need home access:
+Then follow the [quick start](docs/QUICKSTART.md): create a drawing set, load a symbol
+library, place devices, draw conductors, number them and produce the reports.
 
-```bash
-flatpak override --user --filesystem=home io.github.HakanSeven12.OpenCadStudio
+A finished example is in [`samples/demo-line`](samples/demo-line/README.md) — open
+`project.eprj` or `sheet1.dxf` and run `ELECLIST`, `ELECWIRELIST`, `ELECCABLELIST` and
+`ELECPANEL` to see the outputs.
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/README.md](docs/README.md) | documentation index and feature overview |
+| [docs/QUICKSTART.md](docs/QUICKSTART.md) | build, first schematic, reports, cables, panels, projects, automation |
+| [docs/commands-reference.md](docs/commands-reference.md) | command reference (`ELECHELP` lists the electrical set in the app) |
+| [docs/automation/guides/ecad.md](docs/automation/guides/ecad.md) | the ECAD workflow in order, plus the checks that tell you a drawing is right |
+| [docs/automation/README.md](docs/automation/README.md) | driving the editor over MCP |
+| [templates/README.md](templates/README.md) | the IEC and NEC templates |
+| [reports/PROGRESS.md](reports/PROGRESS.md) | dated engineering log of the electrical build-out |
+| [docs/CREDITS.md](docs/CREDITS.md) | upstream credits, third-party projects and licence notes |
+
+## Tests
+
+```powershell
+cargo test --release --lib
+py -3.13 tests\ecad\run_smoke.py --baseline target\release\OpenCADStudio.exe --current target\release\OpenCADStudio.exe --no-real-sheets
+py -3.13 tests\ecad\verify_mcp_ecad.py
 ```
 
-Each release also carries a snap. It is not in the Snap Store yet, so snapd installs it only with `--dangerous`, and it does not update itself:
-
-```bash
-sudo snap install --dangerous OpenCADStudio-*-linux-x86_64.snap
-```
-
-### macOS
-
-Packages are published for Apple Silicon and Intel Macs:
-
-1. Download `OpenCADStudio-*-macos-arm64.dmg` (Apple Silicon) or `OpenCADStudio-*-macos-x86_64.dmg` (Intel).
-2. Open the image and drag `OpenCADStudio.app` into **Applications**.
-3. If Gatekeeper blocks the first launch, approve the app from **System Settings → Privacy & Security**.
-
-The application is ad-hoc signed but is not currently notarized by Apple.
-
-## Languages
-
-Open CAD Studio can follow the system language or use any of these 23 interface languages:
-
-> Arabic · Brazilian Portuguese · Bulgarian · Czech · Dutch · English · Finnish · French · German · Greek · Hindi · Hungarian · Italian · Japanese · Korean · Lao · Polish · Russian · Simplified Chinese · Spanish · Traditional Chinese · Turkish · Vietnamese
-
-Change the language from the application settings. The browser version also uses the browser's preferred locale when **System** is selected.
-
-## Build from source
-
-### Desktop
-
-Requirements:
-
-- Git
-- Current stable Rust toolchain
-- Platform graphics and font development libraries
-
-On Ubuntu or Debian, install the native dependencies with:
-
-```bash
-sudo apt update
-sudo apt install libgl1-mesa-dev libx11-dev libxcursor-dev libxi-dev \
-  libxrandr-dev libxkbcommon-dev libwayland-dev libfontconfig1-dev \
-  libfreetype6-dev
-```
-
-Then build and run:
-
-```bash
-git clone https://github.com/HakanSeven12/OpenCADStudio.git
-cd OpenCADStudio
-cargo build --release --bin OpenCADStudio
-```
-
-The resulting binary is written to `target/release/OpenCADStudio` (`OpenCADStudio.exe` on Windows).
-
-### Web
-
-Install the WebAssembly target and build tools once:
-
-```bash
-rustup target add wasm32-unknown-unknown
-cargo install trunk wasm-bindgen-cli
-```
-
-Start the development server:
-
-```bash
-trunk serve
-```
-
-## Automation
-
-The desktop binary supports one-shot conversion, a persistent headless server, and a client-neutral MCP endpoint for AI applications:
-
-```bash
-OpenCADStudio --export input.dwg output.dxf
-OpenCADStudio --export input-r12.dxf output.dwg --target-version R14
-OpenCADStudio --serve
-OpenCADStudio --serve --port 4242
-OpenCADStudio --mcp
-```
-
-The automation server exchanges one JSON object per line over standard input/output or a local TCP socket. The self-contained MCP endpoint exposes the live desktop editor through the same tools to every compatible client. Its `audit` and `save_verified` operations check an explicit DWG/DXF target version, lossy records, raw DXF handle references, reopen the output, compare its semantic manifest, and return a SHA-256 hash. To connect a client, configure it to launch `OpenCADStudio --mcp`. See the [MCP control guide](docs/automation/README.md).
-
-## Plugins
-
-Desktop plugins run in separate processes and communicate with the host through the versioned plugin API. The browser build does not load native plugins.
-
-- [Plugin architecture](docs/plugin-architecture.md)
-- [Plugin template](docs/plugin-template/README.md)
-- [Plugin registry](plugins/README.md)
-
-## Project documentation
-
-- [Automation API](docs/automation/README.md)
-- [Plugin architecture](docs/plugin-architecture.md)
-- [Tessellation pipeline](docs/tessellation.md)
-- [Security policy](SECURITY.md)
-
-## Contributing
-
-Bug reports, focused pull requests, translations, documentation improvements, and plugin contributions are welcome.
-
-- Search existing [issues](https://github.com/HakanSeven12/OpenCADStudio/issues) before opening a new report.
-- Use [Discussions](https://github.com/HakanSeven12/OpenCADStudio/discussions) for questions and ideas.
-- Report vulnerabilities privately by following the [security policy](SECURITY.md).
-
-Application translations live in `locales/*/opencadstudio.ftl`; source labels map through
-`src/locale_catalog.rs`. After editing translations, run `python3 scripts/export-locales.py`
-to refresh web and desktop packaging labels. Validate with `python3 scripts/test_site.py`
-and `cargo test --lib i18n::tests`.
-
-## Project growth
-
-### Stars
-
-<a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://www.opencadstudio.com/star-history-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://www.opencadstudio.com/star-history-light.svg">
-    <img alt="Open CAD Studio star history" src="https://www.opencadstudio.com/star-history-light.svg">
-  </picture>
-</a>
-
-### Release downloads
-
-<a href="https://github.com/HakanSeven12/OpenCADStudio/releases">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://www.opencadstudio.com/download-history-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://www.opencadstudio.com/download-history-light.svg">
-    <img alt="Open CAD Studio release download history" src="https://www.opencadstudio.com/download-history-light.svg">
-  </picture>
-</a>
-
-## Support the project
-
-If Open CAD Studio helps your work, support continued development through [GitHub Sponsors](https://github.com/sponsors/HakanSeven12) or [Patreon](https://www.patreon.com/HakanSeven12).
+The MCP check expects an editor already running with `--automation`; it is the end-to-end
+proof for the electrical read operation and the node-graph Electrical category.
 
 ## License
 
-Open CAD Studio is distributed under the [GNU General Public License v3.0](LICENSE).
+GNU General Public License v3.0 — see [LICENSE](LICENSE). The upstream Open CAD Studio code
+remains copyright its authors; the electrical additions in this repository are distributed
+under the same licence. The software is provided without warranty; keep backups of
+important drawings.

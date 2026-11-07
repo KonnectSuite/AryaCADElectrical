@@ -5,6 +5,10 @@ references, a standard title block and the numbering contract the electrical com
 Units are millimetres (1 drawing unit = 1 mm); the NEC sheets use the ASME Y14.1 inch sizes
 converted to mm.
 
+These templates ship with OpenCADElectrical (working name), the electrical fork of Open CAD
+Studio. See [`docs/README.md`](../docs/README.md) for the project overview and
+[`docs/CREDITS.md`](../docs/CREDITS.md) for upstream credit and licence notes.
+
 ## Start a drawing from one
 
 ```

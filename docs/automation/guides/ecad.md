@@ -1,9 +1,11 @@
 # Electrical drawings (ECAD)
 
-AryaCADElectrical is the same editor as Open CAD Studio with an electrical layer on top:
-sheet templates with AutoCAD Electrical style title blocks, a project file, symbol libraries,
-pin-level wire connectivity, cables, panel reports and a few hundred `ELEC*` commands. This
-guide is the order to do things in and the checks that tell you a drawing is right.
+OpenCADElectrical (working name) is the Open CAD Studio editor with an electrical layer on
+top: sheet templates with AutoCAD Electrical style title blocks, a project file, symbol
+libraries, pin-level wire connectivity, cables, panel reports and a few hundred `ELEC*`
+commands. This guide is the order to do things in and the checks that tell you a drawing is
+right. It belongs to the fork described in [../../README.md](../../README.md); the upstream
+project and its authors are credited in [../../CREDITS.md](../../CREDITS.md).
 
 ## 1. Start from a drawing set, not a blank drawing
 
@@ -17,7 +19,7 @@ path is a setup panel that builds a complete project:
 | Project / Title / Company | written into the title block and `project.eprj` |
 | Drawing number | file stem: sheets are `<drawing>-01.dxf`, `<drawing>-02.dxf`, … |
 | Sheets in the set | 1–200; every sheet is generated from the template |
-| Folder | picked with **Browse…**; if Windows protects the folder the set falls back to the per-user AryaCAD folder, then temp, then the current directory and says where it landed |
+| Folder | picked with **Browse…**; if Windows protects the folder the set falls back to the user's OpenCADStudio configuration folder, then temp, then the current directory and says where it landed |
 
 `ELECSTART` reopens that chooser at any time, or `ELECNEW <template.dxf>` starts a single
 electrical drawing from a template when a script already knows the path.
