@@ -14,6 +14,20 @@ The CAD engine, file formats, rendering, plugin system and MCP server come from 
 Studio. Please read [CREDITS.md](CREDITS.md) for the upstream project, its authors and the
 licence terms; this fork is not an official Open CAD Studio release.
 
+## What it looks like
+
+| First launch | Electrical drawing-set wizard |
+|---|---|
+| ![Startup chooser](screenshots/startup-chooser.png) | ![New electrical drawing set](screenshots/wizard-browse-folder.png) |
+
+| IEC A3 sheet | NEC ANSI B sheet |
+|---|---|
+| ![IEC A3 template](screenshots/template-iec-a3.png) | ![NEC ANSI B template](screenshots/template-nec-b.png) |
+
+The node graph's **Electrical** category evaluates the same netlist the commands use:
+
+![Electrical node graph](screenshots/node-graph-electrical.png)
+
 ## Start here
 
 | I want to… | Read |

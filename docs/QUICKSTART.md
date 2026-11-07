@@ -10,6 +10,8 @@ The base editor is the work of the Open CAD Studio project — see
 <https://github.com/HakanSeven12/OpenCADStudio>. This fork is a work in progress, not an
 official Open CAD Studio release.
 
+![First launch: drafting drawing or electrical drawing set](screenshots/startup-chooser.png)
+
 ## 1. Run it
 
 Build from source (see `reports/HANDOFF.md` for the full build notes):
@@ -39,6 +41,13 @@ than typed. **Create** makes the sheet set from the bundled templates, fills the
 block, writes the project file and opens the first sheet. If Windows protects the chosen
 folder, the set is written to a writable fallback (the app's per-user folder, then temp) and
 the command line says where it went; `ELECSTART` reopens that chooser.
+
+![The drawing-set wizard, with the resolved template and the folder picker](screenshots/wizard-browse-folder.png)
+
+Each sheet is a real drawing with a standard frame, zone references, revision table and a
+filled title block; the same template outside a project looks like this:
+
+![IEC A3 template](screenshots/template-iec-a3.png)
 
 ## 2. First schematic
 

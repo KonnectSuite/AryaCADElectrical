@@ -16,6 +16,8 @@ editor that reads and writes ordinary DWG and DXF files.
 
 ![Startup chooser](docs/screenshots/startup-chooser.png)
 
+![Electrical drawing-set wizard](docs/screenshots/wizard-browse-folder.png)
+
 ## What the electrical layer adds
 
 - **A drawing set, not a blank drawing.** On launch the application asks whether you want a
@@ -43,6 +45,10 @@ editor that reads and writes ordinary DWG and DXF files.
   through a node-graph **Electrical** category that evaluates nets, pins and components.
 
 ![IEC A3 template](docs/screenshots/template-iec-a3.png)
+
+The node graph's **Electrical** category works on the same netlist as the commands:
+
+![Electrical node graph](docs/screenshots/node-graph-electrical.png)
 
 ## Built on Open CAD Studio
 

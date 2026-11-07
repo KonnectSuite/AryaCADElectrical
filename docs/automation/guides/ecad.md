@@ -126,8 +126,18 @@ configuration difference.
 
 ## Screenshots in the repository
 
-- `docs\screenshots\startup-chooser.png` — the first launch: drafting or electrical.
-- `docs\screenshots\template-iec-a3.png`, `docs\screenshots\template-nec-b.png` — the
-  finished templates rendered by the app.
-- `docs\screenshots\node-graph-electrical.png` — the node graph's Electrical category with a
-  live `Electrical Netlist` node evaluated on the sample sheet.
+The first launch asks for the working mode, and the electrical path continues into the
+drawing-set wizard:
+
+![First launch: drafting drawing or electrical drawing set](../../screenshots/startup-chooser.png)
+
+The templates are real drawings, not pictures — this is the IEC A3 sheet open in the editor:
+
+| IEC A3 | NEC ANSI B |
+|---|---|
+| ![IEC A3 template](../../screenshots/template-iec-a3.png) | ![NEC ANSI B template](../../screenshots/template-nec-b.png) |
+
+The node graph's **Electrical** category evaluates the same netlist as the commands, here on
+the bundled sample sheet:
+
+![Electrical Netlist node evaluated on the sample sheet](../../screenshots/node-graph-electrical.png)

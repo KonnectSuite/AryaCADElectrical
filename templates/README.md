@@ -9,6 +9,13 @@ These templates ship with OpenCADElectrical (working name), the electrical fork 
 Studio. See [`docs/README.md`](../docs/README.md) for the project overview and
 [`docs/CREDITS.md`](../docs/CREDITS.md) for upstream credit and licence notes.
 
+| IEC A3 landscape | NEC ANSI B tabloid |
+|---|---|
+| ![IEC A3 landscape template](../docs/screenshots/template-iec-a3.png) | ![NEC ANSI B tabloid template](../docs/screenshots/template-nec-b.png) |
+
+Each sheet carries a trim edge and inner frame, the zone grid in the margin, a revision
+table with the correct projection symbol, and the title block the wizard fills in.
+
 ## Start a drawing from one
 
 ```
