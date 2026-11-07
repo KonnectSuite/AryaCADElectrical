@@ -328,7 +328,7 @@ def run_smoke(baseline, symbols):
     check("smoke batch exits 0", code == 0, f"exit {code}")
 
     match = re.search(
-        r"ELECLIB: loaded (\d+) symbol\(s\).*?(\d+) failed, (\d+) in the catalogue, (\d+) preview segment",
+        r"ELECLIB: loaded (\d+) symbol\(s\).*?(\d+) failed, (\d+) in the catalogue, (?:\d+ attribute definition point\(s\), )?(\d+) preview segment",
         text,
     )
     if not match:
@@ -860,7 +860,7 @@ def run_client_library(baseline, current, client_symbols):
     check("client library batch exits 0", code == 0, f"exit {code}")
 
     match = re.search(
-        r"ELECLIB: loaded (\d+) symbol\(s\).*?(\d+) failed, (\d+) in the catalogue, (\d+) preview segment",
+        r"ELECLIB: loaded (\d+) symbol\(s\).*?(\d+) failed, (\d+) in the catalogue, (?:\d+ attribute definition point\(s\), )?(\d+) preview segment",
         text,
     )
     if not match:
