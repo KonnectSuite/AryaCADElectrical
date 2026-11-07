@@ -11594,6 +11594,119 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            Message::ElecLibSearch(query) => {
+                self.elec_lib_manager.search = query;
+                Task::none()
+            }
+            Message::ElecLibSelect(name) => {
+                self.elec_lib_manager.class_edit = self
+                    .elec_lib_manager
+                    .rows
+                    .iter()
+                    .find(|row| row.name == name)
+                    .map(|row| row.class.clone())
+                    .unwrap_or_default();
+                self.elec_lib_manager.selected = Some(name);
+                self.elec_lib_manager.confirm_delete = false;
+                Task::none()
+            }
+            Message::ElecLibClassEdit(value) => {
+                self.elec_lib_manager.class_edit = value;
+                Task::none()
+            }
+            Message::ElecLibNewName(value) => {
+                self.elec_lib_manager.new_name = value;
+                Task::none()
+            }
+            Message::ElecLibNewClass(value) => {
+                self.elec_lib_manager.new_class = value;
+                Task::none()
+            }
+            Message::ElecLibNewPins(value) => {
+                self.elec_lib_manager.new_pins = value;
+                Task::none()
+            }
+            Message::ElecLibReload => {
+                if let Some(folder) = self.library_manager_folder() {
+                    let i = self.active_tab;
+                    let path = folder.display().to_string();
+                    let _ = self.elec_lib(i, &path);
+                    self.elec_lib_manager.status = format!("Reloaded {path}.");
+                } else {
+                    self.elec_lib_manager.status =
+                        "No library folder loaded; run ELECLIB <folder> first.".to_string();
+                }
+                self.refresh_library_manager();
+                Task::none()
+            }
+            Message::ElecLibOpenFolder => {
+                self.library_manager_open_folder();
+                Task::none()
+            }
+            Message::ElecLibAdd => {
+                let name = self.elec_lib_manager.new_name.trim().to_string();
+                if name.is_empty() {
+                    self.elec_lib_manager.status =
+                        "Enter a name for the new symbol.".to_string();
+                } else {
+                    let class = self.elec_lib_manager.new_class.trim().to_string();
+                    let class = if class.is_empty() { None } else { Some(class) };
+                    let pins = self
+                        .elec_lib_manager
+                        .new_pins
+                        .trim()
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|pins| *pins > 0);
+                    let i = self.active_tab;
+                    let _ = self.elec_make_symbol(i, &name, class.as_deref(), pins);
+                    if let Some(folder) = self.library_manager_folder() {
+                        let path = folder.display().to_string();
+                        let _ = self.elec_lib(i, &path);
+                    }
+                    self.refresh_library_manager();
+                    self.elec_lib_manager.selected = Some(name.clone());
+                    self.elec_lib_manager.status = format!("Added {name} to the library.");
+                    self.elec_lib_manager.new_name.clear();
+                    self.elec_lib_manager.new_pins.clear();
+                }
+                Task::none()
+            }
+            Message::ElecLibSaveClass => {
+                let Some(name) = self.elec_lib_manager.selected.clone() else {
+                    self.elec_lib_manager.status = "Select a symbol first.".to_string();
+                    return Task::none();
+                };
+                let class = self.elec_lib_manager.class_edit.clone();
+                self.elec_lib_manager.status = self.library_manager_save_class(&name, &class);
+                self.refresh_library_manager();
+                Task::none()
+            }
+            Message::ElecLibDelete => {
+                let Some(name) = self.elec_lib_manager.selected.clone() else {
+                    self.elec_lib_manager.status = "Select a symbol first.".to_string();
+                    return Task::none();
+                };
+                if !self.elec_lib_manager.confirm_delete {
+                    self.elec_lib_manager.confirm_delete = true;
+                    self.elec_lib_manager.status =
+                        format!("Press Confirm delete to remove {name} from the library.");
+                } else {
+                    self.elec_lib_manager.confirm_delete = false;
+                    self.elec_lib_manager.status = self.library_manager_delete(&name);
+                    self.elec_lib_manager.selected = None;
+                    self.refresh_library_manager();
+                }
+                Task::none()
+            }
+            Message::ElecLibPlace => {
+                if let Some(name) = self.elec_lib_manager.selected.clone() {
+                    self.active_modal = None;
+                    return self.update(Message::Command(format!("ELECPLACE {name}")));
+                }
+                Task::none()
+            }
+
             Message::CloseModal => {
                 if self.active_modal == Some(super::ModalKind::BlockLookup) {
                     self.block_lookup = None;

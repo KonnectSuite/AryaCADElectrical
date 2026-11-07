@@ -1329,6 +1329,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "ELECPALETTE",
         "ELECPLACE",
         "ELECSETATTR",
+        "ELECLIBMANAGER",
         "ELECNEW",
         "ELECSTART",
         "ELECPLC",

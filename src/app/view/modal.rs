@@ -28,6 +28,7 @@ impl OpenCADStudio {
             Some(K::Overkill) => crate::t!("Delete Duplicate Objects").into_owned(),
             Some(K::ElectricalLibrary) => crate::t!("Electrical Library").into_owned(),
             Some(K::ElecReport) => self.elec_report.title.clone(),
+            Some(K::ElecLibManager) => crate::t!("Symbol library").into_owned(),
             Some(K::StartMode) => crate::t!("Open CAD Studio").into_owned(),
             Some(K::EcadSetup) => crate::t!("New electrical drawing set").into_owned(),
             Some(K::PluginManager) => crate::tr!("modal", "plugin-manager"),
@@ -734,6 +735,15 @@ impl OpenCADStudio {
             }
             super::super::ModalKind::ElecReport => sized_flow(ex, 900, 680, |flow| {
                 crate::ui::window::elec_report::view(&self.elec_report, flow)
+            }),
+            super::super::ModalKind::ElecLibManager => sized_flow(ex, 980, 720, |flow| {
+                let folder = self.elec_lib_manager.folder.as_str();
+                crate::ui::window::elec_lib_manager::view(
+                    &self.elec_lib_manager,
+                    Some(folder),
+                    &self.elec_lib_manager.rows,
+                    flow,
+                )
             }),
             super::super::ModalKind::AttMan => {
                 let state = self.attman.as_ref()?;

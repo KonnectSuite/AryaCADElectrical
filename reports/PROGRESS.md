@@ -1106,3 +1106,9 @@ IO_MODULE` + `QSAVE`, then reading the saved DXF):
   the definition points but stored them into an index that it then **replaced with a fresh
   manifest** (and, before that, an index that was still empty while the folder loaded); the
   measured points now travel in a temporary map and are merged into the catalogue rows.
+
+- Added the **Symbol Manager** dialog (`ELECLIBMANAGER`, Electrical → Symbol Library →
+  Symbol Manager): searchable catalogue list with class/pin counts, place, edit class,
+  delete with confirmation, reload, open folder, and an add-from-selection form
+  (name/class/pins). It writes `library.tsv` through a shared manifest writer, with a
+  round-trip unit test.

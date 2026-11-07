@@ -1013,6 +1013,202 @@ impl OpenCADStudio {
     }
 }
 
+/// Write a catalogue back to `library.tsv`, keeping the column order that
+/// [`read_library_manifest`] expects (symbol, class, attributes, scale).
+fn write_library_manifest(
+    directory: &std::path::Path,
+    index: &std::collections::BTreeMap<String, LibraryEntry>,
+) -> std::io::Result<usize> {
+    let mut text = String::from("symbol\tclass\tattributes\tscale\n");
+    let mut entries: Vec<&LibraryEntry> = index.values().collect();
+    entries.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    for entry in &entries {
+        text.push_str(&entry.name);
+        text.push('\t');
+        text.push_str(&entry.class);
+        text.push('\t');
+        text.push_str(&entry.attributes.join("|"));
+        text.push('\t');
+        text.push_str(&format!("{}", entry.scale));
+        text.push('\n');
+    }
+    std::fs::write(directory.join("library.tsv"), text)?;
+    Ok(entries.len())
+}
+
+impl OpenCADStudio {
+    /// Folder the symbol manager lists, if a library has been loaded.
+    pub(crate) fn library_manager_folder(&self) -> Option<std::path::PathBuf> {
+        library_directory().or_else(remembered_library)
+    }
+
+    /// Catalogue rows for the symbol manager: name, class, pin count, scale.
+    pub(crate) fn library_manager_symbols(&self) -> Vec<(String, String, usize, f64)> {
+        let Ok(index) = library_index().read() else {
+            return Vec::new();
+        };
+        let mut rows: Vec<(String, String, usize, f64)> = index
+            .values()
+            .map(|entry| {
+                let pins = entry
+                    .attributes
+                    .iter()
+                    .filter(|tag| tag.to_ascii_uppercase().contains("TERM"))
+                    .count();
+                (entry.name.clone(), entry.class.clone(), pins, entry.scale)
+            })
+            .collect();
+        rows.sort_by(|left, right| left.0.to_lowercase().cmp(&right.0.to_lowercase()));
+        rows
+    }
+
+    /// Rename a symbol's class in the catalogue file and in memory.
+    pub(crate) fn library_manager_save_class(&mut self, symbol: &str, class: &str) -> String {
+        let Some(folder) = self.library_manager_folder() else {
+            return "No library folder is loaded.".to_string();
+        };
+        let class = class.trim();
+        if class.is_empty() {
+            return "The class cannot be empty.".to_string();
+        }
+        let mut index = read_library_manifest(&folder);
+        let Some(entry) = index.get_mut(&symbol.to_ascii_uppercase()) else {
+            return format!("{symbol} is not in this catalogue.");
+        };
+        entry.class = class.to_string();
+        let message = match write_library_manifest(&folder, &index) {
+            Ok(_) => format!("Saved class \"{class}\" for {symbol}."),
+            Err(error) => format!("Could not write library.tsv: {error}"),
+        };
+        if let Ok(mut guard) = library_index().write() {
+            if let Some(memory) = guard.get_mut(&symbol.to_ascii_uppercase()) {
+                memory.class = class.to_string();
+            }
+            for (key, entry) in index {
+                if let Some(memory) = guard.get_mut(&key) {
+                    memory.class = entry.class;
+                }
+            }
+        }
+        message
+    }
+
+    /// Remove a symbol's DXF and catalogue row.
+    pub(crate) fn library_manager_delete(&mut self, symbol: &str) -> String {
+        let Some(folder) = self.library_manager_folder() else {
+            return "No library folder is loaded.".to_string();
+        };
+        let mut index = read_library_manifest(&folder);
+        let key = symbol.to_ascii_uppercase();
+        let Some(entry) = index.remove(&key) else {
+            return format!("{symbol} is not in this catalogue.");
+        };
+        let mut removed_file = false;
+        for candidate in [
+            format!("{}.dxf", entry.name),
+            format!("{}.DXF", entry.name),
+            format!("{symbol}.dxf"),
+        ] {
+            let path = folder.join(candidate);
+            if path.is_file() {
+                match std::fs::remove_file(&path) {
+                    Ok(()) => removed_file = true,
+                    Err(error) => return format!("Could not delete {}: {error}", path.display()),
+                }
+                break;
+            }
+        }
+        let note = match write_library_manifest(&folder, &index) {
+            Ok(_) => String::new(),
+            Err(error) => return format!("Could not write library.tsv: {error}"),
+        };
+        if let Ok(mut guard) = library_index().write() {
+            guard.remove(&key);
+        }
+        let file_note = if removed_file {
+            "and its DXF"
+        } else {
+            "from the catalogue (its DXF was not found)"
+        };
+        format!("Deleted {symbol} {file_note}.{note}")
+    }
+
+    /// Reveal the library folder in the system file browser.
+    pub(crate) fn library_manager_open_folder(&self) {
+        let Some(folder) = self.library_manager_folder() else {
+            return;
+        };
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("explorer").arg(&folder).spawn();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open").arg(&folder).spawn();
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let _ = std::process::Command::new("xdg-open").arg(&folder).spawn();
+        }
+    }
+
+    /// Fill the symbol manager's row list from the catalogue.
+    pub(crate) fn refresh_library_manager(&mut self) {
+        self.elec_lib_manager.folder = self
+            .library_manager_folder()
+            .map(|folder| folder.display().to_string())
+            .unwrap_or_default();
+        self.elec_lib_manager.rows = self
+            .library_manager_symbols()
+            .into_iter()
+            .map(|(name, class, pins, scale)| {
+                crate::ui::window::elec_lib_manager::LibSymbolRow {
+                    name,
+                    class,
+                    pins,
+                    scale,
+                }
+            })
+            .collect();
+        if self.elec_lib_manager.selected.is_none() && !self.elec_lib_manager.rows.is_empty() {
+            self.elec_lib_manager.selected =
+                Some(self.elec_lib_manager.rows[0].name.clone());
+        }
+        self.elec_lib_manager.class_edit = self
+            .elec_lib_manager
+            .selected
+            .as_ref()
+            .and_then(|name| {
+                self.elec_lib_manager
+                    .rows
+                    .iter()
+                    .find(|row| &row.name == name)
+            })
+            .map(|row| row.class.clone())
+            .unwrap_or_default();
+    }
+
+    /// Open the symbol manager with its list refreshed.
+    pub(crate) fn open_library_manager(&mut self) {
+        self.elec_lib_manager.confirm_delete = false;
+        self.elec_lib_manager.status.clear();
+        if let Some(folder) = self.library_manager_folder() {
+            let path = folder.display().to_string();
+            let i = self.active_tab;
+            let loaded = library_index()
+                .read()
+                .map(|index| !index.is_empty())
+                .unwrap_or(false);
+            if !loaded {
+                let _ = self.elec_lib(i, &path);
+            }
+        }
+        self.refresh_library_manager();
+        self.active_modal = Some(crate::app::ModalKind::ElecLibManager);
+        self.reset_modal_geometry();
+    }
+}
+
 impl OpenCADStudio {
     /// Turn every block insert in the active tab into a component.
     ///
@@ -3108,7 +3304,7 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// manifest, no metadata, just "CONTACTOR.dxf draws a contactor". Each drawing's model
     /// space becomes a block definition, so `ELECINSERT CONTACTOR` can then place it even
     /// on a drawing that has never contained one.
-    pub(super) fn elec_lib(&mut self, i: usize, folder: &str) -> Task<Message> {
+    pub(crate) fn elec_lib(&mut self, i: usize, folder: &str) -> Task<Message> {
         let directory = std::path::Path::new(folder);
         if !directory.is_dir() {
             let message = format!("ELECLIB: {folder} is not a folder.");
@@ -3789,7 +3985,7 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// with the symbol, so `ELECLIB` recreates the attributes and the netlist can find the
     /// pins after a reload. The four component attributes are only added when the selection
     /// does not already define them.
-    pub(super) fn elec_make_symbol(
+    pub(crate) fn elec_make_symbol(
         &mut self,
         i: usize,
         name: &str,
@@ -5955,6 +6151,10 @@ fn class_for_reference(tag: &str) -> &'static str {
                 self.command_line.push_output("ELECMAKESYMBOL: select geometry, then ELECMAKESYMBOL <name>");
                 Some(Task::none())
             }
+            "ELECLIBMANAGER" => {
+                self.open_library_manager();
+                Some(Task::none())
+            }
             "ELECNEW" => Some(self.elec_new(i, None)),
             // Reopen the drafting-or-electrical start dialog after it has been
             // dismissed once (the ribbon Help menu also reaches it).
@@ -6819,5 +7019,41 @@ mod elec_make_symbol_tests {
     fn authored_attribute_tags_fold_duplicates_and_blank_tags() {
         let tags = authored_attribute_tags(&[attribute("tag1"), attribute("TAG1"), attribute("  ")]);
         assert_eq!(tags, vec!["tag1".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod library_manifest_tests {
+    use super::*;
+
+    #[test]
+    fn manifest_round_trips_class_attributes_and_scale() {
+        let folder = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("tmp")
+            .join("manifest_roundtrip");
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).expect("create test folder");
+
+        let mut index = std::collections::BTreeMap::new();
+        index.insert(
+            "IO_MODULE".to_string(),
+            LibraryEntry {
+                name: "IO_MODULE".to_string(),
+                class: "IO Module".to_string(),
+                attributes: vec!["TAG1".to_string(), "X1TERM01".to_string()],
+                label_height: 0.0,
+                scale: 25.4,
+                attribute_offsets: Vec::new(),
+            },
+        );
+        write_library_manifest(&folder, &index).expect("write manifest");
+
+        let read = read_library_manifest(&folder);
+        let entry = read.get("IO_MODULE").expect("symbol survives the round trip");
+        assert_eq!(entry.class, "IO Module");
+        assert_eq!(entry.attributes, vec!["TAG1", "X1TERM01"]);
+        assert!((entry.scale - 25.4).abs() < 1e-9);
+        let _ = std::fs::remove_dir_all(&folder);
     }
 }

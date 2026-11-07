@@ -146,6 +146,7 @@ impl CadModule for ElectricalModule {
                             items: vec![
                                 menu_item("ELECPALETTE", "Browse Symbols", LIBRARY),
                                 menu_item("ELECLIB", "Load Library Folder", LIBRARY_FOLDER),
+                                menu_item("ELECLIBMANAGER", "Symbol Manager", LIBRARY),
                             ],
                             default: "ELECPALETTE",
                         },

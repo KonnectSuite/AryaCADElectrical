@@ -1516,6 +1516,8 @@ pub(super) struct OpenCADStudio {
     /// to the command line; the dialog is the visible result the Electrical
     /// ribbon buttons open, and it is the same table shown on screen.
     elec_report: crate::ui::window::elec_report::ElecReport,
+    /// Symbol library manager: search text, selection and the add/edit forms.
+    elec_lib_manager: crate::ui::window::elec_lib_manager::LibraryManagerState,
     /// What is drawing the scene, once the first frame has told us. Drives
     /// the graphics warning (popup, status-bar pill, command line).
     gpu_status: crate::scene::pipeline::GpuStatus,
@@ -3057,6 +3059,8 @@ pub enum ModalKind {
     /// terminal strips, wire list, BOM, parts catalogue …). The Electrical
     /// ribbon buttons open this so pressing them has a visible result.
     ElecReport,
+    /// Symbol library manager: browse, edit, add and delete library symbols.
+    ElecLibManager,
     /// A converter would drop part of the drawing on save.
     ConversionLoss,
     #[cfg(not(target_arch = "wasm32"))]
@@ -3501,6 +3505,19 @@ pub enum Message {
     ElecReportSearch(String),
     /// Electrical report dialog: a class chip was picked (None = all classes).
     ElecReportClass(Option<String>),
+    /// Symbol manager: search text, row selection, class edit, new-symbol fields.
+    ElecLibSearch(String),
+    ElecLibSelect(String),
+    ElecLibClassEdit(String),
+    ElecLibNewName(String),
+    ElecLibNewClass(String),
+    ElecLibNewPins(String),
+    ElecLibReload,
+    ElecLibOpenFolder,
+    ElecLibAdd,
+    ElecLibSaveClass,
+    ElecLibDelete,
+    ElecLibPlace,
     /// Set the default type/version used when first saving a new drawing.
     DefaultSaveFormatChanged(String),
     /// Select one of Iced's built-in themes or the editable Custom theme.
@@ -6140,6 +6157,7 @@ impl OpenCADStudio {
             pending_startup_modals: std::collections::VecDeque::new(),
             start_hub: Default::default(),
             elec_report: Default::default(),
+            elec_lib_manager: Default::default(),
             gpu_status: crate::scene::pipeline::GpuStatus::Unknown,
             gpu_status_generation: 0,
             gpu_warning_silenced: String::new(),
