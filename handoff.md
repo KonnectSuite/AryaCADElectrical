@@ -478,7 +478,7 @@ against a GUI with more than one tab.
 **Still open**: `ELECLIST` still prints the block name as the class for library-less
 symbols, which the reports render as-is.
 
-## 15. Round 27 (2026-11-07): uniqueness scope, smoke 111/111
+## 15. Round 27 (2026-11-07): uniqueness scope, connection webs, smoke 113/113
 
 The last SkyCAD `NumberingFormat` field is now honoured end to end. ELECPANEL already read
 `library/panel/footprints.tsv`, so panel layout was not a gap.
@@ -496,17 +496,26 @@ refused with "TAGUNIQ must be Global, Local or None."), the `ELECSETUP` printout
 `unique <scope>` on the tag line, and the dialog has a `Unique` pick list under `Follow
 through` with the hint "Global skips numbers used on other sheets."
 
+**Number connection webs.** `ElecSetup` gained `wire_number_web` (default on, property
+`ELEC_WIREWEB`). `ELECWIRENUMBER` now numbers either one number per net - a web is one
+electrical node, so every conductor of it shares the number - or, with the option off, one
+number per drawn segment, which is what a panel builder wants for wire tags. The summary
+line says which unit it counted (`net(s)` / `segment(s)`). Exposed as `ELECSETUP WIREWEB=No`
+and as a `Number webs` pick list in the dialog.
+
 **Tests.** Two unit assertions (`ELEC_TAGUNIQ` round-trip; the dialog stores `None`) in
 `mod elec_setup_tests` - 4 passed. New smoke section 16 (`run_uniqueness_scope`) numbers a
 first sheet `-K1`/`-K2`, then numbers a second sheet with `TAGUNIQ=Global` (expects `-K3`)
-and a third with `TAGUNIQ=Local` (expects `-K1`).
+and a third with `TAGUNIQ=Local` (expects `-K1`). Two more checks draw a corner (two
+segments, one net) plus a loose conductor and assert `WIREWEB=Yes` labels twice while
+`WIREWEB=No` labels three times.
 
 | Check | Result |
 |---|---|
 | `cargo check --release` | clean |
 | `cargo test --release --lib elec_setup` | 4 passed |
-| `cargo build --release -j 4` | finished in 8 m 25 s |
-| `py -3.13 tests\ecad\run_smoke.py` | **111/111 checks passed** |
+| `cargo build --release -j 4` | finished in 8 m 13 s |
+| `py -3.13 tests\ecad\run_smoke.py` | **113/113 checks passed** |
 | `docs/screenshots/ecad-numbering-setup.png` | re-captured with the `Unique` row |
 
 **Still open**: `ELECLIST` prints the block name as the class for library-less symbols.

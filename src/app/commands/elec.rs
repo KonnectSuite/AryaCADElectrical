@@ -241,6 +241,10 @@ struct ElecSetup {
     wire_alphabetical: bool,
     /// Leave the first wire number blank (SkyCAD's "Empty first value").
     wire_empty_first: bool,
+    /// Number whole connection webs instead of single segments (SkyCAD's
+    /// "Number connection webs"): on, every conductor of one net shares a
+    /// number; off, each drawn segment takes its own.
+    wire_number_web: bool,
     /// SkyCAD's "Uniqueness scope": `Global` keeps a number from being reused on
     /// another sheet of the project, `Local` only inside this drawing, and `None`
     /// does not consult other tags at all.
@@ -265,6 +269,7 @@ impl Default for ElecSetup {
             wire_increment: 1,
             wire_alphabetical: false,
             wire_empty_first: false,
+            wire_number_web: true,
             tag_unique: "Global".to_string(),
         }
     }
@@ -395,6 +400,9 @@ fn read_setup(document: &codec::Document) -> ElecSetup {
         if let Some(value) = property("ELEC_TAGUNIQ") {
             setup.tag_unique = canonical_uniqueness(&value);
         }
+        if let Some(value) = property("ELEC_WIREWEB") {
+            setup.wire_number_web = !value.eq_ignore_ascii_case("No");
+        }
     }
     setup
 }
@@ -435,6 +443,10 @@ fn write_setup_properties(document: &mut codec::Document, setup: &ElecSetup) {
             if setup.wire_empty_first { "Yes" } else { "No" }.to_string(),
         ),
         ("ELEC_TAGUNIQ", canonical_uniqueness(&setup.tag_unique)),
+        (
+            "ELEC_WIREWEB",
+            if setup.wire_number_web { "Yes" } else { "No" }.to_string(),
+        ),
     ];
     for (key, value) in values {
         if let Some(entry) = document
@@ -1913,7 +1925,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             setup.tag_unique
         ));
         self.command_line.push_output(&format!(
-            "  wire  {}  mode {}  start {}  step {}  numbers {}  empty first {}",
+            "  wire  {}  mode {}  start {}  step {}  numbers {}  empty first {}  webs {}",
             setup.wire_format,
             setup.wire_mode,
             setup.wire_start,
@@ -1923,7 +1935,8 @@ fn class_for_reference(tag: &str) -> &'static str {
             } else {
                 "numerical"
             },
-            if setup.wire_empty_first { "yes" } else { "no" }
+            if setup.wire_empty_first { "yes" } else { "no" },
+            if setup.wire_number_web { "yes" } else { "no" }
         ));
         self.command_line
             .push_output(&format!("  xref  {}  sheet {sheet}", setup.xref_format));
@@ -1960,6 +1973,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             }
             .to_string(),
             wire_empty_first: if setup.wire_empty_first { "Yes" } else { "No" }.to_string(),
+            wire_number_web: if setup.wire_number_web { "Yes" } else { "No" }.to_string(),
             error: None,
         });
         self.active_modal = Some(crate::app::ModalKind::ElecSetup);
@@ -1991,6 +2005,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             SetupMsg::WireIncrement(value) => state.wire_increment = value,
             SetupMsg::WireKind(value) => state.wire_kind = value,
             SetupMsg::WireEmptyFirst(value) => state.wire_empty_first = value,
+        SetupMsg::WireNumberWeb(value) => state.wire_number_web = value,
             SetupMsg::XrefFormat(value) => state.xref_format = value,
             SetupMsg::Sheet(value) => state.sheet = value,
             SetupMsg::Ok => return self.apply_elec_setup(),
@@ -2060,6 +2075,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                 .trim()
                 .eq_ignore_ascii_case("Alphabetical"),
             wire_empty_first: state.wire_empty_first.trim().eq_ignore_ascii_case("Yes"),
+            wire_number_web: state.wire_number_web.trim().eq_ignore_ascii_case("Yes"),
             tag_unique: canonical_uniqueness(&state.tag_unique),
         };
         write_setup_properties(&mut self.tabs[i].scene.document, &stored);
@@ -2089,7 +2105,7 @@ fn class_for_reference(tag: &str) -> &'static str {
         use crate::ui::window::elec_setup::{mode_label, mode_letter};
 
         const VALID: &str = "TAGFMT, TAGMODE, TAGSTART, TAGSUF, TAGINC, TAGFALL, TAGUNIQ, \
-WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, XREFFMT, SHEET";
+WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SHEET";
 
         let mut setup = read_setup(&self.tabs[i].scene.document);
         let mut error: Option<String> = None;
@@ -2139,6 +2155,7 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, XREFFMT, SHEET";
                     setup.wire_alphabetical = value.eq_ignore_ascii_case("Alphabetical")
                 }
                 "WIREEMPTY" => setup.wire_empty_first = value.eq_ignore_ascii_case("Yes"),
+                "WIREWEB" => setup.wire_number_web = !value.eq_ignore_ascii_case("No"),
                 "XREFFMT" => setup.xref_format = value.to_string(),
                 "SHEET" => setup.sheet = value.to_string(),
                 _ => unknown.push(key.clone()),
@@ -2860,22 +2877,35 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, XREFFMT, SHEET";
             return Task::none();
         }
 
-        // Order nets by where their first wire sits, so numbers follow the drawing.
-        let mut ordered: Vec<(i64, i64, u64)> = Vec::new();
-        for net in &netlist.nets {
-            // A net of coincident symbols has no wires and nothing to label.
-            let Some(first_wire) = net.wires.first().copied() else {
-                continue;
-            };
-            let Some(first) = wires.iter().find(|wire| wire.id == first_wire) else {
-                continue;
-            };
-            let mid_x = (first.from.x + first.to.x) / 2.0;
-            let mid_y = (first.from.y + first.to.y) / 2.0;
-            let (row, column) = reading_order_key(mid_x, mid_y);
-            ordered.push((row, column, net.id));
+        // SkyCAD's "Number connection webs": on, every conductor of one net shares a
+        // number because the web is one electrical node; off, each drawn segment is
+        // numbered on its own, which is what a panel builder wants for wire tags.
+        let number_webs = read_setup(&self.tabs[i].scene.document).wire_number_web;
+        // One entry per thing that takes a number: (row, column, wires, net).
+        let mut ordered: Vec<(i64, i64, Vec<u64>, Option<u64>)> = Vec::new();
+        if number_webs {
+            for net in &netlist.nets {
+                // A net of coincident symbols has no wires and nothing to label.
+                let Some(first_wire) = net.wires.first().copied() else {
+                    continue;
+                };
+                let Some(first) = wires.iter().find(|wire| wire.id == first_wire) else {
+                    continue;
+                };
+                let mid_x = (first.from.x + first.to.x) / 2.0;
+                let mid_y = (first.from.y + first.to.y) / 2.0;
+                let (row, column) = reading_order_key(mid_x, mid_y);
+                ordered.push((row, column, net.wires.clone(), Some(net.id)));
+            }
+        } else {
+            for wire in wires {
+                let mid_x = (wire.from.x + wire.to.x) / 2.0;
+                let mid_y = (wire.from.y + wire.to.y) / 2.0;
+                let (row, column) = reading_order_key(mid_x, mid_y);
+                ordered.push((row, column, vec![wire.id], None));
+            }
         }
-        ordered.sort_unstable();
+        ordered.sort_unstable_by_key(|(row, column, _, _)| (*row, *column));
 
         // The drawing's own wire numbering contract when it has one, so a sheet drawn in
         // AutoCAD Electrical numbers wires the way its `WIREFMT` says.
@@ -2895,14 +2925,13 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, XREFFMT, SHEET";
         let mut creates: Vec<(String, f64, f64)> = Vec::new();
         let mut report: Vec<String> = Vec::new();
 
-        for (ordinal, (_row, _column, net_id)) in ordered.iter().enumerate() {
+        for (ordinal, (_row, _column, unit_wires, net_id)) in ordered.iter().enumerate() {
             if skip_first && ordinal == 0 {
                 report.push("  (first net left blank)".to_string());
                 continue;
             }
-            let net = netlist.nets.iter().find(|net| net.id == *net_id).unwrap();
             let number = format.value(ordinal as u32);
-            let Some(first_wire) = net.wires.first().copied() else {
+            let Some(first_wire) = unit_wires.first().copied() else {
                 continue;
             };
             let Some(first) = wires.iter().find(|wire| wire.id == first_wire) else {
@@ -2913,32 +2942,46 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, XREFFMT, SHEET";
             let reuse = existing.iter().find(|(_, _, ex, ey)| {
                 (ex - x).abs() <= 0.1 && (ey - y).abs() <= 0.1
             });
-            let names: Vec<String> = net
-                .anchors
-                .iter()
-                .map(|id| graph.label_of(*id))
-                .collect();
+            let subject = match net_id {
+                Some(id) => format!("net {id}"),
+                None => "segment".to_string(),
+            };
+            let names: Vec<String> = match net_id {
+                Some(id) => netlist
+                    .nets
+                    .iter()
+                    .find(|net| net.id == *id)
+                    .map(|net| {
+                        net.anchors
+                            .iter()
+                            .map(|anchor| graph.label_of(*anchor))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            };
             match reuse {
                 Some((handle, current, _, _)) if current == &number => {
-                    report.push(format!("  {number}: net {net_id} (unchanged)"));
+                    report.push(format!("  {number}: {subject} (unchanged)"));
                 }
                 Some((handle, _, _, _)) => {
                     updates.push((*handle, number.clone()));
                     report.push(format!(
-                        "  {number}: net {net_id} ({} -> {number})",
+                        "  {number}: {subject} ({} -> {number})",
                         names.join(", ")
                     ));
                 }
                 None => {
                     creates.push((number.clone(), x, y));
-                    report.push(format!("  {number}: net {net_id} ({})", names.join(", ")));
+                    report.push(format!("  {number}: {subject} ({})", names.join(", ")));
                 }
             }
         }
 
         let summary = format!(
-            "ELECWIRENUMBER: {} net(s); {} label(s) created, {} updated.",
+            "ELECWIRENUMBER: {} {}; {} label(s) created, {} updated.",
             ordered.len(),
+            if number_webs { "net(s)" } else { "segment(s)" },
             creates.len(),
             updates.len()
         );

@@ -1247,6 +1247,39 @@ def run_uniqueness_scope(binary):
     tags = tags_of(sheet_c)
     check("a local scope restarts at -K1", tags == ["-K1"], f"{tags}")
 
+    # Connection webs: a corner is one net, two segments. Number webs -> one label;
+    # number segments -> one label each.
+    def corner_labels(command, name):
+        sheet = blank_drawing(os.path.join(WORK, name + ".dxf"))
+        batch = write_inline_batch(name + "_batch.txt", [
+            "ELECNEW",
+            command,
+            "ELECWIRE",
+            "0,0",
+            "40,0",
+            "",
+            "ELECWIRE",
+            "40,0",
+            "40,40",
+            "",
+            "ELECWIRE",
+            "100,0",
+            "140,0",
+            "",
+            "ELECWIRENUMBER",
+            f"SAVEAS {sheet}",
+        ])
+        code, text = run(binary, [binary, "--each", batch, sheet], name)
+        drawing = dxfio.load(sheet)
+        return sorted(e.s(1) for e in on_layer(drawing, "WIRENO") if e.kind == "TEXT"), text
+
+    labels, text = corner_labels("ELECSETUP WIREWEB=Yes", "numbering_webs")
+    check("numbering by web labels a corner once", labels == ["1", "2"], f"{labels}")
+
+    labels, text = corner_labels("ELECSETUP WIREWEB=No", "numbering_segments")
+    check("numbering by segment labels each conductor",
+          labels == ["1", "2", "3"], f"{labels}")
+
 def run_machine_files():
     section("14. the machine-readable artifacts")
     # WD_M profile

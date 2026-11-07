@@ -35,6 +35,7 @@ pub struct State {
     pub wire_increment: String,
     pub wire_kind: String,
     pub wire_empty_first: String,
+    pub wire_number_web: String,
     pub error: Option<String>,
 }
 
@@ -53,6 +54,7 @@ pub enum SetupMsg {
     WireIncrement(String),
     WireKind(String),
     WireEmptyFirst(String),
+    WireNumberWeb(String),
     XrefFormat(String),
     Sheet(String),
     Ok,
@@ -228,6 +230,13 @@ pub(crate) fn view(state: &State, sizing: ModalSizing) -> Element<'_, Message> {
             ),
         ]
         .spacing(14),
+        labeled_pick_list(
+            "Number webs".into(),
+            yes_no_options(),
+            Some(state.wire_number_web.clone()),
+            |value| Message::ElecSetup(SetupMsg::WireNumberWeb(value)),
+            Length::Fixed(120.0),
+        ),
         labeled_pick_list(
             "Empty first value".into(),
             yes_no_options(),
