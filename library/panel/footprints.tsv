@@ -16,12 +16,26 @@ CLASS:Circuit Breaker	18	90	rail
 CLASS:Contactor	45	90	rail
 CLASS:Overload	45	90	rail
 CLASS:Relay	18	90	rail
+CLASS:Timer	18	90	rail
+CLASS:Switch	18	90	rail
+CLASS:Surge Protection	18	90	rail
+CLASS:Meter	45	90	rail
+CLASS:Test Point	8	40	rail
+CLASS:Heater	30	60	rail
+CLASS:Rail	8	30	rail
+CLASS:Wire Duct	60	20	plate
+CLASS:Generator	90	90	plate
+CLASS:Fan	40	40	plate
+CLASS:Valve	30	60	plate
+CLASS:Bell	22	22	door
+CLASS:Buzzer	22	22	door
 CLASS:Fuse	18	90	rail
 CLASS:Power Distribution	45	90	rail
 CLASS:Power Supply	60	120	rail
 CLASS:PLC Digital Input	100	90	rail
 CLASS:PLC Digital Output	100	90	rail
 CLASS:PLC Analog Input	100	90	rail
+CLASS:PLC Analog Output	100	90	rail
 CLASS:PLC	100	90	rail
 CLASS:Terminal	8	50	rail
 CLASS:Earth	8	40	rail

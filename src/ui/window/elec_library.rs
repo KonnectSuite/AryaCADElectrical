@@ -142,6 +142,9 @@ struct State {
     /// First matching row shown. Scrolling moves by whole rows, so a row is
     /// never clipped in half and can never catch a click outside the list.
     scroll: usize,
+    /// Row index (into `entries`) the keyboard cursor is on, so ArrowUp/Down and
+    /// Enter can drive the palette without a mouse.
+    selected: Option<usize>,
 }
 
 /// The palette body: a search strip over a filtered, scrolling list of symbols.
@@ -289,6 +292,13 @@ impl Widget<Message, Theme, Renderer> for Palette {
         state.scroll = state
             .scroll
             .min(matches.len().saturating_sub(capacity));
+        // The keyboard cursor belongs to the filtered list, not to the query.
+        if state
+            .selected
+            .is_some_and(|selected| !matches.contains(&selected))
+        {
+            state.selected = None;
+        }
 
         let mut nodes = Vec::with_capacity(self.rows.len());
         for (index, row) in self.rows.iter_mut().enumerate() {
@@ -376,9 +386,90 @@ impl Widget<Message, Theme, Renderer> for Palette {
         }) = event
         {
             if !modifiers.control() && !modifiers.alt() && !modifiers.logo() {
+                // The arrow keys walk the filtered list and Enter inserts the
+                // highlighted row, so the palette works without a mouse.
+                match key {
+                    keyboard::Key::Named(keyboard::key::Named::ArrowDown)
+                    | keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                        if !matches.is_empty() {
+                            let forward = matches!(
+                                key,
+                                keyboard::Key::Named(keyboard::key::Named::ArrowDown)
+                            );
+                            let current = state
+                                .selected
+                                .and_then(|selected| {
+                                    matches.iter().position(|row| *row == selected)
+                                });
+                            let next_position = match (current, forward) {
+                                (Some(position), true) => (position + 1).min(matches.len() - 1),
+                                (Some(position), false) => position.saturating_sub(1),
+                                (None, true) => 0,
+                                (None, false) => matches.len() - 1,
+                            };
+                            state.selected = Some(matches[next_position]);
+                            // Keep the cursor row inside the visible window.
+                            state.scroll = state.scroll.min(next_position);
+                            if next_position >= state.scroll + capacity {
+                                state.scroll = next_position + 1 - capacity;
+                            }
+                            shell.invalidate_layout();
+                            shell.request_redraw();
+                            shell.capture_event();
+                        }
+                        return;
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::PageDown)
+                    | keyboard::Key::Named(keyboard::key::Named::PageUp)
+                    | keyboard::Key::Named(keyboard::key::Named::Home)
+                    | keyboard::Key::Named(keyboard::key::Named::End) => {
+                        if !matches.is_empty() {
+                            let position = state
+                                .selected
+                                .and_then(|selected| {
+                                    matches.iter().position(|row| *row == selected)
+                                });
+                            let next_position = match key {
+                                keyboard::Key::Named(keyboard::key::Named::Home) => 0,
+                                keyboard::Key::Named(keyboard::key::Named::End) => {
+                                    matches.len() - 1
+                                }
+                                keyboard::Key::Named(keyboard::key::Named::PageDown) => (position
+                                    .map(|position| position + capacity)
+                                    .unwrap_or(0))
+                                .min(matches.len() - 1),
+                                _ => position
+                                    .map(|position| position.saturating_sub(capacity))
+                                    .unwrap_or(matches.len() - 1),
+                            };
+                            state.selected = Some(matches[next_position]);
+                            state.scroll = state.scroll.min(next_position);
+                            if next_position >= state.scroll + capacity {
+                                state.scroll = next_position + 1 - capacity;
+                            }
+                            shell.invalidate_layout();
+                            shell.request_redraw();
+                            shell.capture_event();
+                        }
+                        return;
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                        if let Some(name) = state
+                            .selected
+                            .and_then(|selected| self.entries.get(selected))
+                            .map(|(name, _)| name.clone())
+                        {
+                            shell.publish(insert_command(&name));
+                            shell.capture_event();
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
                 match key {
                     keyboard::Key::Named(keyboard::key::Named::Backspace) => {
                         if state.query.pop().is_some() {
+                            state.selected = None;
                             state.scroll = 0;
                             shell.invalidate_layout();
                             shell.request_redraw();
@@ -398,6 +489,7 @@ impl Widget<Message, Theme, Renderer> for Palette {
                             .collect();
                         if !typed.is_empty() {
                             state.query.push_str(&typed);
+                            state.selected = None;
                             state.scroll = 0;
                             shell.invalidate_layout();
                             shell.request_redraw();
@@ -579,6 +671,26 @@ impl Widget<Message, Theme, Renderer> for Palette {
         }
 
         renderer.with_layer(list, |renderer| {
+            // The keyboard cursor gets a band, so Enter has a visible target.
+            if let Some(selected) = state.selected {
+                if let Some(position) = matches.iter().position(|row| *row == selected) {
+                    let slot = position.saturating_sub(state.scroll);
+                    if slot < capacity(bounds.height) {
+                        renderer.fill_quad(
+                            surface(
+                                Rectangle {
+                                    x: list.x + 4.0,
+                                    y: list.y + slot as f32 * ROW_H + 2.0,
+                                    width: (list.width - 10.0).max(0.0),
+                                    height: ROW_BUTTON_H,
+                                },
+                                3.0,
+                            ),
+                            palette.primary.base.color.scale_alpha(0.18),
+                        );
+                    }
+                }
+            }
             for (index, child_layout) in layout.children().enumerate() {
                 if index >= self.rows.len() || index >= tree.children.len() {
                     break;

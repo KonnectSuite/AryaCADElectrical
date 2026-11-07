@@ -293,6 +293,7 @@ impl OpenCADStudio {
             Some(Rename) => self.rename_dialog = None,
             Some(Purge) => self.purge_dialog = None,
             Some(DrawingProperties) => self.drawing_properties = None,
+            Some(ElecSetup) => self.elec_setup_dialog = None,
             Some(SelectSimilarSettings) => self.select_similar_settings = None,
             Some(BlockSaveAs) => self.block_save_as = None,
             Some(BlockVisibility) => self.block_visibility = None,
@@ -12902,6 +12903,7 @@ impl OpenCADStudio {
             Message::Rename(msg) => self.on_rename_dialog(msg),
             Message::Purge(msg) => self.on_purge_dialog(msg),
             Message::DwgProps(msg) => self.on_drawing_properties(msg),
+    Message::ElecSetup(msg) => self.on_elec_setup(msg),
             Message::SelectSimilarSettingsToggle(bit) => {
                 if let Some(mode) = self.select_similar_settings.as_mut() {
                     *mode ^= bit;

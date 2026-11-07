@@ -343,6 +343,7 @@ impl CadModule for ElectricalModule {
                             items: vec![
                                 menu_item("ELECNEW", "Prepare Drawing", NEW_DRAWING),
                                 menu_item("ELECSETUP", "Electrical Setup", SETUP),
+                                menu_item("ELECSETUPEDIT", "Numbering Setup", SETUP),
                                 menu_item("ELECHELP", "Command Reference", SETUP),
                             ],
                             default: "ELECNEW",

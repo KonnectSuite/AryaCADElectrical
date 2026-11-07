@@ -271,3 +271,127 @@ cargo build --release -j 4
 # electrical crate tests
 cargo test --release -p elec
 ```
+
+---
+
+## 12. Round 24 (2026-11-07): 78-symbol library, palette keys, manager dropdowns
+
+Done on top of `fee94a0`, verified against this tree (not committed yet).
+
+**Symbol library: 30 -> 78 symbols.** `tools/make_library.py` gained 48 entries, so
+`library/starter` now covers the device families a real panel needs:
+
+- Relays/timers: `RELAY_CONTACT_NO/NC`, `TIMER_COIL`, `TIMER_CONTACT_NO/NC`.
+- Switching/protection: `SWITCH_DISCONNECT`, `EMERGENCY_STOP`, `FOOT_SWITCH`,
+  `LIMIT_SWITCH_ROLLER`, `LEVEL_SWITCH`, `PRESSURE_SWITCH`, `FLOW_SWITCH`, `MCCB`,
+  `RCD`, `THERMAL_MAGNETIC`, `SURGE_PROTECTOR`, `FUSE_3PHASE`.
+- Power: `TRANSFORMER_3PHASE`, `GENERATOR`, `UPS`, `ENERGY_METER`, `SOFT_STARTER`,
+  `SERVO_MOTOR`, `GEAR_MOTOR`.
+- Sensing: `PHOTO_SENSOR`, `CAPACITIVE_SENSOR`, `ULTRASONIC_SENSOR`,
+  `TEMPERATURE_SENSOR`, `ENCODER`.
+- PLC: `PLC-AI`, `PLC-AO`, `PLC-CPU`, `PLC-PSU`, `PLC-COUPLER` (the DI/DO pair existed).
+- Wiring hardware: `TERMINAL_GROUND`, `TERMINAL_END_STOP`, `TERMINAL_SEPARATOR`,
+  `CONNECTOR_2P`, `CONNECTOR_4P`, `TEST_POINT`, `DIN_RAIL`, `WIRE_DUCT`, `WIRE_LABEL`.
+- Field devices: `HEATER`, `FAN`, `BELL`, `BUZZER`, `VALVE_2WAY`, `VALVE_3WAY`.
+
+The library is generated data: edit `SYMBOLS` in `tools/make_library.py`, then
+
+```powershell
+py -3.13 tools\make_library.py            # rewrites library/starter
+py -3.13 tools\make_library.py --check    # proves the committed files match
+```
+
+New classes were added to `library/panel/footprints.tsv` (Timer, Switch, Surge
+Protection, Meter, Test Point, Heater, Rail, Wire Duct, Generator, Fan, Valve, Bell,
+Buzzer, PLC Analog Output) so `ELECPANEL` sizes them instead of boxing 14 x 10.
+
+**Palette keyboard navigation** (`src/ui/window/elec_library.rs`). Arrow Up/Down move
+the highlighted row through the filtered list, Enter places the highlighted symbol,
+typing/Backspace clear the highlight. The highlighted row is drawn as a translucent
+band behind the row inside the list's clip layer.
+
+**Symbol Manager dropdowns** (`src/ui/window/elec_lib_manager.rs`). The details panel
+now offers a "Pick an existing class..." `pick_list` beside the free-text class field,
+and the add-row has a class dropdown plus a pins dropdown (0..=16). Typed values still
+work, so a brand-new class or an unusual pin count is not blocked.
+
+**Verification on this tree**
+
+| Check | Result |
+|---|---|
+| `cargo check --release` | clean, 56.87 s, no errors |
+| `cargo build --release -j 4` | finished 5 m 18 s, `target\release\OpenCADStudio.exe` 158 MB |
+| `py -3.13 tests\ecad\run_smoke.py` | 92/99 |
+| same suite, `ECAD_LIBRARY_DIR` = the committed 30-symbol library | 92/99, the same 7 checks |
+
+The 7 failures are therefore **pre-existing** and not library-size related:
+`ELECLIST printed the placed components` (the check still looks for ACADE class names
+such as `Contactor` while the listing deliberately prints block names, since `ea53801`),
+`ELECBOM wrote one row per (class, part)` (expects 5 rows; the batch places 6
+components), and five checks about recovering tags/parts from the harvested real
+sheets' TEXT, where the recovery currently finds the tag but no part number.
+
+**Still open** (in the order they hurt most): a Numbering Format dialog (SkyCAD keeps
+`NumberingFormat` with type/template/start/increment/uniqueness scope; this app still
+only reads the drawing's `WD_M` settings through `ELECSETUP`), a class filter in the
+palette, and catalogue rows in `library/parts/parts.tsv` for the new classes so BOM rows
+carry manufacturer and description.
+
+## 13. Round 25 (2026-11-07): numbering setup dialog, palette paging, parts catalogue
+
+**Numbering setup dialog** (`ELECSETUPEDIT`, ribbon *Electrical -> Project & Sheet ->
+Drawing -> Numbering Setup*). SkyCAD keeps numbering in a `NumberingFormat` object
+(type, template, start, increment, uniqueness scope); this app only read an AutoCAD
+Electrical `WD_M` block. The dialog now edits the same contract - tag format, preset and
+mode, start, suffixes; wire format, preset, mode and start; cross-reference format and
+sheet - and stores it as custom properties on the drawing:
+
+| Property | Meaning |
+|---|---|
+| `ELEC_TAGFMT` | device tag template (`%F` family, `%N` number, `%S` sheet) |
+| `ELEC_TAGMODE` | `C` continuous, `S` per sheet, `R` fixed |
+| `ELEC_TAG_START` | first tag number |
+| `ELEC_TAG_RSUF` | comma-separated per-sheet suffixes |
+| `ELEC_WIREFMT`, `ELEC_WIREMODE`, `ELEC_WIRE_START` | wire numbering |
+| `ELEC_XREFFMT`, `ELEC_SHEET` | cross references and the sheet label |
+
+`read_setup` (`src/app/commands/elec.rs:263`) still reads the first `WD_M` block and
+**only falls back to the properties when the drawing has none**, so a real AutoCAD
+Electrical drawing keeps renumbering the way its template says. Applying is one undo
+step (`ELECSETUPEDIT`) and refreshes fields that display a custom property.
+
+Files: `src/ui/window/elec_setup.rs` (new view: `State`, `SetupMsg`, `mode_label`,
+`mode_letter`), `src/app/commands/elec.rs` (`read_setup` fallback, `elec_setup_edit`,
+`on_elec_setup`, `apply_elec_setup`), `ModalKind::ElecSetup` plus `Message::ElecSetup(..)`,
+the view/title/close arms, the command registry entry, the help line and the ribbon item.
+
+**Palette paging** (`src/ui/window/elec_library.rs`). Home/End jump to the first/last
+match and Page Up/Page Down move a whole window, keeping the highlight inside the
+visible rows.
+
+**Parts catalogue** (`library/parts/parts.tsv`). About 40 rows for the Round 24 classes,
+so `ELECBOM` fills manufacturer and description for them: timers, MCCB/RCD/thermal-magnetic
+breakers, surge protector, 3-phase fuse and transformer, UPS, soft starter, meter,
+generator, servo and gear motor, photo/capacitive/ultrasonic/temperature sensors, PLC
+CPU/PSU/coupler/AI/AO, ground/end-stop/separator terminals, test point, 2P/4P connectors,
+DIN rail, wire duct, valves, heater, fan, bell, buzzer. `py -3.13 tools\parts_check.py`
+passes.
+
+**Verification**
+
+| Check | Result |
+|---|---|
+| `cargo check --release` | clean |
+| `cargo test --release --lib elec_setup` | 3 passed |
+| `cargo build --release -j 4` | finished 4 m 47 s |
+| `py -3.13 tests\ecad\run_smoke.py` | 92/99, the same 7 pre-existing checks |
+
+Unit tests added in `src/app/commands/elec.rs`:
+`a_drawing_without_wd_m_reads_the_setup_properties`,
+`the_dialog_stores_what_elecnumber_reads`,
+`a_bad_counter_keeps_the_dialog_open_and_says_why`.
+
+**Still open**: a class filter or grouping row in the symbol palette (the palette draws
+its own rows, so grouping needs slot arithmetic; typing a class name in the search box
+already filters), and the SkyCAD `NumberingFormat` uniqueness-scope and increment fields,
+which the dialog does not expose yet.

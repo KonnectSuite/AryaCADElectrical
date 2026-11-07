@@ -359,6 +359,329 @@ SYMBOLS = [
            L(3.5, -1.0, 5.0, -1.0), L(3.5, -3.0, 5.0, -3.0),
            T("I/O", -1.5, -0.9, 1.2)],
     ),
+    # ---- control gear: relays, timers, switching ------------------------------
+    dict(
+        name="RELAY_CONTACT_NO", cls="Relay", attrs=A_2TERM,
+        desc="Relay contact, normally-open, with the relay link below the blade",
+        geom=no_contact() + [L(0.0, 0.0, 0.0, -1.0), L(0.0, -1.5, 0.0, -2.4),
+                             L(-0.9, -2.4, 0.9, -2.4)],
+    ),
+    dict(
+        name="RELAY_CONTACT_NC", cls="Relay", attrs=A_2TERM,
+        desc="Relay contact, normally-closed, with the relay link below the blade",
+        geom=nc_contact() + [L(0.0, 0.0, 0.0, -1.0), L(0.0, -1.5, 0.0, -2.4),
+                             L(-0.9, -2.4, 0.9, -2.4)],
+    ),
+    dict(
+        name="TIMER_COIL", cls="Timer", attrs=A_2TERM,
+        desc="Timer coil: coil rectangle with the clock face inside",
+        geom=leads(inner=2.5) + rect(-2.5, -2.5, 2.5, 2.5)
+        + [C(0.0, 0.0, 1.3), L(0.0, 0.0, 0.0, 0.9), L(0.0, 0.0, 0.7, 0.3)],
+    ),
+    dict(
+        name="TIMER_CONTACT_NO", cls="Timer", attrs=A_2TERM,
+        desc="Timer contact, normally-open, clock above the blade",
+        geom=no_contact() + [C(0.0, 3.4, 1.0), L(0.0, 3.4, 0.0, 4.0), L(0.0, 3.4, 0.6, 3.4)],
+    ),
+    dict(
+        name="TIMER_CONTACT_NC", cls="Timer", attrs=A_2TERM,
+        desc="Timer contact, normally-closed, clock above the blade",
+        geom=nc_contact() + [C(0.0, 3.4, 1.0), L(0.0, 3.4, 0.0, 4.0), L(0.0, 3.4, 0.6, 3.4)],
+    ),
+    dict(
+        name="SWITCH_DISCONNECT", cls="Switch", attrs=A_2TERM,
+        desc="Disconnect switch: knife blade between two fixed contacts",
+        geom=leads(inner=2.5) + [L(-2.5, -1.6, -2.5, 1.6), L(2.5, -1.6, 2.5, 1.6),
+                                 L(-2.5, 0.0, 2.2, 2.2)],
+    ),
+    dict(
+        name="EMERGENCY_STOP", cls="Button", attrs=A_2TERM,
+        desc="Emergency stop: mushroom head over a normally-closed contact",
+        geom=nc_contact() + [L(0.0, 0.0, 0.0, 2.6), C(0.0, 3.6, 1.1), L(-1.5, 4.7, 1.5, 4.7)],
+    ),
+    dict(
+        name="FOOT_SWITCH", cls="Switch", attrs=A_2TERM,
+        desc="Foot switch: pedal plate over a normally-closed contact",
+        geom=nc_contact() + [L(0.0, 0.0, 0.0, 2.2), L(-1.8, 2.2, 1.8, 2.2), L(-1.8, 2.9, 1.8, 2.9)],
+    ),
+    dict(
+        name="LIMIT_SWITCH_ROLLER", cls="Limit Switch", attrs=A_2TERM,
+        desc="Limit switch with a roller lever",
+        geom=no_contact() + [L(0.0, 0.0, 0.0, 2.6), L(0.0, 2.6, 2.0, 3.4), C(2.4, 3.6, 0.5)],
+    ),
+    dict(
+        name="LEVEL_SWITCH", cls="Switch", attrs=A_2TERM,
+        desc="Level switch: float on a lever arm",
+        geom=leads(inner=2.5) + [L(-2.5, 0.0, -2.5, 2.4), L(-2.5, 2.4, 1.4, 2.4), C(2.2, 2.4, 0.8)],
+    ),
+    dict(
+        name="PRESSURE_SWITCH", cls="Switch", attrs=A_2TERM,
+        desc="Pressure switch: diaphragm circle with a trip bar",
+        geom=leads(inner=2.5) + [C(0.0, 0.0, 2.2), T("P", -0.5, -0.8, 1.4),
+                                 L(0.0, 2.2, 0.0, 3.4), L(-1.2, 3.4, 1.2, 3.4)],
+    ),
+    dict(
+        name="FLOW_SWITCH", cls="Switch", attrs=A_2TERM,
+        desc="Flow switch: paddle in the pipe",
+        geom=leads(inner=2.5) + rect(-1.4, -1.4, 1.4, 1.4)
+        + [L(1.4, 0.0, 2.8, 1.2), L(2.8, 1.2, 3.6, 1.2)],
+    ),
+    # ---- protection ------------------------------------------------------------
+    dict(
+        name="MCCB", cls="Circuit Breaker", attrs=A_2TERM,
+        desc="Moulded-case circuit breaker: wide body with a trip cross",
+        geom=leads(inner=3.0) + rect(-3.0, -2.0, 3.0, 2.0)
+        + [L(-3.0, -2.0, 3.0, 2.0), L(0.0, 4.0, 1.0, 5.0), L(1.0, 4.0, 0.0, 5.0)],
+    ),
+    dict(
+        name="RCD", cls="Circuit Breaker", attrs=A_2TERM,
+        desc="Residual-current device: body with a test loop",
+        geom=leads(inner=2.5) + rect(-2.5, -2.0, 2.5, 2.0)
+        + [C(0.0, 0.0, 0.9), L(-1.4, -2.0, -1.4, -3.2), L(1.4, -2.0, 1.4, -3.2),
+           C(0.0, -3.6, 0.5)],
+    ),
+    dict(
+        name="SURGE_PROTECTOR", cls="Surge Protection", attrs=A_2TERM,
+        desc="Surge protective device: varistor block to earth",
+        geom=leads(inner=2.0) + rect(-2.0, -2.5, 2.0, 2.5)
+        + [P([(-1.0, 1.4), (1.0, 1.4), (-1.0, -1.4), (1.0, -1.4)], closed=True),
+           L(-1.5, -3.2, 1.5, -3.2), L(-1.0, -3.9, 1.0, -3.9), L(-0.5, -4.6, 0.5, -4.6)],
+    ),
+    dict(
+        name="FUSE_3PHASE", cls="Fuse", attrs=A_DEVICE,
+        desc="Three-pole fuse: three elements on one carrier",
+        geom=[L(-5.0, 1.5, -3.0, 1.5), L(-5.0, 0.0, -3.0, 0.0), L(-5.0, -1.5, -3.0, -1.5),
+              L(3.0, 1.5, 5.0, 1.5), L(3.0, 0.0, 5.0, 0.0), L(3.0, -1.5, 5.0, -1.5)]
+        + rect(-3.0, -2.5, 3.0, 2.5)
+        + [L(-1.0, 2.5, -1.0, -2.5), L(1.0, 2.5, 1.0, -2.5)],
+    ),
+    dict(
+        name="THERMAL_MAGNETIC", cls="Circuit Breaker", attrs=A_2TERM,
+        desc="Thermal-magnetic trip element",
+        geom=leads(inner=2.5) + rect(-2.5, -2.0, 2.5, 2.0)
+        + [L(-1.5, 1.4, 0.0, -1.2), L(0.0, -1.2, 1.5, 1.4)],
+    ),
+    # ---- machines and supplies --------------------------------------------------
+    dict(
+        name="TRANSFORMER_3PHASE", cls="Transformer", attrs=A_DEVICE,
+        desc="Three-phase transformer: two windings and a core",
+        geom=[L(-5.0, 0.0, -3.2, 0.0), L(3.2, 0.0, 5.0, 0.0), C(-1.6, 0.0, 1.6),
+              C(1.6, 0.0, 1.6), L(0.0, -2.4, 0.0, 2.4),
+              L(-1.6, 2.4, -1.6, 3.4), L(0.0, 2.4, 0.0, 3.4), L(1.6, 2.4, 1.6, 3.4)],
+    ),
+    dict(
+        name="GENERATOR", cls="Generator", attrs=A_DEVICE,
+        desc="Generator: circle with G",
+        geom=[L(-5.0, 0.0, -3.0, 0.0), L(3.0, 0.0, 5.0, 0.0), C(0.0, 0.0, 3.0),
+              T("G", -1.0, -0.9, 1.8)],
+    ),
+    dict(
+        name="UPS", cls="Power Supply", attrs=A_DEVICE,
+        desc="Uninterruptible supply: box with the battery symbol",
+        geom=[L(-5.0, 0.0, -3.0, 0.0), L(3.0, 0.0, 5.0, 0.0)] + rect(-3.0, -2.5, 3.0, 2.5)
+        + [T("UPS", -2.2, 0.6, 1.2), L(-2.0, -1.4, -0.4, -1.4), L(-2.0, -2.0, -0.4, -2.0)],
+    ),
+    dict(
+        name="ENERGY_METER", cls="Meter", attrs=A_DEVICE,
+        desc="Energy meter: circle with kWh",
+        geom=[L(-5.0, 0.0, -2.8, 0.0), L(2.8, 0.0, 5.0, 0.0), C(0.0, 0.0, 2.8),
+              T("kWh", -1.9, -0.7, 1.1)],
+    ),
+    dict(
+        name="SERVO_MOTOR", cls="Motor", attrs=A_DEVICE,
+        desc="Servo motor: motor with an encoder box on top",
+        geom=[L(-5.0, 0.0, -3.0, 0.0), L(3.0, 0.0, 5.0, 0.0), C(0.0, 0.0, 3.0),
+              T("M", -1.0, -0.9, 1.8)] + rect(-1.2, 3.0, 1.2, 4.6),
+    ),
+    dict(
+        name="GEAR_MOTOR", cls="Motor", attrs=A_DEVICE,
+        desc="Gear motor: motor circle with a gear ring",
+        geom=[L(-5.0, 0.0, -3.0, 0.0), L(3.0, 0.0, 5.0, 0.0), C(0.0, 0.0, 3.0),
+              T("M", -1.0, -1.2, 1.8),
+              L(0.0, 3.0, 0.0, 4.2), L(1.5, 2.6, 2.1, 3.6), L(2.6, 1.5, 3.6, 2.1),
+              L(3.0, 0.0, 4.2, 0.0), L(2.6, -1.5, 3.6, -2.1), L(1.5, -2.6, 2.1, -3.6),
+              L(0.0, -3.0, 0.0, -4.2), L(-1.5, -2.6, -2.1, -3.6), L(-2.6, -1.5, -3.6, -2.1),
+              L(-3.0, 0.0, -4.2, 0.0), L(-2.6, 1.5, -3.6, 2.1), L(-1.5, 2.6, -2.1, 3.6)],
+    ),
+    dict(
+        name="SOFT_STARTER", cls="Drive", attrs=A_DEVICE,
+        desc="Soft starter: box with SS",
+        geom=[L(-5.0, 0.0, -3.0, 0.0), L(3.0, 0.0, 5.0, 0.0)] + rect(-3.0, -2.5, 3.0, 2.5)
+        + [T("SS", -1.2, -0.7, 1.2)],
+    ),
+    # ---- sensors ---------------------------------------------------------------
+    dict(
+        name="PHOTO_SENSOR", cls="Sensor", attrs=A_2TERM,
+        desc="Photoelectric sensor: body with an incoming beam",
+        geom=leads(inner=1.0) + rect(-1.0, -2.0, 3.0, 2.0)
+        + [L(-1.0, 0.4, -3.6, 0.4), L(-3.6, 0.4, -2.8, 0.9), L(-3.6, 0.4, -2.8, -0.1)],
+    ),
+    dict(
+        name="CAPACITIVE_SENSOR", cls="Sensor", attrs=A_2TERM,
+        desc="Capacitive sensor: body with two capacitor plates",
+        geom=leads(inner=1.0) + rect(-1.0, -2.0, 3.0, 2.0)
+        + [L(0.4, 0.9, 0.4, -0.9), L(1.2, 0.9, 1.2, -0.9)],
+    ),
+    dict(
+        name="ULTRASONIC_SENSOR", cls="Sensor", attrs=A_2TERM,
+        desc="Ultrasonic sensor: body with two sound arcs",
+        geom=leads(inner=1.0) + rect(-1.0, -2.0, 3.0, 2.0)
+        + [A(2.4, 0.0, 1.0, -55.0, 55.0), A(2.4, 0.0, 1.8, -55.0, 55.0)],
+    ),
+    dict(
+        name="TEMPERATURE_SENSOR", cls="Sensor", attrs=A_2TERM,
+        desc="Temperature probe: bulb and stem",
+        geom=leads(inner=2.0) + rect(-1.4, -1.6, 1.4, 1.6)
+        + [L(0.0, 1.6, 0.0, 3.4), C(0.0, 3.9, 0.6)],
+    ),
+    dict(
+        name="ENCODER", cls="Sensor", attrs=A_2TERM,
+        desc="Rotary encoder: body with a shaft disc",
+        geom=leads(inner=2.0) + rect(-2.5, -2.0, 2.5, 2.0)
+        + [L(0.0, 2.0, 0.0, 3.0), C(0.0, 3.8, 0.8), T("E", -0.6, -0.7, 1.2)],
+    ),
+    # ---- PLC family ------------------------------------------------------------
+    dict(
+        name="PLC-AI", cls="PLC Analog Input", attrs=A_PLC,
+        desc="PLC analog input module",
+        pins=[(-5.0, 1.0, "X4TERM01"), (-5.0, -1.0, "X4TERM02")],
+        geom=rect(-4.0, -3.0, 4.0, 3.0)
+        + [L(-5.0, 1.0, -4.0, 1.0), L(-5.0, -1.0, -4.0, -1.0), T("AI", -1.2, 1.0, 1.2)],
+    ),
+    dict(
+        name="PLC-AO", cls="PLC Analog Output", attrs=A_PLC,
+        desc="PLC analog output module",
+        pins=[(5.0, 1.0, "X1TERM01"), (5.0, -1.0, "X1TERM02")],
+        geom=rect(-4.0, -3.0, 4.0, 3.0)
+        + [L(4.0, 1.0, 5.0, 1.0), L(4.0, -1.0, 5.0, -1.0), T("AO", -1.2, 1.0, 1.2)],
+    ),
+    dict(
+        name="PLC-CPU", cls="PLC", attrs=A_PLC,
+        desc="PLC processor with a programming port",
+        pins=[(-5.0, 1.0, "X4TERM01"), (-5.0, -1.0, "X4TERM02"), (5.0, 0.0, "X1TERM03")],
+        geom=rect(-4.0, -3.0, 4.0, 3.0)
+        + [L(-5.0, 1.0, -4.0, 1.0), L(-5.0, -1.0, -4.0, -1.0), L(4.0, 0.0, 5.0, 0.0),
+           T("CPU", -1.8, -0.6, 1.2)],
+    ),
+    dict(
+        name="PLC-PSU", cls="PLC", attrs=A_PLC,
+        desc="PLC power supply module",
+        pins=[(-5.0, 1.0, "X4TERM01"), (-5.0, -1.0, "X4TERM02")],
+        geom=rect(-4.0, -3.0, 4.0, 3.0)
+        + [L(-5.0, 1.0, -4.0, 1.0), L(-5.0, -1.0, -4.0, -1.0), T("24V", -1.7, 1.0, 1.1)],
+    ),
+    dict(
+        name="PLC-COUPLER", cls="PLC", attrs=A_PLC,
+        desc="PLC bus coupler with two field leads",
+        pins=[(-5.0, 1.0, "X4TERM01"), (-5.0, -1.0, "X4TERM02"),
+              (5.0, 1.0, "X1TERM01"), (5.0, -1.0, "X1TERM02")],
+        geom=rect(-3.5, -2.5, 3.5, 2.5)
+        + [L(-5.0, 1.0, -3.5, 1.0), L(-5.0, -1.0, -3.5, -1.0),
+           L(3.5, 1.0, 5.0, 1.0), L(3.5, -1.0, 5.0, -1.0), T("CPL", -1.4, -0.7, 1.2)],
+    ),
+    # ---- terminals and connectors ----------------------------------------------
+    dict(
+        name="TERMINAL_GROUND", cls="Terminal", attrs=A_TERMINAL,
+        desc="Earth terminal: terminal circle over the earth bars",
+        pins=PINS_EARTH,
+        geom=[L(0.0, 3.5, 0.0, 1.2), C(0.0, 0.0, 1.2), L(-2.5, -1.4, 2.5, -1.4),
+              L(-1.7, -2.3, 1.7, -2.3), L(-0.9, -3.2, 0.9, -3.2)],
+    ),
+    dict(
+        name="TERMINAL_END_STOP", cls="Terminal", attrs=A_LABEL,
+        desc="End stop / end bracket for a DIN rail",
+        pins=PINS_NONE,
+        geom=rect(-1.0, -2.6, 1.0, 2.6)
+        + [L(-1.0, -2.6, -2.6, -3.4), L(1.0, -2.6, 2.6, -3.4), L(-2.6, 0.0, 2.6, 0.0)],
+    ),
+    dict(
+        name="TERMINAL_SEPARATOR", cls="Terminal", attrs=A_LABEL,
+        desc="Group separator plate",
+        pins=PINS_NONE,
+        geom=[L(-1.2, -2.6, -1.2, 2.6), L(1.2, -2.6, 1.2, 2.6)],
+    ),
+    dict(
+        name="CONNECTOR_2P", cls="Connector", attrs=A_DEVICE,
+        desc="Two-pole plug connector",
+        pins=[(-5.0, 1.0, "X4TERM01"), (-5.0, -1.0, "X4TERM02"),
+              (5.0, 1.0, "X1TERM01"), (5.0, -1.0, "X1TERM02")],
+        geom=rect(-3.0, -2.0, 3.0, 2.0)
+        + [L(-5.0, 1.0, -3.0, 1.0), L(-5.0, -1.0, -3.0, -1.0),
+           L(3.0, 1.0, 5.0, 1.0), L(3.0, -1.0, 5.0, -1.0), T("X", -0.6, -0.7, 1.4)],
+    ),
+    dict(
+        name="CONNECTOR_4P", cls="Connector", attrs=A_DEVICE,
+        desc="Four-pole plug connector",
+        pins=[(-5.0, 2.0, "X4TERM01"), (-5.0, 0.0, "X4TERM02"), (-5.0, -2.0, "X4TERM03"),
+              (5.0, 1.0, "X1TERM01"), (5.0, -1.0, "X1TERM02")],
+        geom=rect(-3.5, -3.0, 3.5, 3.0)
+        + [L(-5.0, 2.0, -3.5, 2.0), L(-5.0, 0.0, -3.5, 0.0), L(-5.0, -2.0, -3.5, -2.0),
+           L(3.5, 1.0, 5.0, 1.0), L(3.5, -1.0, 5.0, -1.0), T("X4", -1.4, -0.7, 1.2)],
+    ),
+    dict(
+        name="TEST_POINT", cls="Test Point", attrs=A_TERMINAL,
+        desc="Test point: probe circle on the conductor",
+        pins=[(-5.0, 0.0, "X4TERM01")],
+        geom=[L(-5.0, 0.0, -1.6, 0.0), C(0.0, 0.0, 1.6), T("TP", -0.9, -0.5, 1.0)],
+    ),
+    # ---- field devices and panel hardware --------------------------------------
+    dict(
+        name="HEATER", cls="Heater", attrs=A_2TERM,
+        desc="Heater element: rectangle with a zig-zag",
+        geom=leads(inner=2.5) + rect(-2.5, -2.0, 2.5, 2.0)
+        + [P([(-1.8, 0.0), (-0.9, 1.3), (0.0, 0.0), (0.9, 1.3), (1.8, 0.0)])],
+    ),
+    dict(
+        name="FAN", cls="Fan", attrs=A_DEVICE,
+        desc="Cooling fan: circle with three blades",
+        geom=[L(-5.0, 0.0, -3.0, 0.0), L(3.0, 0.0, 5.0, 0.0), C(0.0, 0.0, 3.0),
+              L(0.0, 0.0, 0.0, 2.4), L(0.0, 0.0, 2.1, -1.2), L(0.0, 0.0, -2.1, -1.2)],
+    ),
+    dict(
+        name="BELL", cls="Bell", attrs=A_DEVICE,
+        desc="Audible bell",
+        geom=[L(-5.0, 0.0, -2.6, 0.0), L(2.6, 0.0, 5.0, 0.0),
+              A(0.0, 0.0, 2.6, 0.0, 180.0), L(-2.6, 0.0, 2.6, 0.0)],
+    ),
+    dict(
+        name="BUZZER", cls="Buzzer", attrs=A_DEVICE,
+        desc="Buzzer: circle with sound ticks",
+        geom=[L(-5.0, 0.0, -2.2, 0.0), L(2.2, 0.0, 5.0, 0.0), C(0.0, 0.0, 2.2),
+              L(2.6, 1.4, 3.4, 2.0), L(2.6, -1.4, 3.4, -2.0)],
+    ),
+    dict(
+        name="VALVE_2WAY", cls="Valve", attrs=A_2TERM,
+        desc="Two-way valve: bow-tie body",
+        geom=leads(inner=2.5)
+        + [P([(-2.5, 0.0), (0.0, 2.0), (2.5, 0.0), (0.0, -2.0)], closed=True)],
+    ),
+    dict(
+        name="VALVE_3WAY", cls="Valve", attrs=A_DEVICE,
+        desc="Three-way valve: two bow-ties and a stem",
+        geom=[L(-5.0, 0.0, -3.2, 0.0), L(3.2, 0.0, 5.0, 0.0), L(0.0, 2.4, 0.0, 4.0),
+              L(-1.2, 4.0, 1.2, 4.0),
+              P([(-3.2, 0.0), (-0.4, 1.8), (-0.4, -1.8)], closed=True),
+              P([(3.2, 0.0), (0.4, 1.8), (0.4, -1.8)], closed=True)],
+    ),
+    dict(
+        name="DIN_RAIL", cls="Rail", attrs=A_LABEL,
+        desc="DIN rail section",
+        pins=PINS_NONE,
+        geom=[L(-5.0, -1.0, -4.0, -1.0), L(-4.0, -1.0, -4.0, 0.6), L(-4.0, 0.6, -3.6, 1.0),
+              L(-3.6, 1.0, 3.6, 1.0), L(3.6, 1.0, 4.0, 0.6), L(4.0, 0.6, 4.0, -1.0),
+              L(4.0, -1.0, 5.0, -1.0)],
+    ),
+    dict(
+        name="WIRE_DUCT", cls="Wire Duct", attrs=A_LABEL,
+        desc="Slotted wire duct",
+        pins=PINS_NONE,
+        geom=rect(-4.0, -2.0, 4.0, 2.0)
+        + [L(-4.0, 0.6, 4.0, 0.6), L(-4.0, -0.6, 4.0, -0.6),
+           L(-2.4, 0.6, -2.4, 2.0), L(-0.8, 0.6, -0.8, 2.0),
+           L(0.8, 0.6, 0.8, 2.0), L(2.4, 0.6, 2.4, 2.0),
+           L(-2.4, -2.0, -2.4, -0.6), L(-0.8, -2.0, -0.8, -0.6),
+           L(0.8, -2.0, 0.8, -0.6), L(2.4, -2.0, 2.4, -0.6)],
+    ),
 ]
 
 

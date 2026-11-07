@@ -60,3 +60,60 @@ USLKG 5	Phoenix Contact	Earth terminal block, 5 mm2	Terminal	EARTH	5 mm2	2	DIN 3
 10250T597LED24-71X	Eaton	Pushbutton, 30 mm, illuminated green, 24 V LED	Button	PUSHBUTTON_NO	24 V LED	2	30 mm panel	
 10250T397LLD24-53	Eaton	Pushbutton, 30 mm, illuminated red, 24 V LED	Button	PUSHBUTTON_NO	24 V LED	2	30 mm panel	
 700-HA33A1	Allen-Bradley	Relay, 3PDT, 10 A, 24 V DC coil	Relay	RELAY_COIL	10 A / 24 V DC	11	DIN 35 mm	
+
+# --- Round 24: families added to library\starter (manufacturer data is representative,
+#     verify against the datasheet before ordering).
+
+# Relays and timers
+700-HR52TU24	Allen-Bradley	Timing relay, 0.1 s to 10 min, 24 V DC coil	Timer	TIMER_COIL	24 V DC	8	DIN 35 mm	
+
+# Protection
+5SY4106-7	Siemens	Miniature circuit breaker, 1-pole, C-curve, 6 A	Circuit Breaker	MCCB	6 A / 400 V AC	2	DIN 35 mm	
+5SV3316-6	Siemens	Residual current device, 2-pole, 16 A, 30 mA	Circuit Breaker	RCD	16 A / 30 mA	4	DIN 35 mm	
+3RV2011-1JA10	Siemens	Motor protection circuit breaker, 7-10 A	Circuit Breaker	THERMAL_MAGNETIC	7-10 A / 690 V	6	DIN 35 mm	
+5SD746	Siemens	Surge arrester, type 2, single-pole	Surge Protection	SURGE_PROTECTOR	40 kA	2	DIN 35 mm	
+3NA3820	Siemens	NH fuse link, size 1, 63 A, 500 V	Fuse	FUSE_3PHASE	63 A / 500 V	3	NH size 1 holder	
+
+# Power conversion
+4AM3842-8DD40-0FA0	Siemens	Three-phase isolating transformer, 4 kVA	Transformer	TRANSFORMER_3PHASE	400/230 V, 4 kVA	8	DIN 35 mm	
+6EP4134-3AB00-2AY0	Siemens	SITOP UPS1600, 24 V DC, 10 A	Power Supply	UPS	24 V DC / 10 A	4	DIN 35 mm	
+3RW4026-1BB04	Siemens	Soft starter, 11 kW, 400 V	Drive	SOFT_STARTER	11 kW / 400 V	6	DIN 35 mm	
+7KM2112-0BA00-3AA0	Siemens	Power monitoring device SENTRON PAC3120	Meter	ENERGY_METER	690 V / 5 A	4	DIN 35 mm	
+GEN-3PH-15	Generic	Three-phase generator, 15 kVA	Generator	GENERATOR	15 kVA / 400 V	4	base plate	
+
+# Motors
+1FK7042-2AF71-1RG1	Siemens	SIMOTICS S-1FK7 servo motor, 0.6 kW	Motor	SERVO_MOTOR	0.6 kW / 3000 rpm	4	machine	
+
+# Sensing
+WL12G-3B2531	SICK	Photoelectric retro-reflective sensor, 24 V DC	Sensor	PHOTO_SENSOR	24 V DC, 4 m	4	bracket	
+CM30-30400	SICK	Capacitive proximity sensor, M30, 24 V DC	Sensor	CAPACITIVE_SENSOR	24 V DC, 15 mm	4	bracket	
+UC30-21416	SICK	Ultrasonic distance sensor, 24 V DC	Sensor	ULTRASONIC_SENSOR	24 V DC, 1.3 m	4	bracket	
+6FX2001-5JE24	Siemens	Absolute encoder, 24 V DC, PROFINET	Sensor	ENCODER	24 V DC	4	machine	
+TS-500	Generic	Temperature switch, 0-120 C, 24 V DC	Sensor	TEMPERATURE_SENSOR	24 V DC	4	bracket	
+
+# PLC
+6ES7214-1AG40-0XB0	Siemens	SIMATIC S7-1200 CPU 1214C, AC/DC/relay	PLC	PLC-CPU	24 V DC / 120-230 V AC	0	DIN 35 mm	
+6ES7307-1EA01-0AA0	Siemens	SIMATIC S7-1200 power supply PS307, 24 V / 5 A	PLC	PLC-PSU	24 V DC / 5 A	0	DIN 35 mm	
+6ES7155-6AU01-0BN0	Siemens	SIMATIC ET 200SP interface module IM 155-6 PN	PLC	PLC-COUPLER	PROFINET	0	DIN 35 mm	
+6ES7231-4HD32-0XB0	Siemens	SIMATIC S7-1200 analog input module, 4 AI	PLC Analog Input	PLC-AI	0-10 V / 4-20 mA	0	DIN 35 mm	
+6ES7232-4HD32-0XB0	Siemens	SIMATIC S7-1200 analog output module, 4 AO	PLC Analog Output	PLC-AO	0-10 V / 4-20 mA	0	DIN 35 mm	
+
+# Terminals and connectors
+3044076	Phoenix Contact	Ground terminal UK 2,5-PE, 24 A	Terminal	TERMINAL_GROUND	24 A / 800 V	2	DIN 35 mm	
+3047028	Phoenix Contact	End stop D-UK 2,5	Terminal	TERMINAL_END_STOP	-	0	DIN 35 mm	
+3047060	Phoenix Contact	Terminal separator ATP-UK 2,5	Terminal	TERMINAL_SEPARATOR	-	0	DIN 35 mm	
+3244030	Phoenix Contact	Test point, 4 mm, 24 A	Test Point	TEST_POINT	24 A	1	DIN 35 mm	
+1757019	Phoenix Contact	PCB connector MSTB 2,5/2-G, 2-pole	Connector	CONNECTOR_2P	12 A / 320 V	2		
+1757035	Phoenix Contact	PCB connector MSTB 2,5/4-G, 4-pole	Connector	CONNECTOR_4P	12 A / 320 V	4		
+
+# Panel hardware
+DIN-35-2140	Generic	DIN rail, 35 mm, 2 m	Rail	DIN_RAIL	35 mm	0		
+WD-60x40	Generic	Wire duct, 60 x 40 mm, grey	Wire Duct	WIRE_DUCT	60 x 40 mm	0		
+
+# Field devices
+VXP45.32-16	Siemens	2-way control valve, DN32, 24 V	Valve	VALVE_2WAY	PN16	2	pipe	
+VXP45.40-25	Siemens	3-way control valve, DN40, 24 V	Valve	VALVE_3WAY	PN16	3	pipe	
+8MR2170-1AB30	Siemens	Enclosure heater, 250 W, 230 V AC	Heater	HEATER	250 W / 230 V AC	2	panel	
+8MR2121-1AA30	Siemens	Filter fan, 120 x 120 mm, 230 V AC	Fan	FAN	55 m3/h	2	panel	
+8WD4308-0DB	Siemens	Signal bell, 230 V AC	Bell	BELL	230 V AC	2	panel	
+8WD4408-0AD	Siemens	Signal buzzer, 24 V DC	Buzzer	BUZZER	24 V DC	2	panel	

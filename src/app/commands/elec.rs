@@ -297,6 +297,50 @@ fn read_setup(document: &codec::Document) -> ElecSetup {
         // The first WD_M wins; a sheet carries two identical inserts in practice.
         break;
     }
+    // A drawing created here has no WD_M block, so the setup dialog stores the
+    // same contract as custom properties. A real WD_M always wins over them.
+    if !setup.present {
+        let property = |key: &str| {
+            document
+                .summary_info
+                .custom_properties
+                .iter()
+                .find(|(name, _)| name.trim().eq_ignore_ascii_case(key))
+                .map(|(_, value)| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        };
+        if let Some(value) = property("ELEC_TAGFMT") {
+            setup.tag_format = value;
+        }
+        if let Some(value) = property("ELEC_TAGMODE") {
+            setup.tag_mode = value;
+        }
+        if let Some(value) = property("ELEC_TAG_START") {
+            setup.tag_start = value.parse().unwrap_or(1);
+        }
+        if let Some(value) = property("ELEC_TAG_RSUF") {
+            setup.tag_suffixes = value
+                .split(',')
+                .map(|part| part.trim().to_string())
+                .filter(|part| !part.is_empty())
+                .collect();
+        }
+        if let Some(value) = property("ELEC_WIREFMT") {
+            setup.wire_format = value;
+        }
+        if let Some(value) = property("ELEC_WIREMODE") {
+            setup.wire_mode = value;
+        }
+        if let Some(value) = property("ELEC_WIRE_START") {
+            setup.wire_start = value.parse().unwrap_or(1);
+        }
+        if let Some(value) = property("ELEC_XREFFMT") {
+            setup.xref_format = value;
+        }
+        if let Some(value) = property("ELEC_SHEET") {
+            setup.sheet = value;
+        }
+    }
     setup
 }
 
@@ -1616,6 +1660,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                     "ELECBUILT [on|off]            built-project control",
                     "ELECREV SNAPSHOT|LIST|COMPARE|RESTORE  revision control",
                     "ELECSETUP                     show this drawing's electrical setup",
+                    "ELECSETUPEDIT                 edit the numbering formats and counters",
                 ],
             ),
             (
@@ -1759,9 +1804,130 @@ fn class_for_reference(tag: &str) -> &'static str {
             .push_output(&format!("  xref  {}  sheet {sheet}", setup.xref_format));
         self.command_line
             .push_output(&format!("  library  {library}"));
+        self.command_line
+            .push_output("  edit  ELECSETUPEDIT opens the numbering setup dialog");
         Task::none()
     }
 
+
+    /// `ELECSETUPEDIT` opens the dialog that edits the numbering contract.
+    pub(super) fn elec_setup_edit(&mut self, i: usize) -> Task<Message> {
+        use crate::ui::window::elec_setup::{mode_label, State};
+        let setup = read_setup(&self.tabs[i].scene.document);
+        self.elec_setup_dialog = Some(State {
+            tag_format: setup.tag_format,
+            tag_mode: mode_label(&setup.tag_mode),
+            tag_start: setup.tag_start.to_string(),
+            tag_suffixes: setup.tag_suffixes.join(","),
+            wire_format: setup.wire_format,
+            wire_mode: mode_label(&setup.wire_mode),
+            wire_start: setup.wire_start.to_string(),
+            xref_format: setup.xref_format,
+            sheet: setup.sheet,
+            error: None,
+        });
+        self.active_modal = Some(crate::app::ModalKind::ElecSetup);
+        self.reset_modal_geometry();
+        Task::none()
+    }
+
+    /// One message from the electrical setup dialog.
+    pub(in crate::app) fn on_elec_setup(
+        &mut self,
+        msg: crate::ui::window::elec_setup::SetupMsg,
+    ) -> Task<Message> {
+        use crate::ui::window::elec_setup::SetupMsg;
+        let Some(state) = self.elec_setup_dialog.as_mut() else {
+            return Task::none();
+        };
+        state.error = None;
+        match msg {
+            SetupMsg::TagFormat(value) => state.tag_format = value,
+            SetupMsg::TagMode(value) => state.tag_mode = value,
+            SetupMsg::TagStart(value) => state.tag_start = value,
+            SetupMsg::TagSuffixes(value) => state.tag_suffixes = value,
+            SetupMsg::WireFormat(value) => state.wire_format = value,
+            SetupMsg::WireMode(value) => state.wire_mode = value,
+            SetupMsg::WireStart(value) => state.wire_start = value,
+            SetupMsg::XrefFormat(value) => state.xref_format = value,
+            SetupMsg::Sheet(value) => state.sheet = value,
+            SetupMsg::Ok => return self.apply_elec_setup(),
+        }
+        Task::none()
+    }
+
+    /// Why the dialog refused to apply the values it shows.
+    fn refuse_elec_setup(&mut self, message: &str) -> Task<Message> {
+        if let Some(state) = self.elec_setup_dialog.as_mut() {
+            state.error = Some(message.to_string());
+        }
+        Task::none()
+    }
+
+    /// Save: store the values on the drawing as one undo step.
+    fn apply_elec_setup(&mut self) -> Task<Message> {
+        use crate::ui::window::elec_setup::mode_letter;
+        let Some(state) = self.elec_setup_dialog.clone() else {
+            return Task::none();
+        };
+        let tag_start: u32 = match state.tag_start.trim().parse() {
+            Ok(value) => value,
+            Err(_) => return self.refuse_elec_setup("Tag start must be a whole number."),
+        };
+        let wire_start: u32 = match state.wire_start.trim().parse() {
+            Ok(value) => value,
+            Err(_) => return self.refuse_elec_setup("Wire start must be a whole number."),
+        };
+        if state.tag_format.trim().is_empty() || state.wire_format.trim().is_empty() {
+            return self.refuse_elec_setup("The tag and wire formats cannot be empty.");
+        }
+        let tag_mode = mode_letter(&state.tag_mode);
+        let wire_mode = mode_letter(&state.wire_mode);
+        let i = self.active_tab;
+        self.push_undo_snapshot(i, "ELECSETUPEDIT");
+        let document = &mut self.tabs[i].scene.document;
+        let values = [
+            ("ELEC_TAGFMT", state.tag_format.trim().to_string()),
+            ("ELEC_TAGMODE", tag_mode.clone()),
+            ("ELEC_TAG_START", tag_start.to_string()),
+            ("ELEC_TAG_RSUF", state.tag_suffixes.trim().to_string()),
+            ("ELEC_WIREFMT", state.wire_format.trim().to_string()),
+            ("ELEC_WIREMODE", wire_mode.clone()),
+            ("ELEC_WIRE_START", wire_start.to_string()),
+            ("ELEC_XREFFMT", state.xref_format.trim().to_string()),
+            ("ELEC_SHEET", state.sheet.trim().to_string()),
+        ];
+        for (key, value) in values {
+            if let Some(entry) = document
+                .summary_info
+                .custom_properties
+                .iter_mut()
+                .find(|(name, _)| name.trim().eq_ignore_ascii_case(key))
+            {
+                entry.1 = value;
+            } else {
+                document
+                    .summary_info
+                    .custom_properties
+                    .push((key.to_string(), value));
+            }
+        }
+        self.tabs[i].dirty = true;
+        // Fields showing a custom property read it again.
+        let hosts = crate::entities::field::acvar_hosts(&self.tabs[i].scene.document);
+        if !hosts.is_empty() {
+            self.tabs[i].scene.update_fields(32, Some(&hosts));
+        }
+        self.tabs[i].scene.bump_geometry();
+        self.elec_setup_dialog = None;
+        self.active_modal = None;
+        self.command_line.push_output(&format!(
+            "ELECSETUPEDIT: tag {} mode {tag_mode} start {tag_start}; wire {} mode {wire_mode} start {wire_start}.",
+            state.tag_format.trim(),
+            state.wire_format.trim()
+        ));
+        Task::none()
+    }
 
     /// `ELECBOM` prints the bill of material of the active drawing.
     ///
@@ -6125,6 +6291,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             "ELECBOM" => Some(self.elec_bom(i, None, None)),
             "ELECLIST" => Some(self.elec_list(i)),
             "ELECSETUP" => Some(self.elec_setup(i)),
+            "ELECSETUPEDIT" => Some(self.elec_setup_edit(i)),
             "ELECHELP" => Some(self.elec_help()),
             "ELECWIRELABELS" => Some(self.elec_wire_labels(i, None)),
             "ELECBUILT" => Some(self.elec_built(None)),
@@ -7055,5 +7222,67 @@ mod library_manifest_tests {
         assert_eq!(entry.attributes, vec!["TAG1", "X1TERM01"]);
         assert!((entry.scale - 25.4).abs() < 1e-9);
         let _ = std::fs::remove_dir_all(&folder);
+    }
+}
+
+#[cfg(test)]
+mod elec_setup_tests {
+    use super::*;
+
+    #[test]
+    fn a_drawing_without_wd_m_reads_the_setup_properties() {
+        let mut document = codec::Document::new();
+        document.summary_info.custom_properties = vec![
+            ("ELEC_TAGFMT".to_string(), "%N".to_string()),
+            ("ELEC_TAGMODE".to_string(), "R".to_string()),
+            ("ELEC_TAG_START".to_string(), "7".to_string()),
+            ("ELEC_WIREFMT".to_string(), "W%N".to_string()),
+            ("ELEC_WIRE_START".to_string(), "42".to_string()),
+        ];
+        let setup = read_setup(&document);
+        assert_eq!(setup.tag_format, "%N");
+        assert_eq!(setup.tag_mode, "R");
+        assert_eq!(setup.tag_start, 7);
+        assert!(setup.references_are_fixed());
+        assert_eq!(setup.wire_format, "W%N");
+        assert_eq!(setup.wire_start, 42);
+    }
+
+    #[test]
+    fn the_dialog_stores_what_elecnumber_reads() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        let _ = app.update(Message::Command("ELECSETUPEDIT".into()));
+        assert!(app.elec_setup_dialog.is_some());
+        let _ = app.update(Message::ElecSetup(
+            crate::ui::window::elec_setup::SetupMsg::TagFormat("%F%N%S".into()),
+        ));
+        let _ = app.update(Message::ElecSetup(
+            crate::ui::window::elec_setup::SetupMsg::TagStart("12".into()),
+        ));
+        let _ = app.update(Message::ElecSetup(
+            crate::ui::window::elec_setup::SetupMsg::WireStart("5".into()),
+        ));
+        let _ = app.update(Message::ElecSetup(crate::ui::window::elec_setup::SetupMsg::Ok));
+        assert!(app.elec_setup_dialog.is_none());
+        let setup = read_setup(&app.tabs[i].scene.document);
+        assert_eq!(setup.tag_format, "%F%N%S");
+        assert_eq!(setup.tag_start, 12);
+        assert_eq!(setup.wire_start, 5);
+        assert!(app.tabs[i].dirty);
+    }
+
+    #[test]
+    fn a_bad_counter_keeps_the_dialog_open_and_says_why() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let _ = app.update(Message::Command("ELECSETUPEDIT".into()));
+        let _ = app.update(Message::ElecSetup(
+            crate::ui::window::elec_setup::SetupMsg::TagStart("twelve".into()),
+        ));
+        let _ = app.update(Message::ElecSetup(crate::ui::window::elec_setup::SetupMsg::Ok));
+        let state = app.elec_setup_dialog.as_ref().expect("dialog stays open");
+        assert_eq!(state.error.as_deref(), Some("Tag start must be a whole number."));
     }
 }

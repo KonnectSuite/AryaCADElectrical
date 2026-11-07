@@ -781,6 +781,7 @@ pub(super) struct OpenCADStudio {
     block_edit_picker: Option<crate::ui::window::block_edit_picker::State>,
     rename_dialog: Option<crate::ui::window::rename::State>,
     drawing_properties: Option<crate::ui::window::drawing_properties::State>,
+    elec_setup_dialog: Option<crate::ui::window::elec_setup::State>,
     purge_dialog: Option<crate::ui::window::purge::State>,
     /// The Purge dialog's choice, for the PURGE it runs.
     purge_only: Option<purge_dialog::PurgeOnly>,
@@ -3038,6 +3039,8 @@ pub enum ModalKind {
     Rename,
     Purge,
     DrawingProperties,
+    /// The numbering contract `ELECNUMBER`/`ELECWIRENUMBER` follow.
+    ElecSetup,
     SelectSimilarSettings,
     BlockSaveAs,
     BlockVisibility,
@@ -3863,6 +3866,7 @@ pub enum Message {
     Rename(crate::ui::window::rename::RenameMsg),
     Purge(crate::ui::window::purge::PurgeMsg),
     DwgProps(crate::ui::window::drawing_properties::DwgPropsMsg),
+    ElecSetup(crate::ui::window::elec_setup::SetupMsg),
     /// Select Similar settings: flip one SELECTSIMILARMODE bit.
     SelectSimilarSettingsToggle(u16),
     SelectSimilarSettingsOk,
@@ -5839,6 +5843,7 @@ impl OpenCADStudio {
             block_edit_picker: None,
             rename_dialog: None,
             drawing_properties: None,
+            elec_setup_dialog: None,
             purge_dialog: None,
             purge_only: None,
             select_similar_settings: None,

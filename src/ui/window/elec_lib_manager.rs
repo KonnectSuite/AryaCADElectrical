@@ -55,6 +55,15 @@ pub fn view<'a>(
         })
         .collect();
 
+    // The class dropdowns offer what the library already uses; the text fields
+    // keep accepting a class the library has never seen, so nothing is lost.
+    let class_options: Vec<String> = {
+        let mut classes: Vec<String> = rows.iter().map(|row| row.class.clone()).collect();
+        classes.sort_by_key(|class| class.to_lowercase());
+        classes.dedup();
+        classes
+    };
+
     // ---- header: where the library lives, and what can be done to it ----------
     let header = row![
         column![
@@ -132,6 +141,16 @@ pub fn view<'a>(
                 .style(field_style)
                 .padding([7, 9])
                 .size(12);
+            let class_pick = crate::ui::dropdown_list::pick_list(
+                None::<String>,
+                class_options.clone(),
+                |class: &String| class.clone(),
+            )
+            .on_select(Message::ElecLibClassEdit)
+            .placeholder("Pick an existing class…")
+            .text_size(12)
+            .padding([7, 9])
+            .width(Length::Fill);
             let details = column![
                 text(row.name.clone()).size(16),
                 text(format!("{} pin(s) · scale {}", row.pins, row.scale))
@@ -139,6 +158,7 @@ pub fn view<'a>(
                     .style(muted_style),
                 text("Class").size(11).style(muted_style),
                 class_field,
+                class_pick,
                 text("The class groups the symbol in the palette and in the reports.")
                     .size(10)
                     .style(muted_style),
@@ -194,7 +214,27 @@ pub fn view<'a>(
     let add_row = row![
         name_input,
         class_input,
+        crate::ui::dropdown_list::pick_list(
+            None::<String>,
+            class_options,
+            |class: &String| class.clone(),
+        )
+        .on_select(Message::ElecLibNewClass)
+        .placeholder("Pick a class…")
+        .text_size(12)
+        .padding([7, 9])
+        .width(Length::FillPortion(2)),
         pins_input,
+        crate::ui::dropdown_list::pick_list(
+            None::<String>,
+            (0..=16).map(|count| count.to_string()).collect::<Vec<_>>(),
+            |count: &String| count.clone(),
+        )
+        .on_select(Message::ElecLibNewPins)
+        .placeholder("Pins…")
+        .text_size(12)
+        .padding([7, 9])
+        .width(Length::FillPortion(1)),
         dialog_button("Add from selection", Message::ElecLibAdd, true),
     ]
     .spacing(8)

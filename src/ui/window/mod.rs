@@ -53,6 +53,7 @@ pub mod plugin_manager;
 pub mod print_all;
 pub mod quick_calc;
 pub mod drawing_properties;
+pub mod elec_setup;
 pub mod purge;
 pub mod recovery;
 pub mod rename;
