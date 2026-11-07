@@ -16,7 +16,7 @@ The client must start that command over standard input/output. If it asks for th
 The server provides four general-purpose tools:
 
 - `ocs_sessions` finds running editor sessions and opens OpenCADStudio when none exists.
-- `ocs_read` discovers capabilities and reads document state, complete database records, command manifests, entities, properties, kernel measurements and spatial relationships, history, events, and operation status.
+- `ocs_read` discovers capabilities and reads document state, complete database records, command manifests, entities, properties, kernel measurements, electrical net/pin data, spatial relationships, history, events, and operation status.
 - `ocs_execute` performs one operation, an atomic record update, or a sequential batch against the real editor.
 - `ocs_capture` returns a bounded PNG of the drawing viewport or complete window.
 

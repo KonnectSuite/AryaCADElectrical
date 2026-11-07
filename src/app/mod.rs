@@ -6598,6 +6598,11 @@ impl OpenCADStudio {
         // `--read-only` disables saving. `--script` queues command lines.
         let cfg = crate::cli::gui_config();
         s.read_only = cfg.read_only;
+        // `--automation` starts with the MCP/automation bridge already on, so an
+        // AI client can attach without clicking the MCP chip in the status bar.
+        if cfg.automation {
+            s.control.enabled = true;
+        }
         // GPU backend / renderer fallback: the resolver ran before iced
         // booted, so surface its verdict here where the user can see it.
         if let Some(notice) = cfg.gpu_fallback_notice {

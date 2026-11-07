@@ -37,6 +37,18 @@ New-Item -ItemType Directory -Path $outPath -Force | Out-Null
 
 Copy-Item -LiteralPath $Binary -Destination (Join-Path $outPath 'OpenCADStudio.exe')
 
+# Workspace files inherit a low mandatory integrity label when they are produced by the
+# sandboxed build, and a low-integrity process cannot write outside its own directory:
+# the wizard would then fail with "Access is denied" in Documents and the MCP automation
+# bridge could not publish its session descriptor. Raise the shipped copy to Medium so a
+# portable folder behaves like a normally downloaded program.
+$portableExe = Join-Path $outPath 'OpenCADStudio.exe'
+try {
+    & icacls $portableExe /setintegritylevel Medium 2>&1 | Out-Null
+} catch {
+    Write-Warning "could not raise the integrity level of $portableExe : $_"
+}
+
 $library = Join-Path $root 'library'
 if (Test-Path -LiteralPath $library) {
     Copy-Item -LiteralPath $library -Destination (Join-Path $outPath 'library') -Recurse

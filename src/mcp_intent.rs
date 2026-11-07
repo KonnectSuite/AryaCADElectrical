@@ -64,6 +64,11 @@ pub static DESCRIPTORS: &[IntentDescriptor] = &[
     read("ocs_audit", "Audit OCS document", &mcp_ops::AUDIT),
     read("ocs_commands", "List OCS commands", &mcp_ops::COMMANDS),
     read("ocs_measure", "Measure OCS entities", &mcp_ops::MEASURE),
+    read(
+        "ocs_electrical",
+        "Read OCS electrical drawing",
+        &mcp_ops::ELECTRICAL,
+    ),
     IntentDescriptor {
         name: "ocs_render",
         title: "Render OCS viewport",
@@ -316,6 +321,7 @@ mod tests {
         "ocs_audit",
         "ocs_commands",
         "ocs_measure",
+        "ocs_electrical",
         "ocs_render",
         "ocs_run",
         "ocs_new",
@@ -441,7 +447,7 @@ mod tests {
             .map(|descriptor| descriptor.name)
             .collect();
         assert_eq!(names, NAMES);
-        assert_eq!(names.iter().copied().collect::<HashSet<_>>().len(), 16);
+        assert_eq!(names.iter().copied().collect::<HashSet<_>>().len(), 17);
         for name in NAMES {
             let descriptor = find_descriptor(name).expect("descriptor lookup succeeds");
             assert_eq!(descriptor.name, *name);
@@ -460,6 +466,7 @@ mod tests {
             ("ocs_audit", "audit"),
             ("ocs_commands", "commands"),
             ("ocs_measure", "measure"),
+            ("ocs_electrical", "electrical"),
             ("ocs_run", "run"),
             ("ocs_new", "new"),
             ("ocs_open", "open"),
@@ -485,7 +492,7 @@ mod tests {
     #[test]
     fn generated_schemas_expose_public_arguments_without_required_envelopes() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 17);
         for tool in &tools {
             let schema = &tool["inputSchema"];
             assert_eq!(schema["type"], "object");
@@ -831,10 +838,10 @@ mod tests {
     }
 
     #[test]
-    fn all_tools_keep_facades_first_and_append_sixteen_intents() {
+    fn all_tools_keep_facades_first_and_append_seventeen_intents() {
         let tools = crate::mcp::tool_definitions();
         let tools = tools.as_array().unwrap();
-        assert_eq!(tools.len(), 20);
+        assert_eq!(tools.len(), 21);
         let names: Vec<_> = tools
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())

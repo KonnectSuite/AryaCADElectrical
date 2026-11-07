@@ -46,7 +46,7 @@ const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
 /// `set_properties` lists its `name` selector and takes a colour as a
 /// number or `{"rgb":[r,g,b]}`, which its example shows on a layer.
 #[cfg(test)]
-const TOOL_SCHEMA_DIGEST: &str = "872b45f6d6067f358b08e75d69a85fe82e3ea1b55550800378b7b3c540803eaa";
+const TOOL_SCHEMA_DIGEST: &str = "1aa3358792fceb1bc91e642e1faf097762a9039aa58e70d6a4f9b42a86ecd3b4";
 const MAX_REQUEST: usize = 1_048_576;
 const MAX_RESPONSE: u64 = 16 * 1024 * 1024;
 const CACHE_TTL_MS: u64 = 3_600_000;
@@ -54,7 +54,7 @@ const CACHE_TTL_MS: u64 = 3_600_000;
 /// land. Tools and discovery are static by comparison, so they keep the hour.
 const RESOURCE_TTL_MS: u64 = 60_000;
 const TASK_TTL_MS: u64 = 3_600_000;
-pub(crate) const INSTRUCTIONS: &str = "Prefer intent tools: ocs_inspect, ocs_query, ocs_run, ocs_new/open/save, ocs_render. Use ocs_read/ocs_execute for advanced work and explicit envelopes. ocs_session_id is optional with one session. Intent calls need no request_id, but reuse one to retry a mutation; after an uncertain outcome query the operation, and never replay a mutation with a new id. Read capabilities and record_schema before unfamiliar ops; use entity_schema for creation, validate for preflight. Preserve document_id and revision from state. running/waiting_input are not completion: follow state.command.accepts, options, input_example. Let the geometry kernel do the math. Before delivery audit the target format/version, then save_verified or ocs_save_verified to an absolute path. Announce the bridge build on connection and change. For batches use response_detail: summary; bindings reuse earlier results. Read guides via cad://guides/{name} or ocs_read op: guide, parameters.name: workflow, architecture, capture, batch-bindings. Read architecture before floorplan vectorization; capture before visual verification.";
+pub(crate) const INSTRUCTIONS: &str = "Prefer intent tools: ocs_inspect, ocs_query, ocs_run, ocs_new/open/save, ocs_render. Use ocs_read/execute for advanced work and explicit envelopes. ocs_session_id is optional with one session. Intent calls need no request_id, but reuse one to retry a mutation; after an uncertain outcome query it; never replay a mutation with a new id. Read capabilities and record_schema before unfamiliar ops; use entity_schema for creation, validate for preflight. Keep document_id and revision from state. running/waiting_input are not completion: follow state.command.accepts, options, input_example. Let the geometry kernel do the math. Before delivery audit the target format/version, then save_verified or ocs_save_verified to an absolute path. For batches use response_detail: summary; bindings reuse earlier results. Read guides via cad://guides/{name} or ocs_read op: guide: workflow, architecture, capture, batch-bindings, ecad. Read architecture before floorplan vectorization; ecad before electrical work (op electrical = nets, pins, wire length, components; the ELEC* commands share that data).";
 const READ_OPS: &[&str] = &[
     "state",
     "hello",
@@ -69,6 +69,7 @@ const READ_OPS: &[&str] = &[
     "header",
     "properties",
     "measure",
+    "electrical",
     "snap",
     "grips",
     "history",
@@ -1736,6 +1737,11 @@ const GUIDES: &[(&str, &str, &str)] = &[
         "Dependent batch steps",
         include_str!("../docs/automation/batch-bindings.md"),
     ),
+    (
+        "ecad",
+        "Electrical drawings (ECAD)",
+        include_str!("../docs/automation/guides/ecad.md"),
+    ),
 ];
 
 fn guide_resources() -> Vec<Value> {
@@ -2488,7 +2494,7 @@ pub(crate) fn tool_definitions() -> Value {
         },
         {
             "name":"ocs_read",
-            "description":"Use entity_schema with parameters.type for creation fields/examples; omit type to list. Use validate with parameters.request to check an execute request without running it (no live document checks). Use guide with parameters.name to read workflow, architecture, capture or batch-bindings guidance (omit name to list). Discover capabilities and record schemas, or read state, complete database records, command manifests, entities, blocks (semantic block instances with attributes, definition tags and dynamic properties), properties, kernel measurements and spatial relationships, history, events or operation status from a live OCS session. Use batch_result with parameters.request_id to retrieve retained batch details without executing steps; available only in the originating MCP connection, for up to 64 retained batches per session.",
+            "description":"Use entity_schema with parameters.type for creation fields/examples; omit type to list. Use validate with parameters.request to check an execute request without running it (no live document checks). Use guide with parameters.name to read workflow, architecture, capture, batch-bindings or ecad (electrical) guidance (omit name to list). Discover capabilities and record schemas, or read state, complete database records, command manifests, entities, blocks (semantic block instances with attributes, definition tags and dynamic properties), properties, kernel measurements and spatial relationships, history, events or operation status from a live OCS session. Use electrical for the active electrical sheet: nets with their device pins, pins with coordinates, wire length and segments, loose pins and BOM components; parameters.detail summary returns counts only. Use batch_result with parameters.request_id to retrieve retained batch details without executing steps; available only in the originating MCP connection, for up to 64 retained batches per session.",
             "inputSchema":{"type":"object","properties":{"ocs_session_id":{"type":"string","minLength":1,"description":"Value of session_id returned by ocs_sessions."},"op":{"type":"string","enum":READ_OPS,"default":"state"},"parameters":{"type":"object","description":"Operation-specific filters.","properties":{"request":{"type":"object","description":"Execute request to preflight without dispatch. request_id may be omitted. Batch bindings are checked structurally; result-dependent values require execution."},"name":{"type":"string","description":"Command name, block name/glob, or record name."},"names":{"type":"array","items":{"type":"string"},"description":"Block name or wildcard glob filters (e.g. ['*'], ['DOOR*']) for op: blocks."},"extract_attributes":{"type":"boolean","default":true,"description":"Extract ATTRIB values, ATTDEF defaults, and visible definition text tags (e.g. TAG, DIMS) for op: blocks."},"extract_dynamic_properties":{"type":"boolean","default":true,"description":"Extract dynamic block parameters, visibility states, and lookup values for op: blocks."},"include_anonymous":{"type":"boolean","default":false,"description":"Include unlinked internal anonymous blocks (*U..., *D..., *T...) in op: blocks."},"search":{"type":"string","description":"Case-insensitive command or record-type search."},"find":{"type":"string","description":"Text query string for text_search."},"match_case":{"type":"boolean","default":false,"description":"Case-sensitive text search."},"whole_word":{"type":"boolean","default":false,"description":"Match only whole words."},"ignore_accents":{"type":"boolean","description":"Ignore accents/diacritics in text (defaults to true when match_case is false)."},"scope":{"type":"string","enum":["all","active_space","blocks"],"default":"all","description":"Text search scope."},"system_spellcheck":{"type":"boolean","default":false,"description":"Use native OS spell-checker (Windows, macOS, Linux)."},"language":{"type":"string","description":"Language tag for spell-checker (e.g. 'fr-FR', 'en-US', 'de-DE', 'es-ES')."},"suggest":{"type":"boolean","default":true,"description":"Include suggested corrections for misspelled words."},"check_terms":{"type":"array","items":{"type":"string"},"description":"List of terms or suspect misspellings to flag in text_audit."},"dictionary":{"type":"array","items":{"type":"string"},"description":"Known valid words for text_audit dictionary check."},"pairs":{"type":"array","description":"Find/replace pairs for dry-run simulation in text_audit.","items":{"type":"object","properties":{"find":{"type":"string"},"replace":{"type":"string"}},"required":["find","replace"]}},"dry_run_pairs":{"type":"array","description":"Alias for pairs in text_audit.","items":{"type":"object","properties":{"find":{"type":"string"},"replace":{"type":"string"}},"required":["find","replace"]}},"document_id":{"type":"integer","minimum":0},"path":{"type":"string","description":"Optional intended output path for audit; extension determines target format."},"target_format":{"type":"string","enum":["dwg","dxf"],"description":"Intended output format for audit."},"target_version":{"type":"string","enum":["R14","2000","2004","2007","2010","2013","2018","AC1014","AC1015","AC1018","AC1021","AC1024","AC1027","AC1032"],"description":"Intended CAD output version for audit."},"collection":{"type":"string","description":"Record collection, all for records, or omit to discover collections and schema types."},"handle":{"type":"string"},"handles":{"type":"array","items":{"type":"string"},"description":"Exact entity or record handles."},"type":{"type":"string","description":"Entity or record type filter; for record_schema, returns its complete type graph and writable field paths."},"layer":{"type":"string","description":"Layer name filter for query; * and ? are wildcards."},"xdata_app":{"type":"string","description":"Only entities carrying XDATA of this application (query)."},"detail":{"type":"string","enum":["summary","geometry","full"],"default":"geometry","description":"Entity detail returned by query."},"fields":{"type":"array","items":{"type":"string"},"description":"Return only these entity fields plus handle."},"paths":{"type":"array","items":{"type":"string"},"description":"Project RFC 6901 JSON Pointer paths relative to record.properties."},"where":{"type":"array","description":"All property filters must match.","items":{"type":"object","properties":{"path":{"type":"string"},"op":{"type":"string","enum":["eq","ne","lt","lte","gt","gte","contains","starts_with","ends_with","in","exists","not_exists"],"default":"eq"},"value":{}},"required":["path"],"additionalProperties":false}},"near":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":3,"description":"Rank planar curves by exact kernel distance to this world XY point."},"point":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":3,"description":"World point whose object snap the snap op reports."},"from":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":3,"description":"Base point for perpendicular and tangent snaps (snap op)."},"contains_point":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":3,"description":"Return closed planar curves containing this world XY point."},"bounds":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4,"description":"Filter entities whose world XY bounds overlap [min_x,min_y,max_x,max_y]."},"intersections":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":2,"description":"Return exact kernel intersections between two planar curve handles."},"after":{"type":"integer","minimum":0,"description":"Event cursor."},"request_id":{"type":"string","description":"Operation id to query."},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":10000}},"additionalProperties":false}},"anyOf":[{"required":["ocs_session_id"]},{"required":["op"],"properties":{"op":{"enum":["guide","entity_schema","validate"]}}}],"additionalProperties":false},
             "outputSchema":read_output_schema(),
             "title":"Read OCS state","annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}
@@ -3203,7 +3209,7 @@ mod tests {
             &names[..4],
             ["ocs_sessions", "ocs_read", "ocs_execute", "ocs_capture"]
         );
-        assert_eq!(names.len(), 20);
+        assert_eq!(names.len(), 21);
         // The build announcement must live in the entry-point tool
         // description: global instructions don't reliably reach agents.
         assert!(
@@ -3341,7 +3347,7 @@ mod tests {
             &mut detached_pump(),
         )
         .unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 20);
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 21);
         // SEP-2549: freshness hints ship on every protocol version; only
         // the modern envelope stays negotiated (see
         // legacy_list_results_carry_sep2549_ttl).

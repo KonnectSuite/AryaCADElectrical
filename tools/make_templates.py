@@ -1,19 +1,27 @@
 """Generate the starting sheet templates (IEC / ISO 5457 and NEC / ASME Y14.1).
 
 Each template is a plain DXF at 1 unit = 1 mm with:
-  * the paper edge and an inner frame with zone references;
-  * a standard title block in the bottom-right corner, its fields as plain TEXT so they can
-    be edited with the ordinary text editor;
-  * a `WD_M` insert carrying the AutoCAD Electrical-style numbering contract that
-    `ELECSETUP` reads (format, mode, start value, suffixes, sheet), so a new drawing starts
-    with the intended conventions;
-  * the electrical layers (`WIRES`, `JUNCTIONS`, `WIRENO`, `XREF`, `ELEC-SYMBOLS`) with their
-    house colours, so a new print looks right before anything is drawn.
 
-Start a drawing with:  `ELECNEW templates\\iec\\A3_landscape.dxf`
+* the trim edge, an inner frame with the ISO / ASME zone reference grid, centring marks
+  and a consistent rule weight;
+* a title block drawn to the standard's sheet layout: ISO 7200 fields for IEC
+  (first-angle projection symbol, revision table, company / title / drawing number /
+  project / scale / size / sheet / date / drawn / checked / approved), and the ASME
+  Y14.1 arrangement for NEC with a third-angle symbol and its own revision table;
+* the editable fields as plain TEXT so the ordinary text editor (and the new-drawing-set
+  wizard) can fill them: ``COMPANY NAME``, ``DRAWING TITLE``, ``PROJECT``, ``AR-0001``,
+  ``1 / 1``, ``DRAWN``;
+* a ``WD_M`` insert carrying the AutoCAD Electrical-style numbering contract that
+  ``ELECSETUP`` reads (format, mode, start value, suffixes, sheet). Its attributes are
+  invisible, like the real block, so the drawing starts clean;
+* the electrical layers (``WIRES``, ``JUNCTIONS``, ``WIRENO``, ``XREF``,
+  ``ELEC-SYMBOLS``) with their house colours, so a new print looks right before anything
+  is drawn.
+
+Start a drawing with:  ``ELECNEW templates\\iec\\A3_landscape.dxf``
 
 The script is the source of truth: rerun it to regenerate every file after editing a
-layout. Nothing here is version-specific beyond ISO 5457 / ASME Y14.1 sheet sizes.
+layout. Nothing here is version-specific beyond ISO 5457 / ISO 7200 and ASME Y14.1.
 """
 
 from __future__ import annotations
@@ -61,6 +69,14 @@ LAYERS = [
     ("XREF", 6),
     ("ELEC-SYMBOLS", 7),
 ]
+
+RULE_LAYER = "TITLE_BLOCK"
+ZONE_LAYER = "ZONES"
+CAPTION_HEIGHT = 1.8
+VALUE_HEIGHT = 3.2
+
+IEC_STANDARD = "IEC 61082 / ISO 5457"
+NEC_STANDARD = "ASME Y14.1 / NEC"
 
 # The numbering contract ELECSETUP reads. Format templates follow AutoCAD Electrical's
 # `%F` family: family, number, sheet, cross-reference. Both standards start unfrozen
@@ -119,141 +135,261 @@ IEC_PROMPTS = {
 NEC_PROMPTS = dict(IEC_PROMPTS)
 
 
-def text(doc, value, x, y, height, layer="TITLE_BLOCK", rotation=0.0):
+# --------------------------------------------------------------------------- #
+# drawing helpers
+# --------------------------------------------------------------------------- #
+
+
+def text(doc, value, x, y, height, layer=RULE_LAYER, rotation=0.0):
     doc.add_text(value, x, y, height, layer=layer, rotation=rotation)
 
 
-def line(doc, x1, y1, x2, y2, layer="BORDER"):
+def line(doc, x1, y1, x2, y2, layer=RULE_LAYER):
     doc.add_line(x1, y1, x2, y2, layer=layer)
 
 
+def rect(doc, x0, y0, x1, y1, layer=RULE_LAYER):
+    line(doc, x0, y0, x1, y0, layer)
+    line(doc, x1, y0, x1, y1, layer)
+    line(doc, x1, y1, x0, y1, layer)
+    line(doc, x0, y1, x0, y0, layer)
+
+
+def text_width(value, height):
+    """Rough advance width of a single-line AutoCAD text, for centring."""
+    return len(value) * height * 0.62
+
+
+def centred(doc, value, cx, y, height, layer=ZONE_LAYER):
+    text(doc, value, cx - text_width(value, height) / 2.0, y, height, layer)
+
+
+def caption(doc, value, x, y, height=CAPTION_HEIGHT):
+    text(doc, value, x, y, height)
+
+
+def value_text(doc, value, x, y, height=VALUE_HEIGHT):
+    text(doc, value, x, y, height)
+
+
+def field_rule(doc, x0, x1, y):
+    """A thin fill-in rule for a field with no value yet."""
+    line(doc, x0, y, x1, y, layer=RULE_LAYER)
+
+
+def cell(doc, x0, y0, x1, y1, name, value=None, value_height=VALUE_HEIGHT,
+         pad=2.6, rule=True):
+    """Caption along the top of a cell and either a value or a fill-in rule.
+
+    Short cells (the 10 mm bottom row) get a smaller caption and value so the two
+    never collide; taller cells centre the value in the space below the caption.
+    """
+    height = y1 - y0
+    cap_height = min(CAPTION_HEIGHT, max(1.4, height * 0.14))
+    cap_y = y1 - 0.7 - cap_height
+    caption(doc, name, x0 + pad, cap_y, cap_height)
+    vh = min(value_height, max(2.6, height * 0.36))
+    area_bottom = y0 + 0.7
+    area_top = cap_y - 1.1
+    visible = max(0.0, area_top - area_bottom - vh)
+    baseline = area_bottom + visible * 0.45
+    if value is not None:
+        value_text(doc, value, x0 + pad, baseline, vh)
+    elif rule:
+        field_rule(doc, x0 + pad, x1 - pad, baseline + 0.2)
+
+
+def projection_symbol(doc, x0, y0, third_angle):
+    """ISO projection symbol: a frustum and two concentric circles, 20 x 10 mm."""
+    if third_angle:
+        circles, frustum = x0 + 4.5, x0 + 10.0
+    else:
+        circles, frustum = x0 + 13.5, x0
+    doc.add_circle(circles, y0 + 5.0, 3.2, layer=RULE_LAYER)
+    doc.add_circle(circles, y0 + 5.0, 1.6, layer=RULE_LAYER)
+    doc.add_lwpolyline(
+        [
+            (frustum, y0 + 2.0),
+            (frustum + 7.0, y0 + 3.5),
+            (frustum + 7.0, y0 + 6.5),
+            (frustum, y0 + 8.0),
+        ],
+        closed=True,
+        layer=RULE_LAYER,
+    )
+    caption_value = "THIRD ANGLE" if third_angle else "FIRST ANGLE"
+    centred(doc, caption_value, x0 + 10.0, y0 - 3.4, 1.6, RULE_LAYER)
+
+
+def revision_table(doc, x0, y0, width, rows, ratios, third_angle=False):
+    """The drawing-office revision history strip above the title block.
+
+    ``ratios`` are the column shares of ``width``: revision, date, description and, for
+    NEC, the approval initials.
+    """
+    header = 7.0
+    body = 7.0
+    total = header + rows * body
+    rect(doc, x0, y0, x0 + width, y0 + total)
+    line(doc, x0, y0 + total - header, x0 + width, y0 + total - header)
+
+    names = ["REV", "DATE", "DESCRIPTION"]
+    if len(ratios) == 4:
+        names.append("APPR")
+    x = x0
+    for index, ratio in enumerate(ratios[:-1]):
+        x += width * ratio
+        line(doc, x, y0, x, y0 + total)
+    for index, name in enumerate(names):
+        left = x0 + sum(width * ratio for ratio in ratios[:index])
+        caption(doc, name, left + 2.0, y0 + total - header + 2.4, 1.6)
+    for row in range(1, rows):
+        line(doc, x0, y0 + total - header - row * body, x0 + width,
+             y0 + total - header - row * body)
+
+    projection_symbol(doc, x0 + width + 6.0, y0 + 4.0, third_angle)
+
+
 def frame(doc, width, height, standard):
-    """Paper edge, inner frame and zone references."""
+    """Trim edge, ISO/ASME frame, zone reference grid and centring marks."""
     left, other = (20.0, 10.0) if standard == "iec" else (25.4, 12.7)
     right = width - other
     top = height - other
     bottom = other
 
-    line(doc, 0, 0, width, 0)
-    line(doc, width, 0, width, height)
-    line(doc, width, height, 0, height)
-    line(doc, 0, height, 0, 0)
-    line(doc, left, bottom, right, bottom)
-    line(doc, right, bottom, right, top)
-    line(doc, right, top, left, top)
-    line(doc, left, top, left, bottom)
+    rect(doc, 0.0, 0.0, width, height, "BORDER")
+    rect(doc, left, bottom, right, top, "BORDER")
 
-    # Zone grid: columns along top/bottom, rows down the sides.
+    # Zone reference grid: columns numbered at top and bottom, rows lettered at the sides.
     columns = max(4, int(round((right - left) / 50.0)))
     rows = max(3, int(round((top - bottom) / 50.0)))
+    tick = other * 0.62
     for index in range(1, columns):
         x = left + (right - left) * index / columns
-        line(doc, x, bottom, x, bottom - other * 0.6, layer="ZONES")
-        line(doc, x, top, x, top + other * 0.6, layer="ZONES")
+        line(doc, x, bottom, x, bottom - tick, ZONE_LAYER)
+        line(doc, x, top, x, top + tick, ZONE_LAYER)
     for index in range(1, rows):
         y = bottom + (top - bottom) * index / rows
-        line(doc, left, y, left - other * 0.6, y, layer="ZONES")
-        line(doc, right, y, right + other * 0.6, y, layer="ZONES")
+        line(doc, left, y, left - tick, y, ZONE_LAYER)
+        line(doc, right, y, right + tick, y, ZONE_LAYER)
+
+    zone_height = max(2.2, min(other * 0.5, 3.6))
+    number_y = bottom - other * 0.72
+    number_top_y = top + other * 0.28
     for index in range(columns):
-        x = left + (right - left) * (index + 0.5) / columns
-        text(doc, str(index + 1), x - 2.0, bottom - other * 0.85, other * 0.5, layer="ZONES")
-        text(doc, str(index + 1), x - 2.0, top + other * 0.25, other * 0.5, layer="ZONES")
+        cx = left + (right - left) * (index + 0.5) / columns
+        centred(doc, str(index + 1), cx, number_y, zone_height)
+        centred(doc, str(index + 1), cx, number_top_y, zone_height)
     for index in range(rows):
-        y = bottom + (top - bottom) * (index + 0.5) / rows
+        cy = bottom + (top - bottom) * (index + 0.5) / rows
         label = chr(ord("A") + index)
-        text(doc, label, left - other * 0.85, y - other * 0.25, other * 0.5, layer="ZONES")
-        text(doc, label, right + other * 0.3, y - other * 0.25, other * 0.5, layer="ZONES")
+        text(doc, label, left - other * 0.82, cy - zone_height * 0.35, zone_height, ZONE_LAYER)
+        text(doc, label, right + other * 0.22, cy - zone_height * 0.35, zone_height, ZONE_LAYER)
+
+    # Centring marks: short registration ticks at the middle of each side (ISO 5457).
+    mark = min(5.0, other * 0.4)
+    line(doc, width / 2.0, 0.0, width / 2.0, mark, ZONE_LAYER)
+    line(doc, width / 2.0, height, width / 2.0, height - mark, ZONE_LAYER)
+    line(doc, 0.0, height / 2.0, mark, height / 2.0, ZONE_LAYER)
+    line(doc, width, height / 2.0, width - mark, height / 2.0, ZONE_LAYER)
 
 
-def title_block_iec(doc, width, height, size_label, standard_note):
-    block_w, block_h = 180.0, 63.0
-    right = width - 10.0
-    bottom = 10.0
-    left = right - block_w
-    top = bottom + block_h
+def _block_frame(doc, width, height, standard, block_height):
+    """Common title-block corner maths.
 
-    line(doc, left, bottom, left + block_w, bottom, layer="TITLE_BLOCK")
-    line(doc, left + block_w, bottom, left + block_w, top, layer="TITLE_BLOCK")
-    line(doc, left + block_w, top, left, top, layer="TITLE_BLOCK")
-    line(doc, left, top, left, bottom, layer="TITLE_BLOCK")
-
-    # Horizontal rules: company / title / data rows.
-    row_company = bottom + block_h - 16.0
-    row_data = bottom + 20.0
-    line(doc, left, row_company, left + block_w, row_company, layer="TITLE_BLOCK")
-    line(doc, left, row_data, left + block_w, row_data, layer="TITLE_BLOCK")
-    # Vertical splits in the data rows.
-    mid = left + 118.0
-    line(doc, mid, bottom, mid, row_data, layer="TITLE_BLOCK")
-    line(doc, left + 60.0, bottom, left + 60.0, row_data, layer="TITLE_BLOCK")
-    line(doc, left + 90.0, bottom, left + 90.0, row_data, layer="TITLE_BLOCK")
-
-    text(doc, "COMPANY NAME", left + 3.0, row_company + 4.0, 5.0)
-    text(doc, "DRAWING TITLE", left + 3.0, row_data + 5.0, 6.0)
-    text(doc, "PROJECT", left + 3.0, row_data + 1.0, 2.5)
-
-    text(doc, "DWG NO", left + 121.0, row_data + 5.0, 2.5)
-    text(doc, "AR-0001", left + 121.0, row_data + 1.0, 4.0)
-    text(doc, "REV", left + 151.0, row_data + 5.0, 2.5)
-    text(doc, "0", left + 151.0, row_data + 1.0, 4.0)
-
-    text(doc, "SCALE", left + 2.0, bottom + 8.0, 2.5)
-    text(doc, "1:1", left + 2.0, bottom + 2.5, 3.5)
-    text(doc, "SIZE", left + 62.0, bottom + 8.0, 2.5)
-    text(doc, size_label, left + 62.0, bottom + 2.5, 3.5)
-    text(doc, "SHEET", left + 92.0, bottom + 8.0, 2.5)
-    text(doc, "1 / 1", left + 92.0, bottom + 2.5, 3.5)
-
-    text(doc, "DATE", left + 121.0, bottom + 14.0, 2.0)
-    text(doc, "DRAWN", left + 121.0, bottom + 8.0, 2.0)
-    text(doc, "CHECKED", left + 121.0, bottom + 2.0, 2.0)
-    text(doc, "APPROVED", left + 151.0, bottom + 14.0, 2.0)
-    text(doc, standard_note, left + 121.0, bottom + 18.0, 1.8)
-    text(doc, "PROJECTION: FIRST ANGLE", left + 3.0, top - 5.0, 2.0)
-
-
-def title_block_nec(doc, width, height, size_label, standard_note):
-    block_w, block_h = 180.0, 50.0
-    other = 12.7
+    Returns ``(left, bottom, right, top, block_width, scale_x)`` where ``scale_x`` maps
+    the nominal 180 mm layout onto a narrow sheet frame (ANSI A portrait is 177.8 mm wide
+    inside the frame, so the block shrinks instead of running off the paper).
+    """
+    margin_left, other = (20.0, 10.0) if standard == "iec" else (25.4, 12.7)
     right = width - other
     bottom = other
-    left = right - block_w
-    top = bottom + block_h
+    available = right - margin_left
+    block_width = min(180.0, available)
+    left = right - block_width
+    top = bottom + block_height
+    return left, bottom, right, top, block_width, block_width / 180.0
 
-    line(doc, left, bottom, left + block_w, bottom, layer="TITLE_BLOCK")
-    line(doc, left + block_w, bottom, left + block_w, top, layer="TITLE_BLOCK")
-    line(doc, left + block_w, top, left, top, layer="TITLE_BLOCK")
-    line(doc, left, top, left, bottom, layer="TITLE_BLOCK")
 
-    row_top = bottom + 30.0
-    row_mid = bottom + 15.0
-    line(doc, left, row_top, left + block_w, row_top, layer="TITLE_BLOCK")
-    line(doc, left, row_mid, left + block_w, row_mid, layer="TITLE_BLOCK")
-    line(doc, left + 95.0, bottom, left + 95.0, top, layer="TITLE_BLOCK")
-    line(doc, left + 60.0, bottom, left + 60.0, row_mid, layer="TITLE_BLOCK")
-    line(doc, left + 78.0, bottom, left + 78.0, row_mid, layer="TITLE_BLOCK")
-    line(doc, left + 120.0, bottom, left + 120.0, top, layer="TITLE_BLOCK")
+def title_block_iec(doc, width, height, size_label):
+    """ISO 7200 title block in the lower right corner (nominal 180 x 64 mm)."""
+    left, bottom, right, top, block_w, sx = _block_frame(doc, width, height, "iec", 64.0)
 
-    text(doc, "COMPANY NAME", left + 3.0, row_top + 8.0, 5.0)
-    text(doc, "DRAWING TITLE", left + 3.0, row_mid + 4.0, 6.0)
-    text(doc, "PROJECT", left + 3.0, bottom + 6.0, 2.5)
-    text(doc, "THIRD ANGLE PROJECTION", left + 3.0, top - 5.0, 2.0)
+    def X(value):
+        return left + value * sx
 
-    text(doc, "DWG NO", left + 98.0, row_top + 5.0, 2.5)
-    text(doc, "AR-0001", left + 98.0, row_top + 1.0, 4.0)
-    text(doc, "REV", left + 123.0, row_top + 5.0, 2.5)
-    text(doc, "0", left + 123.0, row_top + 1.0, 4.0)
-    text(doc, "SCALE", left + 62.0, row_mid + 3.0, 2.5)
-    text(doc, "1:1", left + 62.0, bottom + 3.0, 3.5)
-    text(doc, "SIZE", left + 80.0, row_mid + 3.0, 2.5)
-    text(doc, size_label, left + 80.0, bottom + 3.0, 3.5)
-    text(doc, "SHEET", left + 98.0, row_mid + 3.0, 2.5)
-    text(doc, "1 / 1", left + 98.0, bottom + 3.0, 3.5)
-    text(doc, "DATE", left + 123.0, row_mid + 3.0, 2.0)
-    text(doc, "DRAWN", left + 145.0, row_mid + 3.0, 2.0)
-    text(doc, "CHECKED", left + 123.0, bottom + 8.0, 2.0)
-    text(doc, "APPROVED", left + 145.0, bottom + 8.0, 2.0)
-    text(doc, standard_note, left + 123.0, bottom + 2.0, 1.8)
+    rect(doc, left, bottom, right, top)
+    for y in (bottom + 10.0, bottom + 24.0, bottom + 42.0):
+        line(doc, left, y, right, y)
+    line(doc, X(120.0), bottom, X(120.0), top)
+
+    # Bottom row: scale, size, sheet, date, revision.
+    for value in (30.0, 60.0, 90.0, 120.0):
+        line(doc, X(value), bottom, X(value), bottom + 10.0)
+    cell(doc, left, bottom, X(30.0), bottom + 10.0, "SCALE", "1:1")
+    cell(doc, X(30.0), bottom, X(60.0), bottom + 10.0, "SIZE", size_label)
+    cell(doc, X(60.0), bottom, X(90.0), bottom + 10.0, "SHEET", "1 / 1", 3.6)
+    cell(doc, X(90.0), bottom, X(120.0), bottom + 10.0, "DATE")
+    cell(doc, X(120.0), bottom, right, bottom + 10.0, "REV", "0")
+
+    # Right column: drawn, checked, approved, project.
+    line(doc, X(120.0), bottom + 10.0, right, bottom + 10.0)
+    line(doc, X(120.0), bottom + 33.0, right, bottom + 33.0)
+    cell(doc, X(120.0), bottom + 10.0, right, bottom + 24.0, "DRAWN")
+    cell(doc, X(120.0), bottom + 24.0, right, bottom + 33.0, "CHECKED")
+    cell(doc, X(120.0), bottom + 33.0, right, bottom + 42.0, "APPROVED")
+    # PROJECT has no rule: the wizard appends the project name under the caption.
+    cell(doc, X(120.0), bottom + 42.0, right, top, "PROJECT", rule=False)
+
+    # Drawing number, title and company.
+    caption(doc, "DWG NO", X(2.6), bottom + 21.9)
+    text(doc, "AR-0001", X(2.6), bottom + 13.4, 6.0)
+    text(doc, "DRAWING TITLE", X(2.6), bottom + 29.3, 6.5)
+    text(doc, "COMPANY NAME", X(2.6), bottom + 50.0, 6.0)
+    text(doc, IEC_STANDARD, X(2.6), bottom + 44.4, 1.6)
+
+    revision_table(doc, left, top + 6.0, block_w - 26.0, 2, [0.14, 0.25, 0.61])
+
+
+def title_block_nec(doc, width, height, size_label):
+    """ASME Y14.1 title block in the lower right corner (nominal 180 x 56 mm)."""
+    left, bottom, right, top, block_w, sx = _block_frame(doc, width, height, "nec", 56.0)
+
+    def X(value):
+        return left + value * sx
+
+    rect(doc, left, bottom, right, top)
+    for y in (bottom + 10.0, bottom + 24.0, bottom + 40.0):
+        line(doc, left, y, right, y)
+    line(doc, X(120.0), bottom, X(120.0), top)
+
+    # Bottom row: scale, size, sheet, date, revision.
+    for value in (30.0, 60.0, 90.0, 120.0):
+        line(doc, X(value), bottom, X(value), bottom + 10.0)
+    cell(doc, left, bottom, X(30.0), bottom + 10.0, "SCALE", "1:1")
+    cell(doc, X(30.0), bottom, X(60.0), bottom + 10.0, "SIZE", size_label)
+    cell(doc, X(60.0), bottom, X(90.0), bottom + 10.0, "SHEET", "1 / 1", 3.6)
+    cell(doc, X(90.0), bottom, X(120.0), bottom + 10.0, "DATE")
+    cell(doc, X(120.0), bottom, right, bottom + 10.0, "REV", "0")
+
+    # Right column: drawn, checked, approved, project.
+    line(doc, X(120.0), bottom + 10.0, right, bottom + 10.0)
+    line(doc, X(120.0), bottom + 10.0, X(120.0), bottom + 24.0)
+    line(doc, X(150.0), bottom + 24.0, X(150.0), bottom + 40.0)
+    cell(doc, X(120.0), bottom + 10.0, right, bottom + 24.0, "DRAWN")
+    cell(doc, X(120.0), bottom + 24.0, X(150.0), bottom + 40.0, "CHECKED")
+    cell(doc, X(150.0), bottom + 24.0, right, bottom + 40.0, "APPROVED")
+    cell(doc, X(120.0), bottom + 40.0, right, top, "PROJECT", rule=False)
+
+    caption(doc, "DWG NO", X(2.6), bottom + 21.9)
+    text(doc, "AR-0001", X(2.6), bottom + 13.4, 6.0)
+    text(doc, "DRAWING TITLE", X(2.6), bottom + 30.0, 6.0)
+    text(doc, "COMPANY NAME", X(2.6), bottom + 46.6, 6.0)
+    text(doc, NEC_STANDARD, X(2.6), bottom + 41.8, 1.6)
+
+    revision_table(
+        doc, left, top + 6.0, block_w - 26.0, 3, [0.13, 0.24, 0.44, 0.19], True
+    )
 
 
 def wd_m_block(doc, setup, prompts, standard_note):
@@ -265,19 +401,26 @@ def wd_m_block(doc, setup, prompts, standard_note):
             height=1.0,
             x=0.0,
             y=0.0,
+            flags=1,
         )
         for tag, value in setup
     ]
     definitions.append(
         dxfio.DxfDocument.attdef(
-            tag="STANDARD", prompt="Template standard", default=standard_note, height=1.0
+            tag="STANDARD",
+            prompt="Template standard",
+            default=standard_note,
+            height=1.0,
+            flags=1,
         )
     )
     doc.define_block("WD_M", base=(0.0, 0.0, 0.0), entities=definitions)
     attributes = [(tag, value) for tag, value in setup]
     attributes.append(("STANDARD", standard_note))
     doc.entities.append(
-        dxfio.DxfDocument.insert("WD_M", 0.0, 0.0, attributes=attributes, layer="0")
+        dxfio.DxfDocument.insert(
+            "WD_M", 0.0, 0.0, attributes=attributes, layer="0", attribute_flags=1
+        )
     )
 
 
@@ -287,11 +430,11 @@ def build(stem, width, height, size_label, standard):
         doc.add_layer(name, color)
     frame(doc, width, height, standard)
     if standard == "iec":
-        title_block_iec(doc, width, height, size_label, "IEC 61082 / ISO 5457")
-        wd_m_block(doc, IEC_SETUP, IEC_PROMPTS, "IEC 61082 / ISO 5457")
+        title_block_iec(doc, width, height, size_label)
+        wd_m_block(doc, IEC_SETUP, IEC_PROMPTS, IEC_STANDARD)
     else:
-        title_block_nec(doc, width, height, size_label, "ASME Y14.1 / NEC")
-        wd_m_block(doc, NEC_SETUP, NEC_PROMPTS, "ASME Y14.1 / NEC")
+        title_block_nec(doc, width, height, size_label)
+        wd_m_block(doc, NEC_SETUP, NEC_PROMPTS, NEC_STANDARD)
     return doc
 
 

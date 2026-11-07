@@ -750,6 +750,75 @@ pub(super) fn device_pin_points(document: &codec::Document) -> Vec<(f64, f64, St
         .collect()
 }
 
+/// The drawing's electrical content as one JSON value.
+///
+/// The node graph, the automation read op and the reports all answer from the same
+/// [`wire_graph`], so a node, an MCP client and `ELECWIRELIST` never disagree about what a
+/// net is. The value is deliberately flat, stable JSON: nets carry pins and wire counts,
+/// pins carry their device coordinates, components carry the attributes a BOM needs.
+pub(crate) fn graph_electrical(document: &codec::Document) -> serde_json::Value {
+    let graph = wire_graph(document);
+    let netlist = graph.netlist(PIN_ASSOC);
+    let wire_length: f64 = graph
+        .wires
+        .iter()
+        .map(|wire| {
+            ((wire.to.x - wire.from.x).powi(2) + (wire.to.y - wire.from.y).powi(2)).sqrt()
+        })
+        .sum();
+    let pins: Vec<serde_json::Value> = graph
+        .anchors
+        .iter()
+        .map(|anchor| {
+            serde_json::json!({
+                "label": anchor.display_label(),
+                "device": anchor.label,
+                "pin": anchor.pin,
+                "x": anchor.at.x,
+                "y": anchor.at.y,
+            })
+        })
+        .collect();
+    let nets: Vec<serde_json::Value> = netlist
+        .nets
+        .iter()
+        .enumerate()
+        .map(|(index, net)| {
+            let labels: Vec<String> = net.anchors.iter().map(|id| graph.label_of(*id)).collect();
+            serde_json::json!({
+                "name": format!("N{}", index + 1),
+                "pins": labels,
+                "wire_count": net.wires.len(),
+            })
+        })
+        .collect();
+    let loose: Vec<String> = netlist
+        .loose_anchors
+        .iter()
+        .map(|id| graph.label_of(*id))
+        .collect();
+    let components: Vec<serde_json::Value> = OpenCADStudio::components_of(document)
+        .iter()
+        .map(|component| {
+            serde_json::json!({
+                "tag": component.tag,
+                "class": component.class,
+                "part": component.part,
+                "manufacturer": component.manufacturer,
+                "description": component.description,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "wire_segments": graph.wires.len(),
+        "wire_length": (wire_length * 1000.0).round() / 1000.0,
+        "nets": nets,
+        "pins": pins,
+        "loose_pins": loose,
+        "components": components,
+    })
+}
+
 /// The device tags a project marks with one option code (`option <tag> <code>` lines).
 fn project_option_tags(option: &str) -> BTreeSet<String> {
     let mut tags: BTreeSet<String> = BTreeSet::new();

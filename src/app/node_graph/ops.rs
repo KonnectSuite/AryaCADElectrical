@@ -17,7 +17,7 @@ use graph::{Eval, NodeId, Spec};
 use kernel::geom2d::{cross, Tolerance};
 use serde_json::{json, Value};
 
-pub const CATEGORIES: &[&str] = &["Select", "Query", "Create", "Modify", "Curve"];
+pub const CATEGORIES: &[&str] = &["Select", "Query", "Create", "Modify", "Curve", "Electrical"];
 
 const OBJECT: &[&str] = &["object"];
 const OBJECTS: &[&str] = &["objects"];
@@ -89,6 +89,34 @@ pub const LIBRARY: &[Spec] = &[
     host("Parameter At Point", "Curve", &[v("curve"), v("point")], &["t"]),
     host("Divide Curve", "Curve", &[v("curve"), n("count", 10.0)], &["points"]),
     host("Intersect", "Curve", &[v("a"), v("b")], &["points"]),
+    // ── Electrical ───────────────────────────────────────────────────────────
+    // The drawing's own connectivity: the same wire graph the ELEC* commands and
+    // the MCP `electrical` read op use, exposed as graph values so a sheet can be
+    // queried, reported and checked without running a command.
+    host(
+        "Electrical Netlist",
+        "Electrical",
+        &[n("tolerance", 0.2)],
+        &["nets", "pins", "loose"],
+    ),
+    host(
+        "Electrical Wire Length",
+        "Electrical",
+        &[n("tolerance", 0.2)],
+        &["length", "segments"],
+    ),
+    host(
+        "Electrical Components",
+        "Electrical",
+        &[],
+        &["components"],
+    ),
+    host(
+        "Net At Point",
+        "Electrical",
+        &[v("point"), n("tolerance", 0.2)],
+        &["net", "pins"],
+    ),
 ];
 
 /// Upper bound on generated point counts, as in the graph's own library.
@@ -341,8 +369,122 @@ impl AppHost<'_> {
                 ),
                 _ => Value::Array(Vec::new()),
             }),
+            // ── Electrical ───────────────────────────────────────────────────
+            // Every node below reads the same wire graph the ELEC* commands use,
+            // so a graph, a command and an MCP client agree about the drawing.
+            "Electrical Netlist" => {
+                let data = self.electrical();
+                let pins: Vec<Value> = data["pins"]
+                    .as_array()
+                    .map(|rows| {
+                        rows.iter()
+                            .filter_map(|pin| pin["label"].as_str())
+                            .map(|label| json!(label))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let loose: Vec<Value> = data["loose_pins"]
+                    .as_array()
+                    .map(|rows| {
+                        rows.iter()
+                            .filter_map(Value::as_str)
+                            .map(|label| json!(label))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let nets: Vec<Value> = data["nets"]
+                    .as_array()
+                    .map(|nets| {
+                        nets.iter()
+                            .map(|net| {
+                                let name = net["name"].as_str().unwrap_or("?");
+                                let pins: Vec<&str> = net["pins"]
+                                    .as_array()
+                                    .map(|pins| pins.iter().filter_map(Value::as_str).collect())
+                                    .unwrap_or_default();
+                                json!(format!("{name}: {}", pins.join(" ")))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                vec![Value::Array(nets), Value::Array(pins), Value::Array(loose)]
+            }
+            "Electrical Wire Length" => {
+                let data = self.electrical();
+                vec![
+                    data["wire_length"].clone(),
+                    data["wire_segments"].clone(),
+                ]
+            }
+            "Electrical Components" => {
+                let data = self.electrical();
+                let components: Vec<Value> = data["components"]
+                    .as_array()
+                    .map(|rows| {
+                        rows.iter()
+                            .map(|row| {
+                                let tag = row["tag"].as_str().unwrap_or("?");
+                                let class = row["class"].as_str().unwrap_or("");
+                                let part = row["part"].as_str().unwrap_or("");
+                                if part.is_empty() {
+                                    json!(format!("{tag} {class}"))
+                                } else {
+                                    json!(format!("{tag} {class} {part}"))
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                vec![Value::Array(components)]
+            }
+            "Net At Point" => {
+                let data = self.electrical();
+                let target = point(&a[0]);
+                let tolerance = num(&a[1]).unwrap_or(0.2).max(0.0);
+                let mut found: Option<Value> = None;
+                let mut found_pins: Vec<Value> = Vec::new();
+                if let Some(target) = target {
+                    if let Some(pins) = data["pins"].as_array() {
+                        for pin in pins {
+                            let (x, y) = (
+                                pin["x"].as_f64().unwrap_or(f64::NAN),
+                                pin["y"].as_f64().unwrap_or(f64::NAN),
+                            );
+                            if (x - target[0]).hypot(y - target[1]) <= tolerance {
+                                let label = pin["label"].as_str().unwrap_or("");
+                                if let Some(nets) = data["nets"].as_array() {
+                                    for net in nets {
+                                        let has = net["pins"]
+                                            .as_array()
+                                            .is_some_and(|list| {
+                                                list.iter().any(|pin| pin.as_str() == Some(label))
+                                            });
+                                        if has {
+                                            found = Some(net["name"].clone());
+                                            found_pins = list(&net["pins"]);
+                                            break;
+                                        }
+                                    }
+                                }
+                                if found.is_some() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                vec![
+                    found.unwrap_or(Value::Null),
+                    Value::Array(found_pins),
+                ]
+            }
             _ => Vec::new(),
         }
+    }
+
+    /// The active drawing's electrical content, from the shared wire graph.
+    fn electrical(&self) -> Value {
+        crate::app::commands::elec::graph_electrical(&self.scene().document)
     }
 
     fn scene(&self) -> &crate::scene::Scene {

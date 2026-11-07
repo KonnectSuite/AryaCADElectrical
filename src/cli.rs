@@ -56,6 +56,14 @@ pub struct Cli {
     #[arg(help = crate::t!("Open read-only: saving is disabled.").into_owned(), long_help = None)]
     pub read_only: bool,
 
+    /// Start with the automation bridge on, so MCP clients can attach at once.
+    #[arg(long)]
+    #[arg(
+        help = crate::t!("Start with the MCP automation bridge enabled.").into_owned(),
+        long_help = None
+    )]
+    pub automation: bool,
+
     /// Restrict the GPU backend (e.g. dx12, vulkan, gl, metal). Sets WGPU_BACKEND.
     #[arg(long, value_name = "BACKEND")]
     #[arg(help = crate::t!("GPU backend (dx12, vulkan, gl, metal). Sets WGPU_BACKEND.").into_owned(), long_help = None)]
@@ -162,6 +170,8 @@ pub struct GuiConfig {
     pub new: bool,
     /// Saving disabled for this session.
     pub read_only: bool,
+    /// Start with the automation/MCP bridge enabled.
+    pub automation: bool,
     /// Force storage-buffer-free wire and hatch pipelines.
     pub compat_renderer: bool,
     /// Command lines to run once the editor is up.

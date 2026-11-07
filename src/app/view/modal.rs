@@ -2634,7 +2634,7 @@ fn conversion_loss_dialog_window<'a>(
     });
     for loss in losses {
         lines = lines.push(
-            text(format!("Ã¢â‚¬Â¢ {loss}"))
+            text(format!("• {loss}"))
                 .size(12)
                 .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
         );

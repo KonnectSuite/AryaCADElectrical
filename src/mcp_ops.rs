@@ -1040,6 +1040,19 @@ pub static MEASURE: OpDef = OpDef {
     example: r#"{"op":"measure","handles":["2A"]}"#,
 };
 
+pub static ELECTRICAL: OpDef = OpDef {
+    name: "electrical",
+    doc: "Read the active electrical sheet: nets with their device pins and wire counts, pins with coordinates, total wire length and segment count, loose (unconnected) pins, and BOM components (tag, class, part, manufacturer, description). Reads the same wire graph the ELEC* commands and node graph use.",
+    batchable: false,
+    params: &[opt(
+        "detail",
+        Ty::Raw(r#"{"type":"string","enum":["summary","full"],"default":"full"}"#),
+        "summary returns counts only; full returns the lists.",
+    )],
+    rules: &[],
+    example: r#"{"op":"electrical","detail":"summary"}"#,
+};
+
 pub static NODE_GRAPH: OpDef = OpDef {
     name: "node_graph",
     doc: "Drive the node graph of the active drawing: list node types (action library), read nodes with their ports, values and links (state), and edit it — add, remove, connect, disconnect, set an input, fold a section or coordinate group (toggle), show/hide the panel, clear, run, save/load an .ocg file. Every action answers with the graph state; edits are one undo step each.",

@@ -121,6 +121,25 @@ One command per line, a blank line ends an interactive command, point input is `
 the drawing is only written when the batch ends with `SAVE`/`QSAVE`. Every example in this
 document works that way; `reports/HANDOFF.md` lists the batches used for verification.
 
+### MCP automation
+
+The editor can be driven over MCP by another agent or a script. Start it with the bridge
+already on (the same thing the MCP chip in the status bar toggles), then point an MCP client
+at the stdio server:
+
+```powershell
+target\release\OpenCADStudio.exe --automation samples\demo-line\sheet1.dxf
+target\release\OpenCADStudio.exe --mcp      # a second process speaks MCP on stdin/stdout
+```
+
+The electrical sheet is readable through the `electrical` operation (nets, pins, loose pins,
+wire length and components — the same wire graph the `ELEC…` commands use, with
+`detail:"summary"` for counts only). An ECAD skill/guide is served as `cad://guides/ecad`
+and by the `guide` operation; the node graph exposes an **Electrical** category
+(`Electrical Netlist`, `Electrical Wire Length`, `Electrical Components`, `Net At Point`)
+for visual wiring and batch evaluation. `tests\ecad\verify_mcp_ecad.py` is the end-to-end
+check for this surface (it expects an editor already running with `--automation`).
+
 ## 10. Honest limits
 
 Panels need part-level footprint overrides and a separate door elevation; a drawn cable is

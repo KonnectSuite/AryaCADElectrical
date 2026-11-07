@@ -176,8 +176,12 @@ class DxfDocument:
 
     @staticmethod
     def insert(block_name, x, y, attributes=None, layer="0",
-               scale=(1.0, 1.0, 1.0), rotation=0.0):
-        """An INSERT, optionally with ATTRIB children and the SEQEND that closes them."""
+               scale=(1.0, 1.0, 1.0), rotation=0.0, attribute_flags=0):
+        """An INSERT, optionally with ATTRIB children and the SEQEND that closes them.
+
+        ``attribute_flags`` is the ATTRIB flag byte (1 = invisible, 4 = constant); the
+        template blocks use 1 so the numbering contract never prints.
+        """
         attributes = list(attributes or [])
         token = [
             (0, "INSERT"), (8, layer),
@@ -193,7 +197,8 @@ class DxfDocument:
                 [
                     (0, "ATTRIB"), (8, layer),
                     (10, _num(x)), (20, _num(y)), (30, _num(0)),
-                    (40, _num(1.0)), (1, value), (2, tag), (70, "0"),
+                    (40, _num(1.0)), (1, value), (2, tag),
+                    (70, str(attribute_flags)),
                 ]
             )
         if attributes:

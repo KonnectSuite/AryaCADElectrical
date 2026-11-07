@@ -26,10 +26,25 @@ modified.
 
 | layer | contents |
 |---|---|
-| `BORDER` | paper edge and inner frame, with zone tick marks |
+| `BORDER` | paper edge and inner frame, centring marks, with zone tick marks |
 | `ZONES` | zone numbers (1..n) and letters (A..) around the frame |
 | `TITLE_BLOCK` | title block lines and its field texts |
 | `WIRES`, `JUNCTIONS`, `WIRENO`, `XREF`, `ELEC-SYMBOLS` | the electrical layers with house colours |
+
+The sheets follow their drawing standards rather than being a plain box: ISO 5457/IEC 61082
+for IEC (first-angle projection symbol) and ASME Y14.1 for NEC (third-angle symbol), a
+numbered zone grid between the trim edge and the inner frame, centring marks at the edge
+midpoints, and a revision table (`REV` / `DATE` / `DESCRIPTION` + `APPR`) above the title
+block. The title block itself carries company, drawing title, project, drawing number, scale,
+size, sheet, date, drawn/checked/approved and revision fields, with the `<n> / <total>` sheet
+counter the wizard fills in. The block is nominally 180 mm wide and scales down on narrow
+sheets (A4 portrait, ANSI A portrait) so nothing spills outside the frame.
+
+The `WD_M` block is present but its attributes are invisible (`flags=1`), so the numbering
+contract no longer prints over the drawing at the origin — `ELECSETUP` still reads it.
+
+Screenshots of the finished sheets rendered by the app:
+`docs\screenshots\template-iec-a3.png` and `docs\screenshots\template-nec-b.png`.
 
 A `WD_M` insert carries the numbering contract that `ELECSETUP` prints and `ELECNUMBER` /
 `ELECPROJNUM` obey:

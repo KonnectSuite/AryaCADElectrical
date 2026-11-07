@@ -47,6 +47,7 @@ const PART_COLUMNS: [&str; 9] = [
 
 /// Header synonyms for the part-number column.
 const PART_ALIASES: &[&str] = &[
+    "pn",
     "part number",
     "part",
     "partnumber",
@@ -59,7 +60,7 @@ const MANUFACTURER_ALIASES: &[&str] = &["manufacturer", "mfg", "mfr", "make", "b
 /// Header synonyms for the description column.
 const DESCRIPTION_ALIASES: &[&str] = &["description", "desc", "details"];
 /// Header synonyms for the class column.
-const CLASS_ALIASES: &[&str] = &["class", "category", "part class", "type"];
+const CLASS_ALIASES: &[&str] = &["class", "category", "part class", "type", "cat"];
 /// Header synonyms for the symbol column.
 const SYMBOL_ALIASES: &[&str] = &["symbol", "symbol name", "block", "drawing symbol"];
 /// Header synonyms for the rating column.

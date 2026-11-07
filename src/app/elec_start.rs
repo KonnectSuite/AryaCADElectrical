@@ -354,10 +354,12 @@ fn patch_title_block(
                 edits.push((text.common.handle, format!("{sheet} / {total}")));
             }
             "PROJECT" if !project.is_empty() => {
-                extras.push((project.to_string(), point.x + 24.0, point.y - 1.2, 3.0));
+                // The caption sits at the top of its cell; the value goes under it with a
+                // clear gap so the two never touch at any sheet size.
+                extras.push((project.to_string(), point.x + 24.0, point.y - 3.6, 3.0));
             }
             "DRAWN" if !drawn_by.is_empty() => {
-                extras.push((drawn_by.to_string(), point.x + 20.0, point.y - 1.0, 2.0));
+                extras.push((drawn_by.to_string(), point.x + 20.0, point.y - 3.0, 2.0));
             }
             _ => {}
         }

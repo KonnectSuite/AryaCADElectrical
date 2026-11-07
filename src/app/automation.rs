@@ -1092,6 +1092,36 @@ impl OpenCADStudio {
                     "layers": layers,
                 })
             }
+            "electrical" => {
+                // The same wire graph the ELEC* commands build: nets, pins, wire
+                // length and the BOM rows of the active sheet. `detail: summary`
+                // keeps counts only, which is what a status line or a quick
+                // check wants; the default returns the full lists.
+                let document = &self.tabs[self.active_tab].scene.document;
+                let mut electrical = crate::app::commands::elec::graph_electrical(document);
+                if req["detail"].as_str() == Some("summary") {
+                    let pin_count: usize = electrical["nets"]
+                        .as_array()
+                        .map(|nets| {
+                            nets.iter()
+                                .map(|net| {
+                                    net["pins"].as_array().map_or(0, |pins| pins.len())
+                                })
+                                .sum()
+                        })
+                        .unwrap_or(0);
+                    if let Some(object) = electrical.as_object_mut() {
+                        object.remove("pins");
+                        object.remove("loose_pins");
+                        object.remove("components");
+                        object.insert("pin_count".into(), json!(pin_count));
+                    }
+                }
+                if let Some(object) = electrical.as_object_mut() {
+                    object.insert("ok".into(), json!(true));
+                }
+                electrical
+            }
             "header" => {
                 let h = &self.tabs[self.active_tab].scene.document.header;
                 json!({
