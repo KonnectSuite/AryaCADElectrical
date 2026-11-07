@@ -149,6 +149,11 @@ struct State {
     selected: Option<usize>,
     /// Class chip the list is narrowed to; `None` is "All".
     class_filter: Option<String>,
+    /// How far the chip strip is scrolled. A library with more classes than fit
+    /// one strip (the starter set has forty-two) would otherwise hide the tail
+    /// behind the right edge with no way to reach it: the wheel over the chips
+    /// scrolls them instead of the list.
+    chip_scroll: f32,
 }
 
 /// The palette body: a search strip over a filtered, scrolling list of symbols.
@@ -268,6 +273,101 @@ impl Palette {
         classes
     }
 
+    /// Chip labels and their offsets from the strip start, measured once so the
+    /// painted chips and the click targets cannot disagree.
+    fn chip_offsets(&self, renderer: &Renderer) -> Vec<(Option<String>, f32, f32)> {
+        let labels: Vec<Option<String>> = std::iter::once(None)
+            .chain(self.classes().into_iter().map(Some))
+            .collect();
+        let mut offsets = Vec::with_capacity(labels.len());
+        let mut x = 0.0;
+        for label in labels {
+            let text = label.as_deref().unwrap_or("All");
+            let width = (text_width(renderer, text, 11.0) + 18.0).max(46.0);
+            offsets.push((label, x, width));
+            x += width + 6.0;
+        }
+        offsets
+    }
+
+    /// Paints the class chip strip and the chevrons that say it scrolls.
+    ///
+    /// Kept out of `draw` so the strip's own layer and loop do not deepen the
+    /// widget's already large draw body.
+    fn draw_chips(&self, renderer: &mut Renderer, theme: &Theme, bounds: Rectangle, state: &State) {
+        let chips = chips_rect(bounds);
+        if chips.height <= 0.0 {
+            return;
+        }
+        let palette = theme.palette();
+        let text_color = palette.background.base.text;
+        let offsets = self.chip_offsets(renderer);
+        let total = offsets
+            .last()
+            .map(|(_, offset, width)| offset + width)
+            .unwrap_or(0.0);
+        // A chip scrolled half out of the strip must not paint over the search
+        // field above it or the symbol rows below it.
+        renderer.with_layer(chips, |renderer| {
+            for (label, offset, width) in &offsets {
+                let rect = Rectangle {
+                    x: chips.x - state.chip_scroll + offset,
+                    y: chips.y + 3.0,
+                    width: *width,
+                    height: CHIP_H - 6.0,
+                };
+                let active = state.class_filter.as_deref() == label.as_deref()
+                    || (label.is_none() && state.class_filter.is_none());
+                let background = if active {
+                    palette.primary.base.color
+                } else {
+                    palette.background.weak.color
+                };
+                renderer.fill_quad(surface(rect, 11.0), background);
+                draw_text(
+                    renderer,
+                    label.as_deref().unwrap_or("All"),
+                    Point::new(rect.x + rect.width * 0.5, rect.center_y()),
+                    11.0,
+                    if active {
+                        palette.primary.base.text
+                    } else {
+                        text_color.scale_alpha(0.75)
+                    },
+                    advanced_text::Alignment::Center,
+                    Size::new(rect.width, rect.height),
+                    rect,
+                );
+            }
+            // Chevrons say the strip scrolls: without them the last visible chip
+            // reads as the last class in the library.
+            if total - state.chip_scroll > chips.width + 0.5 {
+                draw_text(
+                    renderer,
+                    ">",
+                    Point::new(chips.x + chips.width - 2.0, chips.center_y()),
+                    12.0,
+                    text_color.scale_alpha(0.7),
+                    advanced_text::Alignment::Right,
+                    Size::new(24.0, CHIP_H),
+                    chips,
+                );
+            }
+            if state.chip_scroll > 0.5 {
+                draw_text(
+                    renderer,
+                    "<",
+                    Point::new(chips.x + 2.0, chips.center_y()),
+                    12.0,
+                    text_color.scale_alpha(0.7),
+                    advanced_text::Alignment::Left,
+                    Size::new(24.0, CHIP_H),
+                    chips,
+                );
+            }
+        });
+    }
+
     /// Indices of the rows the query and the class chip both keep. Matching the
     /// class too means `relay` finds the relays without knowing a block name.
     fn matches(&self, query: &str, class_filter: Option<&str>) -> Vec<usize> {
@@ -383,31 +483,48 @@ impl Widget<Message, Theme, Renderer> for Palette {
         let capacity = capacity(bounds.height);
 
         // The class chips are painted by hand, so their clicks are taken here
-        // before any symbol row sees the event.
+        // before any symbol row sees the event. The wheel scrolls the strip
+        // sideways when the library has more classes than fit (the starter set
+        // has forty-two), instead of leaving the tail unreachable.
+        if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
+            let over_chips = cursor
+                .position()
+                .is_some_and(|position| chips_rect(bounds).contains(position));
+            if over_chips {
+                let chips = chips_rect(bounds);
+                let offsets = self.chip_offsets(renderer);
+                let total = offsets
+                    .last()
+                    .map(|(_, offset, width)| offset + width)
+                    .unwrap_or(0.0);
+                let step = match *delta {
+                    mouse::ScrollDelta::Lines { y, .. } => -y * 60.0,
+                    mouse::ScrollDelta::Pixels { y, .. } => -y,
+                };
+                let max_scroll = (total - chips.width).max(0.0);
+                let next = (state.chip_scroll + step).clamp(0.0, max_scroll);
+                if (next - state.chip_scroll).abs() > 0.5 {
+                    state.chip_scroll = next;
+                    shell.request_redraw();
+                }
+                shell.capture_event();
+                return;
+            }
+        }
         if let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
             if let Some(position) = cursor.position() {
                 let chips = chips_rect(bounds);
                 if chips.contains(position) {
-                    let labels: Vec<Option<String>> = std::iter::once(None)
-                        .chain(self.classes().into_iter().map(Some))
-                        .collect();
-                    let mut x = chips.x;
                     let mut hit: Option<Option<String>> = None;
-                    for label in labels {
-                        let text = label.as_deref().unwrap_or("All");
-                        let width = (text_width(renderer, text, 11.0) + 18.0).max(46.0);
+                    for (label, offset, width) in self.chip_offsets(renderer) {
                         let rect = Rectangle {
-                            x,
+                            x: chips.x - state.chip_scroll + offset,
                             y: chips.y + 3.0,
                             width,
                             height: CHIP_H - 6.0,
                         };
                         if rect.contains(position) {
                             hit = Some(label);
-                            break;
-                        }
-                        x += width + 6.0;
-                        if x > chips.x + chips.width {
                             break;
                         }
                     }
@@ -722,49 +839,7 @@ impl Widget<Message, Theme, Renderer> for Palette {
         }
 
         // ── Class chips ──────────────────────────────────────────────────
-        let chips = chips_rect(bounds);
-        if chips.height > 0.0 {
-            let labels: Vec<Option<String>> = std::iter::once(None)
-                .chain(self.classes().into_iter().map(Some))
-                .collect();
-            let mut x = chips.x;
-            for label in &labels {
-                let text = label.as_deref().unwrap_or("All");
-                let width = (text_width(renderer, text, 11.0) + 18.0).max(46.0);
-                if x + width > chips.x + chips.width {
-                    break;
-                }
-                let rect = Rectangle {
-                    x,
-                    y: chips.y + 3.0,
-                    width,
-                    height: CHIP_H - 6.0,
-                };
-                let active = state.class_filter.as_deref() == label.as_deref()
-                    || (label.is_none() && state.class_filter.is_none());
-                let background = if active {
-                    palette.primary.base.color
-                } else {
-                    palette.background.weak.color
-                };
-                renderer.fill_quad(surface(rect, 11.0), background);
-                draw_text(
-                    renderer,
-                    text,
-                    Point::new(rect.x + rect.width * 0.5, rect.center_y()),
-                    11.0,
-                    if active {
-                        palette.primary.base.text
-                    } else {
-                        text_color.scale_alpha(0.75)
-                    },
-                    advanced_text::Alignment::Center,
-                    Size::new(rect.width, rect.height),
-                    rect,
-                );
-                x += width + 6.0;
-            }
-        }
+        self.draw_chips(renderer, theme, bounds, state);
 
         // ── List ─────────────────────────────────────────────────────────
         let list = list_rect(bounds);

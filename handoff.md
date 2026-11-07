@@ -446,8 +446,14 @@ stores `ELEC_*`.
 
 **Palette class chips.** `src/ui/window/elec_library.rs` grew a chip strip under the search
 field: `All` plus one chip per class, hit-tested by measured text width, with the row area
-shifted by `CHIP_H = 26.0` and `capacity` recomputed. Keyboard: Home/End and Page Up/Page
-Down move by a window. Searching a class name still works and composes with the chip.
+shifted by `CHIP_H = 26.0` and `capacity` recomputed. The starter library has forty-two
+classes, which is more than fits one strip, so the wheel over the chips scrolls the strip
+sideways (`State::chip_scroll`, clamped to the measured total) and `<` / `>` chevrons mark
+the hidden side; the strip is painted inside its own layer so a scrolled chip cannot spill
+onto the search field or the list. Keyboard: Home/End and Page Up/Page Down move by a
+window. Searching a class name still works and composes with the chip. After the scrolling
+change: `cargo build --release -j 4` 4 m 23 s, smoke 108/108, `ecad-palette.png`
+re-captured with the `<` / `>` chevrons visible.
 
 **Screenshots.** `scripts/capture_ecad_screenshots.py` launches the editor per picture with
 `--http PORT`, runs the commands, and calls `capture` over the GUI REST bridge (bearer token
@@ -469,7 +475,6 @@ against a GUI with more than one tab.
 | `py -3.13 tools\make_library.py --check` | in sync, 78 symbols |
 | `py -3.13 tools\parts_check.py` | passes |
 
-**Still open**: the SkyCAD uniqueness-scope field (global/parent-sheet/none) has no UI; the
-palette chip strip does not scroll horizontally when a library has very many classes; and
+**Still open**: the SkyCAD uniqueness-scope field (global/parent-sheet/none) has no UI; and
 `ELECLIST` still prints the block name as the class for library-less symbols, which the
 reports render as-is.
