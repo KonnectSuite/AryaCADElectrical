@@ -77,6 +77,17 @@ positions, so `ELECWIRELIST` names the device pin at each end of a conductor
 | bill of material | `ELECBOM bom.csv` |
 | full workbook (BOM, wire list, terminals, cables) | `ELECREPORT report.xlsx` |
 
+The ribbon buttons for **Parts Library**, **Component List**, **Terminal Strips**,
+**Bill of Material** and **Wire List** open a searchable report dialog — the same tables
+shown here. Every row can be filtered by class (or by strip) and by free text, and the same
+lines still print to the command line for scripts.
+
+| Parts library | Component list |
+|---|---|
+| ![Parts library dialog](screenshots/ui-parts-library.png) | ![Component list dialog](screenshots/ui-component-list.png) |
+
+![Bill of material dialog](screenshots/ui-bill-of-material.png)
+
 ## 4. PLC and I/O
 
 `ELECPLC -P1 8 I0.0` builds a PLC module with `ADDRnn` attributes; `ELECPLCNEXT` continues

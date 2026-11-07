@@ -22,6 +22,7 @@ pub mod block_properties_table;
 pub mod browser;
 pub mod count_palette;
 pub mod elec_library;
+pub(crate) mod elec_report;
 pub mod drafting_settings;
 pub mod drawing_units;
 pub mod field_dialog;

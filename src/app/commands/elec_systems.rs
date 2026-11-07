@@ -276,6 +276,19 @@ impl OpenCADStudio {
         let mut missing_blocks: Vec<String> = Vec::new();
 
         self.push_undo_snapshot(i, "ELECSYSTEM");
+        // System layouts are authored in library symbol units, so one multiplier maps the
+        // whole composition onto the sheet. The library's scale column carries that
+        // (1 unit = 25.4 mm for the inch-scale symbols this project ships).
+        let unit = system
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                SystemOp::Device { symbol, .. } => super::elec::library_symbol(symbol)
+                    .map(|(_, _, scale, _)| scale),
+                SystemOp::Wire { .. } => None,
+            })
+            .filter(|scale| *scale > 0.0)
+            .unwrap_or(1.0);
         for op in &system.ops {
             match op {
                 SystemOp::Device { dx, dy, symbol } => {
@@ -293,8 +306,8 @@ impl OpenCADStudio {
                         .collect();
                     let tag = ::elec::next_tag(&refs, &class);
                     let at = codec::types::Vector3::new(
-                        position.0 + dx,
-                        position.1 + dy,
+                        position.0 + dx * unit,
+                        position.1 + dy * unit,
                         0.0,
                     );
                     match self.build_system_insert(i, symbol, at, &tag) {
@@ -311,8 +324,16 @@ impl OpenCADStudio {
                 }
                 SystemOp::Wire { x1, y1, x2, y2 } => {
                     let mut line = codec::entities::Line::from_points(
-                        codec::types::Vector3::new(position.0 + x1, position.1 + y1, 0.0),
-                        codec::types::Vector3::new(position.0 + x2, position.1 + y2, 0.0),
+                        codec::types::Vector3::new(
+                            position.0 + x1 * unit,
+                            position.1 + y1 * unit,
+                            0.0,
+                        ),
+                        codec::types::Vector3::new(
+                            position.0 + x2 * unit,
+                            position.1 + y2 * unit,
+                            0.0,
+                        ),
                     );
                     line.common.layer = "WIRES".to_string();
                     self.tabs[i].scene.add_entity(codec::EntityType::Line(line));
@@ -369,19 +390,31 @@ impl OpenCADStudio {
             return None;
         }
         let definitions = self.elec_block_definitions(i, symbol);
-        let mut insert = codec::entities::Insert::new(symbol, at);
+        // The library scale maps a symbol unit onto the sheet (25.4 for mm drawings),
+        // and the label height measured with the library is in those same symbol units.
+        let (library_scale, label_height) = super::elec::library_symbol(symbol)
+            .map(|(_, _, scale, height)| (scale, height))
+            .unwrap_or((1.0, 0.125));
+        let scale = if library_scale > 0.0 { library_scale } else { 1.0 };
+        let height = if label_height > 0.0 {
+            label_height * scale
+        } else {
+            0.125 * scale
+        };
+        let mut insert = codec::entities::Insert::new(symbol, at).with_uniform_scale(scale);
         if definitions.is_empty() {
             // A library symbol may be plain geometry: use the attribute set the library
-            // recorded for it, laid out below the symbol as ELECINSERT does.
+            // recorded for it, laid out below the symbol as ELECPLACE does.
             let attributes = super::elec::library_symbol(symbol)
                 .map(|(_, attributes, _, _)| attributes)
                 .unwrap_or_default();
             for (row, name) in attributes.iter().enumerate() {
                 let mut attribute =
                     codec::entities::AttributeEntity::new(name.clone(), String::new());
+                attribute.height = height;
                 attribute.insertion_point = codec::types::Vector3::new(
-                    at.x - 0.5,
-                    at.y - 0.25 - row as f64 * 0.2,
+                    at.x,
+                    at.y - height - row as f64 * height * 1.25,
                     0.0,
                 );
                 attribute.alignment_point = attribute.insertion_point;
@@ -391,10 +424,14 @@ impl OpenCADStudio {
             for definition in definitions {
                 let mut attribute =
                     codec::entities::AttributeEntity::from_definition(&definition, None);
-                attribute.insertion_point.x += at.x;
-                attribute.insertion_point.y += at.y;
-                attribute.alignment_point.x += at.x;
-                attribute.alignment_point.y += at.y;
+                // Definition geometry is in symbol units, like the block it lives in.
+                attribute.height = definition.height * scale;
+                attribute.insertion_point.x =
+                    at.x + definition.insertion_point.x * scale;
+                attribute.insertion_point.y =
+                    at.y + definition.insertion_point.y * scale;
+                attribute.alignment_point.x = attribute.insertion_point.x;
+                attribute.alignment_point.y = attribute.insertion_point.y;
                 insert.attributes.push(attribute);
             }
         }

@@ -1,10 +1,11 @@
 # Direct-on-line starter: contactor, thermal overload, motor, start button.
-# One device/wire per line; coordinates are drawing units relative to the insertion point.
+# One device/wire per line; coordinates are library symbol units (a symbol is ~1 unit
+# wide, the loader's scale column maps them onto the sheet, 25.4 for mm drawings).
 #   device <dx> <dy> <symbol from the loaded library>
 #   wire <x1> <y1> <x2> <y2>
 device 0 0 CONTACT_NO
-device 20 0 THERMAL_OVERLOAD
-device 40 0 MOTOR
-device 0 -20 PUSHBUTTON_NO
-wire 0.5 0 19.5 0
-wire 20.5 0 39.5 0
+device 2.5 0 THERMAL_OVERLOAD
+device 5 0 MOTOR
+device 0 -2 PUSHBUTTON_NO
+wire 0.5 0 2 0
+wire 3 0 4.5 0

@@ -1,11 +1,12 @@
 # Reversing starter: forward and reverse contactors, overload, motor, two buttons.
 # Inserting it retags every device into the drawing's own sequences.
+# Coordinates are library symbol units (see dol_starter.tsv).
 device 0 0 CONTACT_NO
-device 20 0 CONTACT_NO
-device 40 0 THERMAL_OVERLOAD
-device 60 0 MOTOR
-device 0 -20 PUSHBUTTON_NO
-device 20 -20 PUSHBUTTON_NO
-wire 0.5 0 19.5 0
-wire 20.5 0 39.5 0
-wire 40.5 0 59.5 0
+device 2.5 0 CONTACT_NO
+device 5 0 THERMAL_OVERLOAD
+device 7.5 0 MOTOR
+device 0 -2 PUSHBUTTON_NO
+device 2.5 -2 PUSHBUTTON_NO
+wire 0.5 0 2 0
+wire 3 0 4.5 0
+wire 5.5 0 7 0

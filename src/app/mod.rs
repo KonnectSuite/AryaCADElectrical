@@ -1511,6 +1511,11 @@ pub(super) struct OpenCADStudio {
     pending_startup_modals: std::collections::VecDeque<ModalKind>,
     /// The drafting-or-electrical chooser and its electrical drawing-set wizard.
     start_hub: elec_start::StartHub,
+    /// Title, summary, table and live filters of the read-only electrical
+    /// report dialog. Commands such as `ELECLIST` and `ELECTERMINALS` also print
+    /// to the command line; the dialog is the visible result the Electrical
+    /// ribbon buttons open, and it is the same table shown on screen.
+    elec_report: crate::ui::window::elec_report::ElecReport,
     /// What is drawing the scene, once the first frame has told us. Drives
     /// the graphics warning (popup, status-bar pill, command line).
     gpu_status: crate::scene::pipeline::GpuStatus,
@@ -3048,6 +3053,10 @@ pub enum ModalKind {
     AecDropWarning,
     /// The electrical symbol library, browsed and inserted from.
     ElectricalLibrary,
+    /// Read-only result of an electrical information command (component list,
+    /// terminal strips, wire list, BOM, parts catalogue …). The Electrical
+    /// ribbon buttons open this so pressing them has a visible result.
+    ElecReport,
     /// A converter would drop part of the drawing on save.
     ConversionLoss,
     #[cfg(not(target_arch = "wasm32"))]
@@ -3488,6 +3497,10 @@ pub enum Message {
     EcadBrowseFolder,
     /// Start hub: the folder browser returned a directory (None = cancelled).
     EcadFolderPicked(Option<std::path::PathBuf>),
+    /// Electrical report dialog: the search query changed.
+    ElecReportSearch(String),
+    /// Electrical report dialog: a class chip was picked (None = all classes).
+    ElecReportClass(Option<String>),
     /// Set the default type/version used when first saving a new drawing.
     DefaultSaveFormatChanged(String),
     /// Select one of Iced's built-in themes or the editable Custom theme.
@@ -6126,6 +6139,7 @@ impl OpenCADStudio {
             hyperlink_options: Default::default(),
             pending_startup_modals: std::collections::VecDeque::new(),
             start_hub: Default::default(),
+            elec_report: Default::default(),
             gpu_status: crate::scene::pipeline::GpuStatus::Unknown,
             gpu_status_generation: 0,
             gpu_warning_silenced: String::new(),

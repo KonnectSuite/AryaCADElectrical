@@ -11585,6 +11585,14 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
+            Message::ElecReportSearch(query) => {
+                self.elec_report.search = query;
+                Task::none()
+            }
+            Message::ElecReportClass(class) => {
+                self.elec_report.class_filter = class;
+                Task::none()
+            }
 
             Message::CloseModal => {
                 if self.active_modal == Some(super::ModalKind::BlockLookup) {

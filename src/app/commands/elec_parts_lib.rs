@@ -458,8 +458,10 @@ impl OpenCADStudio {
         let (file, folder) = match resolve_parts_path(&argument) {
             Ok(resolved) => resolved,
             Err(message) => {
-                self.command_line
-                    .push_output(&format!("ELECPARTS: {message}."));
+                self.show_elec_report(
+                    "Parts Library",
+                    &[format!("ELECPARTS: {message}.")],
+                );
                 return Task::none();
             }
         };
@@ -474,7 +476,7 @@ impl OpenCADStudio {
                 } else {
                     format!("ELECPARTS: cannot read {}: {error}", file.display())
                 };
-                self.command_line.push_output(&message);
+                self.show_elec_report("Parts Library", &[message]);
                 return Task::none();
             }
         };
@@ -486,7 +488,7 @@ impl OpenCADStudio {
                     file.display(),
                     PART_COLUMNS.join(", ")
                 );
-                self.command_line.push_output(&message);
+                self.show_elec_report("Parts Library", &[message]);
                 return Task::none();
             }
         };
@@ -523,30 +525,96 @@ impl OpenCADStudio {
             .filter(|row| !row.datasheet.trim().is_empty())
             .count();
         let warnings = parsed.warnings;
+
+        // The same text goes to the command line and to the dialog: the ribbon
+        // button opens the dialog, a typed ELECPARTS keeps reading like a log.
+        let mut lines = Vec::new();
+        lines.push(format!(
+            "ELECPARTS: loaded {count} part(s) from {}",
+            file.display()
+        ));
+        lines.push(format!(
+            "  {} class(es): {}",
+            class_counts.len(),
+            classes.join(", ")
+        ));
+        lines.push(format!(
+            "  {with_symbol} name a symbol, {without_symbol} do not; {with_terminals} carry a terminal count, {with_footprint} a footprint, {with_datasheet} a datasheet reference."
+        ));
+        for warning in warnings.iter().take(5) {
+            lines.push(format!("  warning: {warning}"));
+        }
+        if warnings.len() > 5 {
+            lines.push(format!("  ... {} more warning(s)", warnings.len() - 5));
+        }
+        lines.push(format!(
+            "{:<22} {:<18} {:<20} {:<46} {}",
+            "PART NUMBER", "MANUFACTURER", "CLASS", "DESCRIPTION", "RATING"
+        ));
+        for row in parsed.catalogue.rows.iter().take(200) {
+            lines.push(format!(
+                "{:<22} {:<18} {:<20} {:<46} {}",
+                clip(&row.part_number, 22),
+                clip(&row.manufacturer, 18),
+                clip(&row.class, 20),
+                clip(&row.description, 46),
+                clip(&row.rating, 22),
+            ));
+        }
+        if parsed.catalogue.rows.len() > 200 {
+            lines.push(format!(
+                "  ... {} more part(s)",
+                parsed.catalogue.rows.len() - 200
+            ));
+        }
+
+        let title = format!("Parts Library ({count} part(s))");
+        let summary = vec![
+            format!("{count} part(s) loaded from {}", file.display()),
+            format!(
+                "{} class(es): {}",
+                class_counts.len(),
+                classes.join(", ")
+            ),
+            format!(
+                "{with_symbol} name a symbol · {with_terminals} give a terminal count · {with_footprint} carry a footprint · {with_datasheet} carry a datasheet"
+            ),
+        ];
+        // Build the table before handing the catalogue to the shared cache.
+        let table_rows: Vec<Vec<String>> = parsed
+            .catalogue
+            .rows
+            .iter()
+            .map(|row| {
+                vec![
+                    row.part_number.clone(),
+                    row.manufacturer.clone(),
+                    row.class.clone(),
+                    row.description.clone(),
+                    row.rating.clone(),
+                ]
+            })
+            .collect();
+
         if let Ok(mut guard) = parts_catalogue().write() {
             *guard = Some(parsed.catalogue);
         }
         remember_parts_folder(&folder);
 
-        self.command_line.push_output(&format!(
-            "ELECPARTS: loaded {count} part(s) from {}",
-            file.display()
-        ));
-        self.command_line
-            .push_output(&format!("  {} class(es): {}", class_counts.len(), classes.join(", ")));
-        self.command_line.push_output(&format!(
-            "  {with_symbol} name a symbol, {without_symbol} do not; {with_terminals} carry a terminal count, {with_footprint} a footprint, {with_datasheet} a datasheet reference."
-        ));
-        for warning in warnings.iter().take(5) {
-            self.command_line
-                .push_output(&format!("  warning: {warning}"));
-        }
-        if warnings.len() > 5 {
-            self.command_line.push_output(&format!(
-                "  ... {} more warning(s)",
-                warnings.len() - 5
-            ));
-        }
+        self.set_elec_report_table(
+            title,
+            &lines,
+            summary,
+            vec![
+                "Part number".to_string(),
+                "Manufacturer".to_string(),
+                "Class".to_string(),
+                "Description".to_string(),
+                "Rating".to_string(),
+            ],
+            table_rows,
+            Some(2),
+        );
         Task::none()
     }
 
@@ -583,51 +651,53 @@ impl OpenCADStudio {
     /// `ELECPARTLIST [filter]` prints the catalogue as a table.
     fn elec_parts_list(&mut self, filter: &str) -> Task<Message> {
         if !self.ensure_parts_catalogue() {
-            self.command_line.push_output(
-                "ELECPARTLIST: no parts catalogue loaded — ELECPARTS <folder> first.",
+            self.show_elec_report(
+                "Parts Catalogue",
+                &["ELECPARTLIST: no parts catalogue loaded — ELECPARTS <folder> first.".to_string()],
             );
             return Task::none();
         }
         let needle = filter.trim().to_ascii_lowercase();
-        let guard = match parts_catalogue().read() {
-            Ok(guard) => guard,
-            Err(_) => return Task::none(),
+        let parsed = {
+            let guard = match parts_catalogue().read() {
+                Ok(guard) => guard,
+                Err(_) => return Task::none(),
+            };
+            let Some(catalogue) = guard.as_ref() else {
+                return Task::none();
+            };
+            let rows: Vec<PartRow> = catalogue
+                .rows
+                .iter()
+                .filter(|row| needle.is_empty() || row.matches(&needle))
+                .cloned()
+                .collect();
+            (catalogue.len(), catalogue.file.display().to_string(), rows)
         };
-        let Some(catalogue) = guard.as_ref() else {
-            return Task::none();
-        };
-        let rows: Vec<&PartRow> = catalogue
-            .rows
-            .iter()
-            .filter(|row| needle.is_empty() || row.matches(&needle))
-            .collect();
+        let (total, file, rows) = parsed;
+        let mut lines = Vec::new();
         if needle.is_empty() {
-            self.command_line.push_output(&format!(
-                "ELECPARTLIST: {} part(s) from {}",
-                catalogue.len(),
-                catalogue.file.display()
-            ));
+            lines.push(format!("ELECPARTLIST: {total} part(s) from {file}"));
         } else if rows.is_empty() {
-            self.command_line.push_output(&format!(
-                "ELECPARTLIST: no part matches \"{}\" ({} loaded).",
-                filter.trim(),
-                catalogue.len()
+            lines.push(format!(
+                "ELECPARTLIST: no part matches \"{}\" ({total} loaded).",
+                filter.trim()
             ));
+            self.show_elec_report("Parts Catalogue", &lines);
             return Task::none();
         } else {
-            self.command_line.push_output(&format!(
-                "ELECPARTLIST: {} of {} part(s) match \"{}\".",
+            lines.push(format!(
+                "ELECPARTLIST: {} of {total} part(s) match \"{}\".",
                 rows.len(),
-                catalogue.len(),
                 filter.trim()
             ));
         }
-        self.command_line.push_output(&format!(
+        lines.push(format!(
             "{:<22} {:<18} {:<20} {:<46} {}",
             "PART NUMBER", "MANUFACTURER", "CLASS", "DESCRIPTION", "RATING"
         ));
-        for row in rows {
-            self.command_line.push_output(&format!(
+        for row in rows.iter().take(200) {
+            lines.push(format!(
                 "{:<22} {:<18} {:<20} {:<46} {}",
                 clip(&row.part_number, 22),
                 clip(&row.manufacturer, 18),
@@ -636,6 +706,45 @@ impl OpenCADStudio {
                 clip(&row.rating, 22),
             ));
         }
+        if rows.len() > 200 {
+            lines.push(format!("  ... {} more part(s)", rows.len() - 200));
+        }
+        let title = format!("Parts Catalogue ({} part(s))", rows.len());
+        let table_rows: Vec<Vec<String>> = rows
+            .iter()
+            .map(|row| {
+                vec![
+                    row.part_number.clone(),
+                    row.manufacturer.clone(),
+                    row.class.clone(),
+                    row.description.clone(),
+                    row.rating.clone(),
+                ]
+            })
+            .collect();
+        let summary = vec![if needle.is_empty() {
+            format!("{total} part(s) in the loaded catalogue")
+        } else {
+            format!(
+                "{} of {total} part(s) match \"{}\"",
+                rows.len(),
+                filter.trim()
+            )
+        }];
+        self.set_elec_report_table(
+            title,
+            &lines,
+            summary,
+            vec![
+                "Part number".to_string(),
+                "Manufacturer".to_string(),
+                "Class".to_string(),
+                "Description".to_string(),
+                "Rating".to_string(),
+            ],
+            table_rows,
+            Some(2),
+        );
         Task::none()
     }
 

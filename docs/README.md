@@ -28,6 +28,22 @@ The node graph's **Electrical** category evaluates the same netlist the commands
 
 ![Electrical node graph](screenshots/node-graph-electrical.png)
 
+## Electrical panels and reports
+
+Every report button on the **Electrical** ribbon opens a real dialog instead of writing to
+the command line: a summary strip, a search field, one filter chip per class or strip, and
+a themed table. The command line still receives the same text, so scripts keep working.
+
+| Parts library | Component list |
+|---|---|
+| ![Parts library dialog](screenshots/ui-parts-library.png) | ![Component list dialog](screenshots/ui-component-list.png) |
+
+| Terminal strips | Bill of material |
+|---|---|
+| ![Terminal strips dialog](screenshots/ui-terminal-strips.png) | ![Bill of material dialog](screenshots/ui-bill-of-material.png) |
+
+![Wire list dialog](screenshots/ui-wire-list.png)
+
 ## Start here
 
 | I want to… | Read |

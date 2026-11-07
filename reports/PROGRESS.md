@@ -999,3 +999,51 @@ Documentation-only pass; no code, templates or tests changed.
 - Feature screenshots embedded in the guides: the root README, `docs/README.md`, `docs/QUICKSTART.md`, the ECAD guide and `templates/README.md` now show the startup chooser, the drawing-set wizard, the IEC A3 and NEC ANSI B sheets and the Electrical node graph. All five images were regenerated from the running application through its own MCP capture tool (`tests/ecad/capture_screenshots.py`), not mocked up; duplicate and unused captures were removed.
 - The repository name, the `OpenCADStudio.exe` binary and the `dist\AryaCADElectrical-portable` folder keep their current names until the rename is permitted; historical reports under `reports/` keep the names that were in use when they were written.
 
+
+## Round 23 - the electrical panels become a real GUI (2026-11-06)
+
+The complaint was accurate: the Electrical ribbon was wired correctly, but most of its
+buttons called commands that only appended text to the command line, so pressing "Parts
+Library", "Component List" or "Terminal Strips" looked like nothing happened. That is fixed
+at the root: report commands now open a first-class dialog while still writing the identical
+text log for scripts and automation.
+
+- New themed report dialog `src/ui/window/elec_report.rs`. It has summary chips, a search
+  field, one filter chip per class (or per strip), muted uppercase column headers, zebra
+  rows, right-aligned numeric columns, an empty state, a "N of M row(s)" footer and the
+  standard Close button. Surfaces, borders and accents come from `theme.palette()`, so it
+  follows the OpenCAD theme rather than inventing its own look. Filtering is pure data:
+  `ElecReport::visible_rows()` combines the search text and the active class chip.
+- `ELECLIST`, `ELECTERMINALS`, `ELECBOM`, `ELECWIRELIST`, `ELECPARTS` and `ELECPARTLIST`
+  were converted to build rows as well as text. The dialog state lives on the application
+  (`elec_report`), with `ElecReportSearch` / `ElecReportClass` messages. In `--batch`/`--each`
+  runs the dialog is suppressed so the modal cannot swallow the following rows; that had
+  broken the smoke suite by eating its `QSAVE`.
+- The parts library dialog is the headline change: 29 parts, six columns, class chips
+  (Button, Contactor, Circuit Breaker, …), live search and a readable description/rating
+  column instead of a fixed-width monospace dump.
+- Symbol rendering bug found during the workflow: the shipped `library/starter` symbols are
+  drawn in inch-scale units, but the library manifests declared scale 1 and system insertion
+  ignored the scale entirely, so devices were inserted as invisible dots on a millimetre
+  sheet. `library.tsv` manifests now declare `25.4`; `ELECSYSTEM` layouts are authored in
+  symbol units and `build_system_insert` applies `with_uniform_scale`, measures the label
+  height from the block and scales ATTDEF geometry and text. `ELECINSERT` scales its label
+  height the same way. A new `library/systems/terminal_strip.tsv` places four terminals.
+- Reports opened on a saved project showed raw block names (`CONTACT_NO`) because the class
+  index is only filled by `ELECLIB`. `ensure_library_index()` now reads the remembered
+  library manifest lazily for reporting (`CONTACT_NO` is shown as `Contactor`), without
+  inserting blocks into the drawing.
+- Creating an electrical set whose first sheet was already open used to open a second tab on
+  the same file, and the edit lock made saving fail. `create_electrical_set` now activates
+  the existing tab instead.
+
+Verification on this build: `cargo check --release` clean; release build 7m08s (4-CPU
+affinity workaround); new `elec_report` unit tests 4/4 (class order, search, combined
+search+chip, unknown class); ECAD smoke 84/84 in `--no-real-sheets` mode (the headless save
+regression is gone); MCP ECAD end-to-end 16/16. A full computer-use workflow created a real
+set in `Documents\AryaCAD\Projects\Project1` from the IEC A3 template, inserted the DOL and
+reversing starters plus a terminal strip (14 components, 28 pins, 5 nets), and saved a
+227,479-byte `AR-0001-01.dxf`. Documentation screenshots of the new dialogs:
+`docs/screenshots/ui-parts-library.png`, `ui-component-list.png`, `ui-terminal-strips.png`,
+`ui-bill-of-material.png`, `ui-wire-list.png`, plus `workflow-schematic.png` for the drawn
+circuit.

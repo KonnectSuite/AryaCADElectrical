@@ -112,6 +112,36 @@ fn library_index() -> &'static std::sync::RwLock<std::collections::BTreeMap<Stri
     LIBRARY_INDEX.get_or_init(|| std::sync::RwLock::new(std::collections::BTreeMap::new()))
 }
 
+/// Load the library manifest lazily when a drawing is read on its own.
+///
+/// `ELECLIB` fills this index when a session loads symbols, but a project opened
+/// the next day (or from a recent file) starts with an empty index — and then
+/// every report called the symbols `CONTACT_NO` instead of `Contactor`. The
+/// remembered library folder has the class names the drawing was built with, so
+/// read its manifest without inserting any blocks: this is a lookup table for
+/// reports, not a library load.
+fn ensure_library_index() {
+    let already_loaded = library_index()
+        .read()
+        .map(|index| !index.is_empty())
+        .unwrap_or(false);
+    if already_loaded {
+        return;
+    }
+    let Some(directory) = remembered_library().or_else(library_directory) else {
+        return;
+    };
+    let manifest = read_library_manifest(&directory);
+    if manifest.is_empty() {
+        return;
+    }
+    if let Ok(mut index) = library_index().write() {
+        for (symbol, entry) in manifest {
+            index.entry(symbol).or_insert(entry);
+        }
+    }
+}
+
 /// Read `library.tsv`: symbol, class, `|`-separated attribute tags.
 ///
 /// The tags matter because these symbols keep their attributes on the *insert*, not as
@@ -273,6 +303,7 @@ pub(super) fn library_directory() -> Option<std::path::PathBuf> {
 
 /// Library facts a system insertion needs: class and attribute tags.
 pub(super) fn library_symbol(symbol: &str) -> Option<(String, Vec<String>, f64, f64)> {
+    ensure_library_index();
     let index = library_index().read().ok()?;
     let entry = index.get(&symbol.trim().to_ascii_uppercase())?;
     Some((
@@ -886,6 +917,97 @@ pub(super) fn wire_segments(document: &codec::Document) -> Vec<(f64, f64, f64, f
         .collect()
 }
 
+/// A readable class name for a symbol when no library manifest is available.
+///
+/// `CONTACT_NO` becomes `Contact No`: a report should not shout the raw block
+/// name at the reader, even when it has no measured class to show.
+fn friendly_class(block_name: &str) -> String {
+    let mut words: Vec<String> = Vec::new();
+    for word in block_name.split(|character| character == '_' || character == '-' || character == ' ') {
+        let word = word.trim();
+        if word.is_empty() {
+            continue;
+        }
+        let mut characters = word.chars();
+        let Some(first) = characters.next() else {
+            continue;
+        };
+        let mut friendly = String::new();
+        friendly.extend(first.to_uppercase());
+        friendly.push_str(&characters.as_str().to_lowercase());
+        words.push(friendly);
+    }
+    if words.is_empty() {
+        block_name.to_string()
+    } else {
+        words.join(" ")
+    }
+}
+
+impl OpenCADStudio {
+    /// Show the read-only electrical report dialog.
+    ///
+    /// The report commands print to the command line for scripts; the ribbon
+    /// buttons open this dialog so pressing "Component List", "Terminal
+    /// Strips", "Wire List", "Bill of Material" or "Parts Library" has a
+    /// visible result instead of looking like nothing happened. Both outputs
+    /// are kept in sync: every line goes to the command line and to the body.
+    pub(crate) fn show_elec_report(&mut self, title: impl Into<String>, lines: &[String]) {
+        let title = title.into();
+        for line in lines {
+            self.command_line.push_output(line);
+        }
+        // A scripted/dialog-less run (`--batch`, `--each`) must stay headless:
+        // a modal would swallow the following rows (QSAVE included) and leave
+        // the drawing unsaved, so the command-line log is the whole result.
+        if self.script_running {
+            return;
+        }
+        self.elec_report = crate::ui::window::elec_report::ElecReport {
+            title,
+            summary: lines.to_vec(),
+            ..crate::ui::window::elec_report::ElecReport::default()
+        };
+        self.active_modal = Some(crate::app::ModalKind::ElecReport);
+        self.reset_modal_geometry();
+    }
+
+    /// Show the report dialog as a table.
+    ///
+    /// `log` is the command-line/script output; it stays byte-for-byte the
+    /// text the command used to print. The dialog shows `summary` above a
+    /// `columns` x `rows` table instead. `class_column` names the column the
+    /// dialog's class chips filter on (the component class or part class).
+    pub(crate) fn set_elec_report_table(
+        &mut self,
+        title: impl Into<String>,
+        log: &[String],
+        summary: Vec<String>,
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+        class_column: Option<usize>,
+    ) {
+        for line in log {
+            self.command_line.push_output(line);
+        }
+        if self.script_running {
+            return;
+        }
+        self.elec_report = crate::ui::window::elec_report::ElecReport {
+            title: title.into(),
+            summary,
+            columns,
+            rows,
+            class_column,
+            search: String::new(),
+            class_filter: None,
+            filter_label: String::new(),
+        };
+        self.active_modal = Some(crate::app::ModalKind::ElecReport);
+        self.reset_modal_geometry();
+    }
+}
+
 impl OpenCADStudio {
     /// Turn every block insert in the active tab into a component.
     ///
@@ -896,6 +1018,9 @@ impl OpenCADStudio {
 pub(super) fn components_of(document: &codec::Document) -> Vec<Component> {
     let mut out = Vec::new();
     let mut next_id = 0u64;
+    // Reports opened straight from a saved project must know the library's class
+    // names, not just the block names the drawing stores.
+    ensure_library_index();
     for entity in document.entities() {
         if !Self::in_drawing_space(document, entity.common().owner_handle) {
             continue;
@@ -918,7 +1043,7 @@ pub(super) fn components_of(document: &codec::Document) -> Vec<Component> {
                     .get(&insert.block_name.trim().to_ascii_uppercase())
                     .map(|entry| entry.class.clone())
             })
-            .unwrap_or_else(|| insert.block_name.clone());
+            .unwrap_or_else(|| friendly_class(&insert.block_name));
         let mut component = Component::new(next_id, &class, "");
         for attribute in &insert.attributes {
             let tag = attribute.tag.trim();
@@ -1452,11 +1577,14 @@ fn class_for_reference(tag: &str) -> &'static str {
     ) -> Task<Message> {
         let mut components = self.elec_components(i);
         if components.is_empty() {
-            self.command_line.push_output(
-                "ELECBOM: no electrical components found (no block insert with attributes).",
+            self.show_elec_report(
+                "Bill of Material",
+                &["ELECBOM: no electrical components found (no block insert with attributes)."
+                    .to_string()],
             );
             return Task::none();
         }
+        let mut lines = Vec::new();
         if let Some(option) = option.map(str::trim).filter(|code| !code.is_empty()) {
             let total = components.len();
             let tags = project_option_tags(option);
@@ -1464,17 +1592,16 @@ fn class_for_reference(tag: &str) -> &'static str {
                 tags.contains(&component.tag.trim().to_ascii_uppercase())
             });
             if components.is_empty() {
-                let message = format!(
+                lines.push(format!(
                     "ELECBOM: no components assigned to option {option} (of {total} on this drawing)."
-                );
-                self.command_line.push_output(&message);
+                ));
+                self.show_elec_report("Bill of Material", &lines);
                 return Task::none();
             }
-            let line = format!(
+            lines.push(format!(
                 "ELECBOM: option {option} selects {} of {total} component(s).",
                 components.len()
-            );
-            self.command_line.push_output(&line);
+            ));
         }
         // A loaded catalogue supplies the manufacturer and description the drawing does not
         // carry. Values on the drawing win, so this only fills gaps.
@@ -1489,24 +1616,37 @@ fn class_for_reference(tag: &str) -> &'static str {
             }
         }
         let rows = bill_of_materials(&components);
-        let summary = format!(
+        lines.push(format!(
             "ELECBOM: {} component(s) -> {} bill-of-material row(s).",
             components.len(),
             rows.len()
-        );
-        self.command_line.push_output(&summary);
+        ));
         if enriched > 0 {
-            let line = format!("  {enriched} component(s) completed from the parts catalogue");
-            self.command_line.push_output(&line);
+            lines.push(format!(
+                "  {enriched} component(s) completed from the parts catalogue"
+            ));
         }
-        let header = format!(
+        // Everything so far is the headline of the report; the table follows.
+        let mut summary = vec![format!(
+            "{} component(s) grouped into {} part line(s)",
+            components.len(),
+            rows.len()
+        )];
+        if enriched > 0 {
+            summary.push(format!(
+                "{enriched} completed from the parts catalogue"
+            ));
+        }
+        if let Some(option) = option.map(str::trim).filter(|code| !code.is_empty()) {
+            summary.push(format!("Option {option} selects {} component(s)", components.len()));
+        }
+        lines.push(format!(
             "{:<22} {:<26} {:<16} {:>4}  {:<28} {}",
             "CLASS", "PART", "MANUFACTURER", "QTY", "WHERE USED", "DESCRIPTION"
-        );
-        self.command_line.push_output(&header);
+        ));
         for row in &rows {
             let where_used = row.where_used.join(", ");
-            let line = format!(
+            lines.push(format!(
                 "{:<22} {:<26} {:<16} {:>4}  {:<28} {}",
                 row.class,
                 row.part.clone().unwrap_or_else(|| "-".to_string()),
@@ -1514,21 +1654,46 @@ fn class_for_reference(tag: &str) -> &'static str {
                 row.quantity,
                 truncate(&where_used, 28),
                 row.description.clone().unwrap_or_default(),
-            );
-            self.command_line.push_output(&line);
+            ));
         }
         if let Some(path) = path {
             match write_bom_csv(path, &rows) {
-                Ok(()) => {
-                    let written = format!("ELECBOM: wrote {} row(s) to {path}", rows.len());
-                    self.command_line.push_output(&written);
-                }
-                Err(error) => {
-                    let message = format!("ELECBOM: cannot write {path}: {error}");
-                    self.command_line.push_output(&message);
-                }
+                Ok(()) => lines.push(format!(
+                    "ELECBOM: wrote {} row(s) to {path}",
+                    rows.len()
+                )),
+                Err(error) => lines.push(format!("ELECBOM: cannot write {path}: {error}")),
             }
         }
+        let table_rows: Vec<Vec<String>> = rows
+            .iter()
+            .map(|row| {
+                vec![
+                    row.class.clone(),
+                    row.part.clone().unwrap_or_else(|| "-".to_string()),
+                    row.manufacturer.clone().unwrap_or_else(|| "-".to_string()),
+                    row.quantity.to_string(),
+                    row.where_used.join(", "),
+                    row.description.clone().unwrap_or_default(),
+                ]
+            })
+            .collect();
+        let title = format!("Bill of Material ({} row(s))", rows.len());
+        self.set_elec_report_table(
+            title,
+            &lines,
+            summary,
+            vec![
+                "Class".to_string(),
+                "Part".to_string(),
+                "Manufacturer".to_string(),
+                "Qty".to_string(),
+                "Where used".to_string(),
+                "Description".to_string(),
+            ],
+            table_rows,
+            Some(0),
+        );
         Task::none()
     }
 
@@ -1536,26 +1701,57 @@ fn class_for_reference(tag: &str) -> &'static str {
     pub(super) fn elec_list(&mut self, i: usize) -> Task<Message> {
         let components = self.elec_components(i);
         if components.is_empty() {
-            self.command_line
-                .push_output("ELECLIST: no electrical components found.");
+            self.show_elec_report(
+                "Component List",
+                &["ELECLIST: no electrical components found.".to_string()],
+            );
             return Task::none();
         }
-        let header = format!(
+        let mut lines = Vec::with_capacity(components.len() + 1);
+        lines.push(format!(
             "{:<22} {:<12} {:<26} {:<20} {}",
             "CLASS", "TAG", "PART", "LOCATION", "DESCRIPTION"
-        );
-        self.command_line.push_output(&header);
+        ));
         for component in &components {
-            let line = format!(
+            lines.push(format!(
                 "{:<22} {:<12} {:<26} {:<20} {}",
                 component.class,
                 component.tag,
                 component.part.clone().unwrap_or_else(|| "-".to_string()),
                 component.location.clone().unwrap_or_else(|| "-".to_string()),
                 component.description.clone().unwrap_or_default(),
-            );
-            self.command_line.push_output(&line);
+            ));
         }
+        let rows: Vec<Vec<String>> = components
+            .iter()
+            .map(|component| {
+                vec![
+                    component.class.clone(),
+                    component.tag.clone(),
+                    component.part.clone().unwrap_or_else(|| "-".to_string()),
+                    component.location.clone().unwrap_or_else(|| "-".to_string()),
+                    component.description.clone().unwrap_or_default(),
+                ]
+            })
+            .collect();
+        let title = format!("Component List ({})", components.len());
+        self.set_elec_report_table(
+            title,
+            &lines,
+            vec![format!(
+                "{} component(s) on this sheet",
+                components.len()
+            )],
+            vec![
+                "Class".to_string(),
+                "Tag".to_string(),
+                "Part".to_string(),
+                "Location".to_string(),
+                "Description".to_string(),
+            ],
+            rows,
+            Some(0),
+        );
         Task::none()
     }
 
@@ -1792,21 +1988,23 @@ fn class_for_reference(tag: &str) -> &'static str {
             wire_graph(doc)
         };
         if graph.wires.is_empty() {
-            self.command_line
-                .push_output("ELECWIRELIST: no wires found (LINE or LWPOLYLINE entities).");
+            self.show_elec_report(
+                "Wire List",
+                &["ELECWIRELIST: no wires found (LINE or LWPOLYLINE entities).".to_string()],
+            );
             return Task::none();
         }
 
         let netlist = graph.netlist(TOLERANCE);
-        let summary = format!(
+        let mut lines = Vec::new();
+        lines.push(format!(
             "ELECWIRELIST: {} wire segment(s), {} pin(s) -> {} net(s); {} unconnected pin(s), {} loose wire(s).",
             graph.wires.len(),
             graph.anchors.len(),
             netlist.nets.len(),
             netlist.loose_anchors.len(),
             netlist.loose_wires.len()
-        );
-        self.command_line.push_output(&summary);
+        ));
 
         for net in &netlist.nets {
             let members: Vec<String> = net
@@ -1814,7 +2012,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                 .iter()
                 .map(|id| graph.label_of(*id))
                 .collect();
-            let line = format!(
+            lines.push(format!(
                 "  net {}: {} wire(s) -> {}",
                 net.id,
                 net.wires.len(),
@@ -1823,8 +2021,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                 } else {
                     members.join(", ")
                 }
-            );
-            self.command_line.push_output(&line);
+            ));
         }
 
         if !netlist.loose_anchors.is_empty() {
@@ -1833,8 +2030,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                 .iter()
                 .map(|id| graph.label_of(*id))
                 .collect();
-            let line = format!("  unconnected: {}", names.join(", "));
-            self.command_line.push_output(&line);
+            lines.push(format!("  unconnected: {}", names.join(", ")));
         }
 
         if let Some(path) = out.map(str::trim).filter(|path| !path.is_empty()) {
@@ -1859,21 +2055,17 @@ fn class_for_reference(tag: &str) -> &'static str {
                             row.to.y
                         ));
                     }
-                    if let Err(error) = writer.write_all(text.as_bytes()) {
-                        let message = format!("ELECWIRELIST: cannot write {path}: {error}");
-                        self.command_line.push_output(&message);
-                        return Task::none();
+                    match writer.write_all(text.as_bytes()) {
+                        Ok(()) => lines.push(format!(
+                            "ELECWIRELIST: wrote {} conductor row(s) to {path}.",
+                            rows.len()
+                        )),
+                        Err(error) => {
+                            lines.push(format!("ELECWIRELIST: cannot write {path}: {error}"))
+                        }
                     }
-                    let message = format!(
-                        "ELECWIRELIST: wrote {} conductor row(s) to {path}.",
-                        rows.len()
-                    );
-                    self.command_line.push_output(&message);
                 }
-                Err(error) => {
-                    let message = format!("ELECWIRELIST: cannot write {path}: {error}");
-                    self.command_line.push_output(&message);
-                }
+                Err(error) => lines.push(format!("ELECWIRELIST: cannot write {path}: {error}")),
             }
         }
 
@@ -1885,10 +2077,58 @@ fn class_for_reference(tag: &str) -> &'static str {
             .map(|anchor| anchor.label.as_str())
             .collect();
         if let Some(prefix) = infer_tag_prefix(&tags) {
-            let line = format!("  device prefix: {prefix}");
-            self.command_line.push_output(&line);
+            lines.push(format!("  device prefix: {prefix}"));
         }
 
+        let title = format!("Wire List ({} net(s))", netlist.nets.len());
+        let mut summary = vec![format!(
+            "{} wire segment(s) · {} pin(s) · {} net(s) · {} unconnected pin(s)",
+            graph.wires.len(),
+            graph.anchors.len(),
+            netlist.nets.len(),
+            netlist.loose_anchors.len()
+        )];
+        if let Some(prefix) = infer_tag_prefix(
+            &graph
+                .anchors
+                .iter()
+                .map(|anchor| anchor.label.as_str())
+                .collect::<Vec<_>>(),
+        ) {
+            summary.push(format!("Device prefix {prefix}"));
+        }
+        let table_rows: Vec<Vec<String>> = netlist
+            .nets
+            .iter()
+            .map(|net| {
+                let members: Vec<String> = net
+                    .anchors
+                    .iter()
+                    .map(|id| graph.label_of(*id))
+                    .collect();
+                vec![
+                    format!("N{}", net.id),
+                    net.wires.len().to_string(),
+                    if members.is_empty() {
+                        "-".to_string()
+                    } else {
+                        members.join(", ")
+                    },
+                ]
+            })
+            .collect();
+        self.set_elec_report_table(
+            title,
+            &lines,
+            summary,
+            vec![
+                "Net".to_string(),
+                "Segments".to_string(),
+                "Connected pins".to_string(),
+            ],
+            table_rows,
+            None,
+        );
         Task::none()
     }
 
@@ -2144,39 +2384,76 @@ fn class_for_reference(tag: &str) -> &'static str {
         }
 
         if terminals.is_empty() {
-            self.command_line.push_output(
-                "ELECTERMINALS: no terminals found (no component tagged strip:index).",
+            self.show_elec_report(
+                "Terminal Strips",
+                &["ELECTERMINALS: no terminals found (no component tagged strip:index)."
+                    .to_string()],
             );
             return Task::none();
         }
 
         let strips = terminal_strips(&terminals);
-        let summary = format!(
+        let mut lines = Vec::new();
+        lines.push(format!(
             "ELECTERMINALS: {} strip(s), {} terminal(s).",
             strips.len(),
             terminals.len()
-        );
-        self.command_line.push_output(&summary);
-
+        ));
         for strip in &strips {
-            let header = format!("  {} ({} terminal(s))", strip.name, strip.terminals.len());
-            self.command_line.push_output(&header);
+            lines.push(format!(
+                "  {} ({} terminal(s))",
+                strip.name,
+                strip.terminals.len()
+            ));
             for terminal in &strip.terminals {
                 let detail = if terminal.peers.is_empty() {
                     "unconnected".to_string()
                 } else {
                     terminal.peers.join(", ")
                 };
-                let line = format!("    {}: {}", terminal.tag, detail);
-                self.command_line.push_output(&line);
+                lines.push(format!("    {}: {}", terminal.tag, detail));
             }
         }
-
         if !others.is_empty() {
-            let line = format!("  not terminals: {}", others.join(", "));
-            self.command_line.push_output(&line);
+            lines.push(format!("  not terminals: {}", others.join(", ")));
         }
-
+        let title = format!("Terminal Strips ({} strip(s))", strips.len());
+        let terminal_count: usize = strips.iter().map(|strip| strip.terminals.len()).sum();
+        let summary = vec![
+            format!(
+                "{} strip(s), {} terminal(s)",
+                strips.len(),
+                terminal_count
+            ),
+            format!("{} other pin(s) on the sheet", others.len()),
+        ];
+        let mut table_rows: Vec<Vec<String>> = Vec::new();
+        for strip in &strips {
+            for terminal in &strip.terminals {
+                table_rows.push(vec![
+                    strip.name.clone(),
+                    terminal.tag.clone(),
+                    if terminal.peers.is_empty() {
+                        "—".to_string()
+                    } else {
+                        terminal.peers.join(", ")
+                    },
+                ]);
+            }
+        }
+        self.set_elec_report_table(
+            title,
+            &lines,
+            summary,
+            vec![
+                "Strip".to_string(),
+                "Terminal".to_string(),
+                "Connects to".to_string(),
+            ],
+            table_rows,
+            Some(0),
+        );
+        self.elec_report.filter_label = "All strips".to_string();
         Task::none()
     }
 
@@ -3148,7 +3425,10 @@ fn class_for_reference(tag: &str) -> &'static str {
                     .map(|entry| (entry.label_height, entry.scale))
             })
             .unwrap_or((0.125, 1.0));
+        // The measured height is in symbol units; the sheet sees them through the
+        // library scale, so the text must be scaled with the geometry.
         let label_height = if label_height > 0.0 { label_height } else { 0.125 };
+        let label_height = label_height * symbol_scale;
         let command = PlaceSymbolCommand::new(
             block.to_string(),
             attributes,

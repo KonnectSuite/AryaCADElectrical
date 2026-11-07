@@ -141,3 +141,12 @@ The node graph's **Electrical** category evaluates the same netlist as the comma
 the bundled sample sheet:
 
 ![Electrical Netlist node evaluated on the sample sheet](../../screenshots/node-graph-electrical.png)
+
+The report commands also have a person-facing form: the **Parts Library** button opens the
+catalogue as a searchable table with a class filter, and **Component List** / **Terminal
+Strips** / **Bill of Material** / **Wire List** work the same way. The command line output
+shown above is unchanged, so automation and the dialogs agree.
+
+| Parts library | Bill of material |
+|---|---|
+| ![Parts library dialog](../../screenshots/ui-parts-library.png) | ![Bill of material dialog](../../screenshots/ui-bill-of-material.png) |

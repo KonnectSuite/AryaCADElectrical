@@ -34,6 +34,9 @@ editor that reads and writes ordinary DWG and DXF files.
 - **Documentation output.** Component list, terminal list, wire list, a bill of material
   that can be filtered by option code, an Excel workbook, and a panel layout generated from
   the schematic.
+- **A real electrical GUI.** Each report button opens a themed, searchable table — parts
+  library, component list, terminal strips, bill of material, wire list — with one filter
+  chip per class or strip, instead of printing text into a log you cannot see.
 - **Cables.** A drawn cable route becomes a schedule row with a measured length and both
   ends resolved to device pins.
 - **PLC and I/O.** PLC modules with addresses, project-wide address continuation, and
@@ -49,6 +52,12 @@ editor that reads and writes ordinary DWG and DXF files.
 The node graph's **Electrical** category works on the same netlist as the commands:
 
 ![Electrical node graph](docs/screenshots/node-graph-electrical.png)
+
+Report buttons open real tables, with search and class filters (the parts library):
+
+| Parts library | Component list |
+|---|---|
+| ![Parts library](docs/screenshots/ui-parts-library.png) | ![Component list](docs/screenshots/ui-component-list.png) |
 
 ## Built on Open CAD Studio
 

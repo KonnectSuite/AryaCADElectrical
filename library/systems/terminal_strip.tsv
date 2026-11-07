@@ -1,0 +1,6 @@
+# Four-terminal strip: a short row of terminals, no wiring (terminals sit on the strip).
+# Coordinates are library symbol units (see dol_starter.tsv).
+device 0 0 TERMINAL
+device 0.8 0 TERMINAL
+device 1.6 0 TERMINAL
+device 2.4 0 TERMINAL

@@ -419,6 +419,16 @@ impl OpenCADStudio {
                 ));
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(first) = files.first() {
+                    // The wizard can be opened again while the first sheet is
+                    // already loaded (Create twice, or ELECSTART from a running
+                    // session). Opening it a second time would create a second
+                    // editor on the same path and make saving fail with a lock
+                    // error, so reuse the tab that already holds the file.
+                    if let Some(index) = self.tabs.iter().position(|tab| {
+                        tab.current_path.as_deref() == Some(first.as_path())
+                    }) {
+                        return self.update(Message::TabSwitch(index));
+                    }
                     return self.update(Message::OpenRecent(first.clone()));
                 }
                 Task::none()
