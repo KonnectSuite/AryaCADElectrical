@@ -32,6 +32,8 @@ pub type SymbolRow = (String, String, Vec<((f64, f64), (f64, f64))>);
 
 /// Height of the search strip above the list.
 const SEARCH_H: f32 = 40.0;
+/// Height of the class filter strip under the search field.
+const CHIP_H: f32 = 26.0;
 /// Height of a row slot in the list, gap included.
 const ROW_H: f32 = 44.0;
 /// Height the row button itself occupies inside its slot.
@@ -145,6 +147,8 @@ struct State {
     /// Row index (into `entries`) the keyboard cursor is on, so ArrowUp/Down and
     /// Enter can drive the palette without a mouse.
     selected: Option<usize>,
+    /// Class chip the list is narrowed to; `None` is "All".
+    class_filter: Option<String>,
 }
 
 /// The palette body: a search strip over a filtered, scrolling list of symbols.
@@ -164,19 +168,29 @@ fn search_rect(bounds: Rectangle) -> Rectangle {
     }
 }
 
+/// The area the class filter chips are drawn in.
+fn chips_rect(bounds: Rectangle) -> Rectangle {
+    Rectangle {
+        x: bounds.x + 2.0,
+        y: bounds.y + SEARCH_H,
+        width: (bounds.width - 4.0).max(0.0),
+        height: CHIP_H,
+    }
+}
+
 /// The area the symbol rows are drawn and clipped in.
 fn list_rect(bounds: Rectangle) -> Rectangle {
     Rectangle {
         x: bounds.x,
-        y: bounds.y + SEARCH_H,
+        y: bounds.y + SEARCH_H + CHIP_H,
         width: bounds.width,
-        height: (bounds.height - SEARCH_H).max(0.0),
+        height: (bounds.height - SEARCH_H - CHIP_H).max(0.0),
     }
 }
 
-/// How many rows fit under the search strip.
+/// How many rows fit under the search strip and the chips.
 fn capacity(height: f32) -> usize {
-    (((height - SEARCH_H).max(0.0) / ROW_H).floor() as usize).max(1)
+    (((height - SEARCH_H - CHIP_H).max(0.0) / ROW_H).floor() as usize).max(1)
 }
 
 /// A rounded quad with no outline, for the surfaces this widget paints itself.
@@ -242,18 +256,29 @@ fn text_width(renderer: &Renderer, content: &str, size: f32) -> f32 {
 }
 
 impl Palette {
-    /// Indices of the rows whose name or class contains the query. Matching the
+    /// Every class in the catalogue, sorted, for the filter chips.
+    fn classes(&self) -> Vec<String> {
+        let mut classes: Vec<String> = self
+            .entries
+            .iter()
+            .map(|(_, class)| class.clone())
+            .collect();
+        classes.sort();
+        classes.dedup();
+        classes
+    }
+
+    /// Indices of the rows the query and the class chip both keep. Matching the
     /// class too means `relay` finds the relays without knowing a block name.
-    fn matches(&self, query: &str) -> Vec<usize> {
+    fn matches(&self, query: &str, class_filter: Option<&str>) -> Vec<usize> {
         let needle = query.trim().to_lowercase();
-        if needle.is_empty() {
-            return (0..self.entries.len()).collect();
-        }
         self.entries
             .iter()
             .enumerate()
+            .filter(|(_, (_, class))| class_filter.is_none_or(|filter| class == filter))
             .filter(|(_, (name, class))| {
-                name.to_lowercase().contains(needle.as_str())
+                needle.is_empty()
+                    || name.to_lowercase().contains(needle.as_str())
                     || class.to_lowercase().contains(needle.as_str())
             })
             .map(|(index, _)| index)
@@ -286,7 +311,7 @@ impl Widget<Message, Theme, Renderer> for Palette {
     ) -> layout::Node {
         let space = limits.max();
         let state = tree.state.downcast_mut::<State>();
-        let matches = self.matches(&state.query);
+        let matches = self.matches(&state.query, state.class_filter.as_deref());
         let capacity = capacity(space.height);
         // A filter that shortens the list may leave the scroll past its end.
         state.scroll = state
@@ -311,7 +336,7 @@ impl Widget<Message, Theme, Renderer> for Palette {
                 nodes.push(layout::Node::new(Size::ZERO));
                 continue;
             };
-            let y = SEARCH_H + slot as f32 * ROW_H;
+            let y = SEARCH_H + CHIP_H + slot as f32 * ROW_H;
             let row_limits =
                 layout::Limits::new(Size::ZERO, Size::new(space.width, ROW_H));
             let node = row
@@ -354,8 +379,50 @@ impl Widget<Message, Theme, Renderer> for Palette {
     ) {
         let bounds = layout.bounds();
         let state = tree.state.downcast_mut::<State>();
-        let matches = self.matches(&state.query);
+        let matches = self.matches(&state.query, state.class_filter.as_deref());
         let capacity = capacity(bounds.height);
+
+        // The class chips are painted by hand, so their clicks are taken here
+        // before any symbol row sees the event.
+        if let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
+            if let Some(position) = cursor.position() {
+                let chips = chips_rect(bounds);
+                if chips.contains(position) {
+                    let labels: Vec<Option<String>> = std::iter::once(None)
+                        .chain(self.classes().into_iter().map(Some))
+                        .collect();
+                    let mut x = chips.x;
+                    let mut hit: Option<Option<String>> = None;
+                    for label in labels {
+                        let text = label.as_deref().unwrap_or("All");
+                        let width = (text_width(renderer, text, 11.0) + 18.0).max(46.0);
+                        let rect = Rectangle {
+                            x,
+                            y: chips.y + 3.0,
+                            width,
+                            height: CHIP_H - 6.0,
+                        };
+                        if rect.contains(position) {
+                            hit = Some(label);
+                            break;
+                        }
+                        x += width + 6.0;
+                        if x > chips.x + chips.width {
+                            break;
+                        }
+                    }
+                    if let Some(filter) = hit {
+                        state.class_filter = filter;
+                        state.selected = None;
+                        state.scroll = 0;
+                        shell.invalidate_layout();
+                        shell.request_redraw();
+                        shell.capture_event();
+                        return;
+                    }
+                }
+            }
+        }
 
         // The rows are real buttons: let them see the event first so hover and
         // press behave like the list rows everywhere else in the application.
@@ -540,6 +607,9 @@ impl Widget<Message, Theme, Renderer> for Palette {
         if search_rect(bounds).contains(position) {
             return mouse::Interaction::Text;
         }
+        if chips_rect(bounds).contains(position) {
+            return mouse::Interaction::Pointer;
+        }
         if list_rect(bounds).contains(position) {
             for (index, child_layout) in layout.children().enumerate() {
                 if index >= self.rows.len() || index >= tree.children.len() {
@@ -572,7 +642,7 @@ impl Widget<Message, Theme, Renderer> for Palette {
         let bounds = layout.bounds();
         let palette = theme.palette();
         let state = tree.state.downcast_ref::<State>();
-        let matches = self.matches(&state.query);
+        let matches = self.matches(&state.query, state.class_filter.as_deref());
 
         // ── Search strip ─────────────────────────────────────────────────
         let field = search_rect(bounds);
@@ -649,6 +719,51 @@ impl Widget<Message, Theme, Renderer> for Palette {
                 text_bounds,
                 field,
             );
+        }
+
+        // ── Class chips ──────────────────────────────────────────────────
+        let chips = chips_rect(bounds);
+        if chips.height > 0.0 {
+            let labels: Vec<Option<String>> = std::iter::once(None)
+                .chain(self.classes().into_iter().map(Some))
+                .collect();
+            let mut x = chips.x;
+            for label in &labels {
+                let text = label.as_deref().unwrap_or("All");
+                let width = (text_width(renderer, text, 11.0) + 18.0).max(46.0);
+                if x + width > chips.x + chips.width {
+                    break;
+                }
+                let rect = Rectangle {
+                    x,
+                    y: chips.y + 3.0,
+                    width,
+                    height: CHIP_H - 6.0,
+                };
+                let active = state.class_filter.as_deref() == label.as_deref()
+                    || (label.is_none() && state.class_filter.is_none());
+                let background = if active {
+                    palette.primary.base.color
+                } else {
+                    palette.background.weak.color
+                };
+                renderer.fill_quad(surface(rect, 11.0), background);
+                draw_text(
+                    renderer,
+                    text,
+                    Point::new(rect.x + rect.width * 0.5, rect.center_y()),
+                    11.0,
+                    if active {
+                        palette.primary.base.text
+                    } else {
+                        text_color.scale_alpha(0.75)
+                    },
+                    advanced_text::Alignment::Center,
+                    Size::new(rect.width, rect.height),
+                    rect,
+                );
+                x += width + 6.0;
+            }
         }
 
         // ── List ─────────────────────────────────────────────────────────

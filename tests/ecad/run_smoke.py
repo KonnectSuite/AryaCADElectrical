@@ -1038,8 +1038,11 @@ def run_real_sheets(current):
                         os.path.join(WORK, "real_batch_003.txt"), {"@BOM@": bom})
     code, text = run(current, [current, "--each", batch, sheet_003], "real_003")
     check("real sheet 003 batch exits 0", code == 0, f"exit {code}")
+    # The source sheet spells these blocks in mixed case (`Hms21`), and a drawing
+    # that has never seen the library reports the block name it stores; the check
+    # is that the attribute-bearing module inserts are listed, not how they are cased.
     listing = [line for line in text.split("ELECBOM:")[0].splitlines()
-               if line.startswith(("HMS21", "HMO13"))]
+               if line.split() and line.split()[0].upper() in ("HMS21", "HMO13")]
     check("ELECLIST reports the module inserts that do carry attributes",
           len(listing) == 4, f"{len(listing)} component rows: {listing[:2]}")
     check("ELECBOM counts the attributed and recovered components",
@@ -1050,10 +1053,10 @@ def run_real_sheets(current):
             rows = [line for line in handle.read().splitlines() if line.strip()]
         check("ELECBOM CSV on real data has one row per (class, part)",
               len(rows) - 1 == 4, f"{len(rows) - 1} data rows: {rows[1:]}")
+        classes = {row.split(",")[0].strip().lower() for row in rows[1:]}
         check("the BOM 'Class name' column is the BLOCK NAME, not the ACADE class",
-              any(row.startswith("HMS21,") for row in rows[1:])
-              and any(row.startswith("HMO13,") for row in rows[1:]),
-              "rows start with HMS21 / HMO13")
+              {"hms21", "hmo13"} <= classes,
+              f"classes: {sorted(classes)}")
     else:
         check("ELECBOM wrote a CSV for sheet 003", False, "missing " + bom)
 
@@ -1077,6 +1080,109 @@ def run_real_sheets(current):
     surviving = [e for e in after.entities if e.kind == "INSERT"]
     check("the real sheet's own geometry survives the ELECSHEET run",
           len(surviving) >= len(inserts_002), f"{len(surviving)} inserts before/after")
+
+
+def write_inline_batch(name, lines):
+    """A batch file written straight from a list of command lines."""
+    path = os.path.join(WORK, name)
+    with open(path, "w", encoding="ascii", newline="\n") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return path
+
+
+def run_numbering_setup(binary):
+    """The SkyCAD numbering options: step, wire kind, empty first value, follow-through."""
+    section("15. numbering contract: tag step, alphabetical wires, empty first, follow-through")
+
+    def tags_of(path):
+        drawing = dxfio.load(path)
+        found = []
+        for entity in drawing.entities:
+            if entity.kind != "INSERT" or not entity.attributes:
+                continue
+            attrs = attribute_map(entity)
+            tag = attrs.get("TAG1")
+            if tag is not None and tag.s(1).startswith("-"):
+                found.append(tag.s(1))
+        return found
+
+    # Tags: a step of 2 numbers the contacts 1, 3, 5.
+    sheet = blank_drawing(os.path.join(WORK, "numbering_tags.dxf"))
+    batch = write_inline_batch("numbering_tags_batch.txt", [
+        "ELECNEW",
+        f"ELECLIB {STARTER}",
+        "ELECSETUP TAGINC=2 TAGSTART=1",
+        "ELECINSERT CONTACT_NO",
+        "ELECINSERT CONTACT_NO",
+        "ELECINSERT CONTACT_NO",
+        "ELECNUMBER",
+        f"SAVEAS {sheet}",
+    ])
+    code, text = run(binary, [binary, "--each", batch, sheet], "numbering_tags")
+    check("the numbering batch exits 0", code == 0, f"exit {code}")
+    check("ELECSETUP stored the tag step headlessly",
+          "step 2" in text, "step 2 in the ELECSETUP summary")
+    tags = tags_of(sheet)
+    check("ELECNUMBER follows the step (-K1, -K3, -K5)",
+          tags == ["-K1", "-K3", "-K5"], f"{tags}")
+
+    # Wires: alphabetical numbers, first value left blank -> one label, `B`.
+    sheet = blank_drawing(os.path.join(WORK, "numbering_wires.dxf"))
+    batch = write_inline_batch("numbering_wires_batch.txt", [
+        "ELECNEW",
+        "ELECSETUP WIREKIND=Alphabetical WIREEMPTY=Yes",
+        "ELECWIRE",
+        "0,0",
+        "40,0",
+        "",
+        "ELECWIRE",
+        "80,0",
+        "120,0",
+        "",
+        "ELECWIRENUMBER",
+        f"SAVEAS {sheet}",
+    ])
+    code, text = run(binary, [binary, "--each", batch, sheet], "numbering_wires")
+    check("the wire numbering batch exits 0", code == 0, f"exit {code}")
+    drawing = dxfio.load(sheet)
+    labels = [e.s(1) for e in on_layer(drawing, "WIRENO") if e.kind == "TEXT"]
+    check("ELECWIRENUMBER leaves the first value blank and numbers alphabetically",
+          labels == ["B"], f"{labels}")
+
+    # Follow-through: a contact merged into its coil's tag keeps one number ...
+    sheet = blank_drawing(os.path.join(WORK, "numbering_follow.dxf"))
+    batch = write_inline_batch("numbering_follow_batch.txt", [
+        "ELECNEW",
+        f"ELECLIB {STARTER}",
+        "ELECINSERT CONTACTOR_COIL",
+        "ELECINSERT CONTACT_NO",
+        "ELECSETATTR -K2 TAG1=-K1",
+        "ELECNUMBER",
+        f"SAVEAS {sheet}",
+    ])
+    code, text = run(binary, [binary, "--each", batch, sheet], "numbering_follow")
+    check("the follow-through batch exits 0", code == 0, f"exit {code}")
+    tags = tags_of(sheet)
+    check("follow-through keeps a contact on its coil's number",
+          tags == ["-K1", "-K1"], f"{tags}")
+
+    # ... and with it off each symbol takes its own number.
+    sheet = blank_drawing(os.path.join(WORK, "numbering_follow_off.dxf"))
+    batch = write_inline_batch("numbering_follow_off_batch.txt", [
+        "ELECNEW",
+        f"ELECLIB {STARTER}",
+        "ELECINSERT CONTACTOR_COIL",
+        "ELECINSERT CONTACT_NO",
+        "ELECSETATTR -K2 TAG1=-K1",
+        "ELECSETUP TAGFALL=No",
+        "ELECNUMBER",
+        f"SAVEAS {sheet}",
+    ])
+    code, text = run(binary, [binary, "--each", batch, sheet], "numbering_follow_off")
+    check("the follow-through-off batch exits 0", code == 0, f"exit {code}")
+    tags = sorted(tags_of(sheet))
+    check("follow-through off numbers every symbol separately",
+          tags == ["-K1", "-K2"], f"{tags}")
 
 
 def run_machine_files():
@@ -1154,6 +1260,17 @@ def main(argv=None):
         candidate = os.path.join(ROOT, "target", "release", "OpenCADStudio.exe")
         if os.path.exists(candidate):
             shutil.copy2(candidate, current)
+    # A %TEMP% copy outlives the build it came from: the 11/5 copy here made the
+    # whole suite measure a five-day-old binary and report five phantom failures.
+    # Refresh any copy that is older than the release build under test.
+    candidate = os.path.join(ROOT, "target", "release", "OpenCADStudio.exe")
+    if os.path.exists(candidate):
+        built = os.path.getmtime(candidate)
+        for name, path in (("baseline", baseline), ("current", current)):
+            if os.path.exists(path) and built > os.path.getmtime(path):
+                shutil.copy2(candidate, path)
+                print(f"refreshed the stale {name} copy from target/release")
+
     print(f"baseline: {baseline}")
     print(f"current : {current}" + ("" if os.path.exists(current) else "  (MISSING)"))
     print(f"starter : {STARTER}")
@@ -1185,6 +1302,7 @@ def main(argv=None):
         run_edge_cases(baseline)
         run_fabricated(baseline)
         run_client_library(baseline, current, client_symbols)
+        run_numbering_setup(current)
         if args.no_real_sheets:
             section("13. baseline on the real client sheets (skipped: --no-real-sheets)")
             run_machine_files()

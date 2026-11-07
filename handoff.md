@@ -395,3 +395,81 @@ Unit tests added in `src/app/commands/elec.rs`:
 its own rows, so grouping needs slot arithmetic; typing a class name in the search box
 already filters), and the SkyCAD `NumberingFormat` uniqueness-scope and increment fields,
 which the dialog does not expose yet.
+
+## 14. Round 26 (2026-11-07): smoke 108/108, unique handles, numbering parity
+
+This round closed the four gaps Round 25 left open, and fixed a save-visible bug it exposed.
+
+**The smoke suite was measuring an old binary.** `tests/ecad/run_smoke.py` copies the
+editor to `%TEMP%\ocs_baseline.exe` (sections 1-12) and `%TEMP%\ocs_current.exe` (real
+sheets). Both copies were from 5 November, so the five checks that read tags back from
+TEXT-recovered sheets failed against a build that did not have the recovery. The runner
+now refreshes either copy when `target\release\OpenCADStudio.exe` is newer and prints
+`refreshed the stale <name> copy from target/release`. Two further checks hard-coded
+uppercase module block names (`HMS21`/`HMO13`) while the customer sheet spells them
+`Hms21`/`Hmo13`; those compare case-insensitively now.
+
+**`ELECINSERT` reused one handle per symbol.** The command clones the first instance of a
+block on the sheet and only moved its insertion point, so three placed contacts were three
+objects under one handle (`5B2`), and `ELECNUMBER` - which applies a label through
+`doc.get_entity_mut(handle)` - wrote the last label to every part. The clone now starts
+without identity (insert, attributes and embedded mtext all `Handle::NULL`) and the scene
+allocates fresh handles through `adopt_attributes`. Verified: three contacts save as
+`5B2`, `5BD`, `5C8` with `-K1`, `-K2`, `-F1` intact. This was a real drawing-integrity bug,
+not only a test problem.
+
+**SkyCAD `NumberingFormat` parity.** The core crate already carried every field; the app was
+only reading the format/mode/start triple.
+
+| SkyCAD field | Where it lives now |
+|---|---|
+| Order number format, mode, start, prefix | `ELEC_TAGFMT`, `ELEC_TAGMODE`, `ELEC_TAG_START`, `ELEC_TAG_RSUF` |
+| Order number increment | `ELEC_TAGINC` -> `NumberingFormat::increment` |
+| Follow through (number a device once) | `ELEC_TAGFALL` -> parts of one tag share a label; off numbers each symbol |
+| Wire numbering format/mode/start | `ELEC_WIREFMT`, `ELEC_WIREMODE`, `ELEC_WIRE_START` |
+| Wire numbers: numerical/alphabetical | `ELEC_WIREKIND` -> `Kind::Alphabetical` |
+| Empty first value | `ELEC_WIREEMPTY` -> the first net gets no number |
+| Uniqueness scope | not exposed yet: the app groups per drawing, which is the "per sheet" scope |
+
+Both `ELECNUMBER` and `ELECWIRENUMBER` used to apply the contract only when a `WD_M` block
+was present, so the dialog-written properties were silently ignored; they apply the values
+unconditionally now. `ELECSETUP` grew a headless argument form (`ELECSETUP TAGINC=2
+TAGFALL=No WIREKIND=Alphabetical ...`) with the same validation as the dialog, so scripts
+and tests do not have to click. `write_setup_properties` is the one writer of the `ELEC_*`
+keys, used by the dialog and the command.
+
+**Saving these properties needs SAVEAS.** `tools/dxfio.py` writes DXF R12, which cannot
+carry custom properties; `QSAVE` therefore raises the conversion-loss confirmation and a
+headless batch silently drops the save. The numbering batches in the smoke suite use
+`SAVEAS <sheet>` and the sheet is written as AC1012. Worth knowing for any future test that
+stores `ELEC_*`.
+
+**Palette class chips.** `src/ui/window/elec_library.rs` grew a chip strip under the search
+field: `All` plus one chip per class, hit-tested by measured text width, with the row area
+shifted by `CHIP_H = 26.0` and `capacity` recomputed. Keyboard: Home/End and Page Up/Page
+Down move by a window. Searching a class name still works and composes with the chip.
+
+**Screenshots.** `scripts/capture_ecad_screenshots.py` launches the editor per picture with
+`--http PORT`, runs the commands, and calls `capture` over the GUI REST bridge (bearer token
+from `OCS_API_TOKEN`, pinned by the script). Six new pictures in `docs/screenshots`:
+`ecad-palette`, `ecad-symbol-manager`, `ecad-numbering-setup`, `ecad-bill-of-material`,
+`ecad-terminal-strips`, `ecad-wire-list`; `README.md` links the first three. The same round
+fixed `POST /api/v1/commands` to forward `document_id` - the documented route was unusable
+against a GUI with more than one tab.
+
+**Verification**
+
+| Check | Result |
+|---|---|
+| `cargo check --release` | clean |
+| `cargo test --release --lib elec` | 353 passed, 3 ignored |
+| `cargo test --release -p elec` | 131 passed |
+| `cargo build --release -j 4` | finished 5 m 05 s |
+| `py -3.13 tests\ecad\run_smoke.py` | **108/108 checks passed** |
+| `py -3.13 tools\make_library.py --check` | in sync, 78 symbols |
+| `py -3.13 tools\parts_check.py` | passes |
+
+**Still open**: the SkyCAD uniqueness-scope field (global/parent-sheet/none) has no UI; the
+palette chip strip does not scroll horizontally when a library has very many classes; and
+`ELECLIST` still prints the block name as the class for library-less symbols, which the
+reports render as-is.

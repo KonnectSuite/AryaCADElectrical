@@ -59,6 +59,25 @@ Report buttons open real tables, with search and class filters (the parts librar
 |---|---|
 | ![Parts library](docs/screenshots/ui-parts-library.png) | ![Component list](docs/screenshots/ui-component-list.png) |
 
+Symbols are chosen from a palette with class chips and a search field (seventy-eight symbols
+ship in `library/starter`, each with real pins and attribute definitions), and the same
+library is editable from the Symbol Manager:
+
+| Symbol palette | Symbol Manager |
+|---|---|
+| ![Symbol palette with class chips](docs/screenshots/ecad-palette.png) | ![Symbol Manager dialog](docs/screenshots/ecad-symbol-manager.png) |
+
+Device tags and wire numbers follow a contract stored on the drawing, edited without an
+AutoCAD Electrical `WD_M` block: format, mode, start, step, follow-through and the wire
+alphabetical/numbering choice are all dropdowns and fields. A drawing that does carry a
+`WD_M` block keeps using it.
+
+![Electrical setup dialog](docs/screenshots/ecad-numbering-setup.png)
+
+The screenshots in `docs/screenshots` are captured from the running editor by
+`scripts/capture_ecad_screenshots.py` (the GUI REST bridge starts the app per picture), so
+they can be regenerated instead of hand-edited.
+
 ## Built on Open CAD Studio
 
 This project would not exist without **Open CAD Studio**, created and maintained by

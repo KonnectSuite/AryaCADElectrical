@@ -230,6 +230,17 @@ struct ElecSetup {
     wire_start: u32,
     xref_format: String,
     sheet: String,
+    /// Step between consecutive device tags (SkyCAD's "Order number increment").
+    tag_increment: u32,
+    /// Number contacts with their coil instead of one number per symbol
+    /// (SkyCAD's "Follow through").
+    tag_fallthrough: bool,
+    /// Step between consecutive wire numbers.
+    wire_increment: u32,
+    /// Alphabetical wire numbers (`A`, `B`, ...) instead of numerical.
+    wire_alphabetical: bool,
+    /// Leave the first wire number blank (SkyCAD's "Empty first value").
+    wire_empty_first: bool,
 }
 
 impl Default for ElecSetup {
@@ -245,6 +256,11 @@ impl Default for ElecSetup {
             wire_start: 1,
             xref_format: "%N".to_string(),
             sheet: String::new(),
+            tag_increment: 1,
+            tag_fallthrough: true,
+            wire_increment: 1,
+            wire_alphabetical: false,
+            wire_empty_first: false,
         }
     }
 }
@@ -340,8 +356,77 @@ fn read_setup(document: &codec::Document) -> ElecSetup {
         if let Some(value) = property("ELEC_SHEET") {
             setup.sheet = value;
         }
+        // The SkyCAD numbering extras have no WD_M attribute of their own.
+        if let Some(value) = property("ELEC_TAGINC") {
+            setup.tag_increment = value.parse().unwrap_or(1).max(1);
+        }
+        if let Some(value) = property("ELEC_TAGFALL") {
+            setup.tag_fallthrough = !value.eq_ignore_ascii_case("No");
+        }
+        if let Some(value) = property("ELEC_WIREINC") {
+            setup.wire_increment = value.parse().unwrap_or(1).max(1);
+        }
+        if let Some(value) = property("ELEC_WIREKIND") {
+            setup.wire_alphabetical = value.eq_ignore_ascii_case("Alphabetical");
+        }
+        if let Some(value) = property("ELEC_WIREEMPTY") {
+            setup.wire_empty_first = value.eq_ignore_ascii_case("Yes");
+        }
     }
     setup
+}
+
+
+/// Store a setup on the drawing as custom properties (the `ELEC_*` contract).
+///
+/// The dialog and `ELECSETUP KEY=VALUE` both write through here, so the two cannot
+/// drift apart, and `read_setup` reads exactly these keys back.
+fn write_setup_properties(document: &mut codec::Document, setup: &ElecSetup) {
+    let values = [
+        ("ELEC_TAGFMT", setup.tag_format.trim().to_string()),
+        ("ELEC_TAGMODE", setup.tag_mode.trim().to_string()),
+        ("ELEC_TAG_START", setup.tag_start.to_string()),
+        ("ELEC_TAG_RSUF", setup.tag_suffixes.join(",")),
+        ("ELEC_WIREFMT", setup.wire_format.trim().to_string()),
+        ("ELEC_WIREMODE", setup.wire_mode.trim().to_string()),
+        ("ELEC_WIRE_START", setup.wire_start.to_string()),
+        ("ELEC_XREFFMT", setup.xref_format.trim().to_string()),
+        ("ELEC_SHEET", setup.sheet.trim().to_string()),
+        ("ELEC_TAGINC", setup.tag_increment.max(1).to_string()),
+        (
+            "ELEC_TAGFALL",
+            if setup.tag_fallthrough { "Yes" } else { "No" }.to_string(),
+        ),
+        ("ELEC_WIREINC", setup.wire_increment.max(1).to_string()),
+        (
+            "ELEC_WIREKIND",
+            if setup.wire_alphabetical {
+                "Alphabetical"
+            } else {
+                "Numerical"
+            }
+            .to_string(),
+        ),
+        (
+            "ELEC_WIREEMPTY",
+            if setup.wire_empty_first { "Yes" } else { "No" }.to_string(),
+        ),
+    ];
+    for (key, value) in values {
+        if let Some(entry) = document
+            .summary_info
+            .custom_properties
+            .iter_mut()
+            .find(|(name, _)| name.trim().eq_ignore_ascii_case(key))
+        {
+            entry.1 = value;
+        } else {
+            document
+                .summary_info
+                .custom_properties
+                .push((key.to_string(), value));
+        }
+    }
 }
 
 
@@ -1660,6 +1745,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                     "ELECBUILT [on|off]            built-project control",
                     "ELECREV SNAPSHOT|LIST|COMPARE|RESTORE  revision control",
                     "ELECSETUP                     show this drawing's electrical setup",
+                    "ELECSETUP TAGINC=2 WIREKIND=Alphabetical ...  store the setup headlessly",
                     "ELECSETUPEDIT                 edit the numbering formats and counters",
                 ],
             ),
@@ -1793,12 +1879,26 @@ fn class_for_reference(tag: &str) -> &'static str {
         self.command_line
             .push_output(&format!("ELECSETUP: {origin}"));
         self.command_line.push_output(&format!(
-            "  tag   {}  mode {}{}  start {}  suffixes {suffixes}",
-            setup.tag_format, setup.tag_mode, fixed, setup.tag_start
+            "  tag   {}  mode {}{}  start {}  step {}  follow through {}  suffixes {suffixes}",
+            setup.tag_format,
+            setup.tag_mode,
+            fixed,
+            setup.tag_start,
+            setup.tag_increment,
+            if setup.tag_fallthrough { "yes" } else { "no" }
         ));
         self.command_line.push_output(&format!(
-            "  wire  {}  mode {}  start {}",
-            setup.wire_format, setup.wire_mode, setup.wire_start
+            "  wire  {}  mode {}  start {}  step {}  numbers {}  empty first {}",
+            setup.wire_format,
+            setup.wire_mode,
+            setup.wire_start,
+            setup.wire_increment,
+            if setup.wire_alphabetical {
+                "alphabetical"
+            } else {
+                "numerical"
+            },
+            if setup.wire_empty_first { "yes" } else { "no" }
         ));
         self.command_line
             .push_output(&format!("  xref  {}  sheet {sheet}", setup.xref_format));
@@ -1824,6 +1924,16 @@ fn class_for_reference(tag: &str) -> &'static str {
             wire_start: setup.wire_start.to_string(),
             xref_format: setup.xref_format,
             sheet: setup.sheet,
+            tag_increment: setup.tag_increment.to_string(),
+            tag_fallthrough: if setup.tag_fallthrough { "Yes" } else { "No" }.to_string(),
+            wire_increment: setup.wire_increment.to_string(),
+            wire_kind: if setup.wire_alphabetical {
+                "Alphabetical"
+            } else {
+                "Numerical"
+            }
+            .to_string(),
+            wire_empty_first: if setup.wire_empty_first { "Yes" } else { "No" }.to_string(),
             error: None,
         });
         self.active_modal = Some(crate::app::ModalKind::ElecSetup);
@@ -1846,9 +1956,14 @@ fn class_for_reference(tag: &str) -> &'static str {
             SetupMsg::TagMode(value) => state.tag_mode = value,
             SetupMsg::TagStart(value) => state.tag_start = value,
             SetupMsg::TagSuffixes(value) => state.tag_suffixes = value,
+            SetupMsg::TagIncrement(value) => state.tag_increment = value,
+            SetupMsg::TagFallthrough(value) => state.tag_fallthrough = value,
             SetupMsg::WireFormat(value) => state.wire_format = value,
             SetupMsg::WireMode(value) => state.wire_mode = value,
             SetupMsg::WireStart(value) => state.wire_start = value,
+            SetupMsg::WireIncrement(value) => state.wire_increment = value,
+            SetupMsg::WireKind(value) => state.wire_kind = value,
+            SetupMsg::WireEmptyFirst(value) => state.wire_empty_first = value,
             SetupMsg::XrefFormat(value) => state.xref_format = value,
             SetupMsg::Sheet(value) => state.sheet = value,
             SetupMsg::Ok => return self.apply_elec_setup(),
@@ -1878,6 +1993,15 @@ fn class_for_reference(tag: &str) -> &'static str {
             Ok(value) => value,
             Err(_) => return self.refuse_elec_setup("Wire start must be a whole number."),
         };
+        // An increment of zero would stamp the same number on every device.
+        let tag_increment: u32 = match state.tag_increment.trim().parse() {
+            Ok(value) if value >= 1 => value,
+            _ => return self.refuse_elec_setup("The tag increment must be 1 or more."),
+        };
+        let wire_increment: u32 = match state.wire_increment.trim().parse() {
+            Ok(value) if value >= 1 => value,
+            _ => return self.refuse_elec_setup("The wire increment must be 1 or more."),
+        };
         if state.tag_format.trim().is_empty() || state.wire_format.trim().is_empty() {
             return self.refuse_elec_setup("The tag and wire formats cannot be empty.");
         }
@@ -1885,33 +2009,32 @@ fn class_for_reference(tag: &str) -> &'static str {
         let wire_mode = mode_letter(&state.wire_mode);
         let i = self.active_tab;
         self.push_undo_snapshot(i, "ELECSETUPEDIT");
-        let document = &mut self.tabs[i].scene.document;
-        let values = [
-            ("ELEC_TAGFMT", state.tag_format.trim().to_string()),
-            ("ELEC_TAGMODE", tag_mode.clone()),
-            ("ELEC_TAG_START", tag_start.to_string()),
-            ("ELEC_TAG_RSUF", state.tag_suffixes.trim().to_string()),
-            ("ELEC_WIREFMT", state.wire_format.trim().to_string()),
-            ("ELEC_WIREMODE", wire_mode.clone()),
-            ("ELEC_WIRE_START", wire_start.to_string()),
-            ("ELEC_XREFFMT", state.xref_format.trim().to_string()),
-            ("ELEC_SHEET", state.sheet.trim().to_string()),
-        ];
-        for (key, value) in values {
-            if let Some(entry) = document
-                .summary_info
-                .custom_properties
-                .iter_mut()
-                .find(|(name, _)| name.trim().eq_ignore_ascii_case(key))
-            {
-                entry.1 = value;
-            } else {
-                document
-                    .summary_info
-                    .custom_properties
-                    .push((key.to_string(), value));
-            }
-        }
+        let stored = ElecSetup {
+            present: true,
+            tag_format: state.tag_format.trim().to_string(),
+            tag_mode: tag_mode.clone(),
+            tag_start,
+            tag_suffixes: state
+                .tag_suffixes
+                .split(',')
+                .map(|part| part.trim().to_string())
+                .filter(|part| !part.is_empty())
+                .collect(),
+            wire_format: state.wire_format.trim().to_string(),
+            wire_mode: wire_mode.clone(),
+            wire_start,
+            xref_format: state.xref_format.trim().to_string(),
+            sheet: state.sheet.trim().to_string(),
+            tag_increment,
+            tag_fallthrough: !state.tag_fallthrough.trim().eq_ignore_ascii_case("No"),
+            wire_increment,
+            wire_alphabetical: state
+                .wire_kind
+                .trim()
+                .eq_ignore_ascii_case("Alphabetical"),
+            wire_empty_first: state.wire_empty_first.trim().eq_ignore_ascii_case("Yes"),
+        };
+        write_setup_properties(&mut self.tabs[i].scene.document, &stored);
         self.tabs[i].dirty = true;
         // Fields showing a custom property read it again.
         let hosts = crate::entities::field::acvar_hosts(&self.tabs[i].scene.document);
@@ -1922,9 +2045,107 @@ fn class_for_reference(tag: &str) -> &'static str {
         self.elec_setup_dialog = None;
         self.active_modal = None;
         self.command_line.push_output(&format!(
-            "ELECSETUPEDIT: tag {} mode {tag_mode} start {tag_start}; wire {} mode {wire_mode} start {wire_start}.",
+            "ELECSETUPEDIT: tag {} mode {tag_mode} start {tag_start} step {tag_increment}; wire {} mode {wire_mode} start {wire_start} step {wire_increment} ({}).",
             state.tag_format.trim(),
-            state.wire_format.trim()
+            state.wire_format.trim(),
+            state.wire_kind.trim(),
+        ));
+        Task::none()
+    }
+
+    /// `ELECSETUP KEY=VALUE ...` stores the numbering contract without a dialog.
+    ///
+    /// The dialog is the human path; scripts and the smoke suite need the same
+    /// contract headlessly, and both write through `write_setup_properties`.
+    pub(super) fn elec_setup_assign(&mut self, i: usize, argument: &str) -> Task<Message> {
+        use crate::ui::window::elec_setup::{mode_label, mode_letter};
+
+        const VALID: &str = "TAGFMT, TAGMODE, TAGSTART, TAGSUF, TAGINC, TAGFALL, \
+WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, XREFFMT, SHEET";
+
+        let mut setup = read_setup(&self.tabs[i].scene.document);
+        let mut error: Option<String> = None;
+        let mut unknown: Vec<String> = Vec::new();
+        for word in argument.split_whitespace() {
+            let Some((key, value)) = word.split_once('=') else {
+                unknown.push(word.to_string());
+                continue;
+            };
+            let key = key
+                .trim()
+                .to_ascii_uppercase()
+                .replace('-', "")
+                .replace('_', "");
+            let value = value.trim();
+            let mut counter = |setup_value: &mut u32| match value.parse::<u32>() {
+                Ok(parsed) if parsed >= 1 => *setup_value = parsed,
+                _ => error = Some(format!("{key} must be a whole number of 1 or more.")),
+            };
+            match key.as_str() {
+                "TAGFMT" => setup.tag_format = value.to_string(),
+                "TAGMODE" => setup.tag_mode = mode_letter(value),
+                "TAGSTART" => counter(&mut setup.tag_start),
+                "TAGSUF" | "TAGRSUF" => {
+                    setup.tag_suffixes = value
+                        .split(',')
+                        .map(|part| part.trim().to_string())
+                        .filter(|part| !part.is_empty())
+                        .collect()
+                }
+                "TAGINC" => counter(&mut setup.tag_increment),
+                "TAGFALL" => setup.tag_fallthrough = !value.eq_ignore_ascii_case("No"),
+                "WIREFMT" => setup.wire_format = value.to_string(),
+                "WIREMODE" => setup.wire_mode = mode_letter(value),
+                "WIRESTART" => counter(&mut setup.wire_start),
+                "WIREINC" => counter(&mut setup.wire_increment),
+                "WIREKIND" => {
+                    setup.wire_alphabetical = value.eq_ignore_ascii_case("Alphabetical")
+                }
+                "WIREEMPTY" => setup.wire_empty_first = value.eq_ignore_ascii_case("Yes"),
+                "XREFFMT" => setup.xref_format = value.to_string(),
+                "SHEET" => setup.sheet = value.to_string(),
+                _ => unknown.push(key.clone()),
+            }
+        }
+        if let Some(message) = error {
+            self.command_line.push_output(&format!("ELECSETUP: {message}"));
+            return Task::none();
+        }
+        if !unknown.is_empty() {
+            self.command_line.push_output(&format!(
+                "ELECSETUP: unknown setting(s) {} — valid: {VALID}.",
+                unknown.join(", ")
+            ));
+            return Task::none();
+        }
+        if setup.tag_format.trim().is_empty() || setup.wire_format.trim().is_empty() {
+            self.command_line
+                .push_output("ELECSETUP: the tag and wire formats cannot be empty.");
+            return Task::none();
+        }
+        self.push_undo_snapshot(i, "ELECSETUP");
+        write_setup_properties(&mut self.tabs[i].scene.document, &setup);
+        self.tabs[i].dirty = true;
+        let hosts = crate::entities::field::acvar_hosts(&self.tabs[i].scene.document);
+        if !hosts.is_empty() {
+            self.tabs[i].scene.update_fields(32, Some(&hosts));
+        }
+        self.tabs[i].scene.bump_geometry();
+        self.command_line.push_output(&format!(
+            "ELECSETUP: tag {} mode {} start {} step {}; wire {} mode {} start {} step {} ({}); saved on this drawing.",
+            setup.tag_format,
+            mode_label(&setup.tag_mode),
+            setup.tag_start,
+            setup.tag_increment,
+            setup.wire_format,
+            mode_label(&setup.wire_mode),
+            setup.wire_start,
+            setup.wire_increment,
+            if setup.wire_alphabetical {
+                "alphabetical"
+            } else {
+                "numerical"
+            },
         ));
         Task::none()
     }
@@ -2226,10 +2447,13 @@ fn class_for_reference(tag: &str) -> &'static str {
             // by tag first so renumbering assigns one number per *device*; numbering each
             // part separately split a device into three and renamed its parts -K2, -K3, -K1.
             let mut devices: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+            // SkyCAD numbers by *symbol* when "Follow through" is off, so a coil and
+            // each of its contacts take their own number instead of sharing the coil's.
+            let fallthrough = setup.tag_fallthrough;
             for index in indices.drain(..) {
                 let key = {
                     let tag = items[index].tag.trim();
-                    if tag.is_empty() {
+                    if tag.is_empty() || !fallthrough {
                         format!("#{index}")
                     } else {
                         tag.to_ascii_uppercase()
@@ -2246,12 +2470,13 @@ fn class_for_reference(tag: &str) -> &'static str {
             // `NumberingFormat` already speaks the ACADE `%F`/`%N` language, so the settings
             // only have to be copied across rather than re-implemented.
             let mut format = NumberingFormat::tag(&prefix);
-            if setup.present {
-                if !setup.tag_format.trim().is_empty() {
-                    format.pattern = setup.tag_format.clone();
-                }
-                format.start = setup.tag_start.max(1);
+            // `read_setup` already merges the WD_M block with the properties the setup
+            // dialog writes, so copy the contract across whether or not a WD_M exists.
+            if !setup.tag_format.trim().is_empty() {
+                format.pattern = setup.tag_format.clone();
             }
+            format.start = setup.tag_start.max(1);
+            format.increment = setup.tag_increment.max(1);
             // A drawing that came from AutoCAD Electrical says whether its references are
             // fixed. When they are, an existing tag must keep its number: renumbering the
             // customer's real `M326` to `M1` would silently rewrite a released drawing.
@@ -2566,17 +2791,25 @@ fn class_for_reference(tag: &str) -> &'static str {
         // AutoCAD Electrical numbers wires the way its `WIREFMT` says.
         let setup = read_setup(&self.tabs[i].scene.document);
         let mut format = NumberingFormat::wire();
-        if setup.present {
-            if !setup.wire_format.trim().is_empty() {
-                format.pattern = setup.wire_format.clone();
-            }
-            format.start = setup.wire_start.max(1);
+        if !setup.wire_format.trim().is_empty() {
+            format.pattern = setup.wire_format.clone();
         }
+        format.start = setup.wire_start.max(1);
+        format.increment = setup.wire_increment.max(1);
+        if setup.wire_alphabetical {
+            format.kind = ::elec::Kind::Alphabetical;
+        }
+        // SkyCAD's "Empty first value" leaves the first conductor unnumbered.
+        let skip_first = setup.wire_empty_first;
         let mut updates: Vec<(codec::Handle, String)> = Vec::new();
         let mut creates: Vec<(String, f64, f64)> = Vec::new();
         let mut report: Vec<String> = Vec::new();
 
         for (ordinal, (_row, _column, net_id)) in ordered.iter().enumerate() {
+            if skip_first && ordinal == 0 {
+                report.push("  (first net left blank)".to_string());
+                continue;
+            }
             let net = netlist.nets.iter().find(|net| net.id == *net_id).unwrap();
             let number = format.value(ordinal as u32);
             let Some(first_wire) = net.wires.first().copied() else {
@@ -3306,6 +3539,7 @@ fn class_for_reference(tag: &str) -> &'static str {
 
         // Either clone the instance already on the sheet, or build one from the block's
         // attribute definitions when the geometry exists but has never been placed here.
+        let cloned = template.is_some();
         let mut insert = match template {
             Some(template) => {
                 let delta = codec::types::Vector3::new(
@@ -3392,6 +3626,25 @@ fn class_for_reference(tag: &str) -> &'static str {
                 insert
             }
         };
+
+        // A clone arrives carrying the template's handle, and its attributes carry the
+        // template's attribute handles. A drawing cannot hold two objects under one handle:
+        // reports that resolve entities by handle would see the last instance everywhere.
+        // Strip the identity so the scene allocates a fresh one for the insert and for every
+        // attribute (`adopt_attributes`).
+        if cloned {
+            insert.common.handle = codec::Handle::NULL;
+            insert.common.owner_handle = codec::Handle::NULL;
+            insert.seqend_handle = None;
+            for attribute in &mut insert.attributes {
+                attribute.common.handle = codec::Handle::NULL;
+                attribute.common.owner_handle = codec::Handle::NULL;
+                if let Some(model) = &mut attribute.embedded_mtext {
+                    model.common.handle = codec::Handle::NULL;
+                    model.common.owner_handle = codec::Handle::NULL;
+                }
+            }
+        }
 
         for attribute in &mut insert.attributes {
             let name = attribute.tag.trim().to_ascii_uppercase();
@@ -6414,6 +6667,9 @@ fn class_for_reference(tag: &str) -> &'static str {
                 if let Some(argument) = cmd.strip_prefix("ELECWIRELABELS ") {
                     return Some(self.elec_wire_labels(i, Some(argument.trim())));
                 }
+                if let Some(argument) = cmd.strip_prefix("ELECSETUP ") {
+                    return Some(self.elec_setup_assign(i, argument.trim()));
+                }
                 if let Some(argument) = cmd.strip_prefix("ELECBUILT ") {
                     return Some(self.elec_built(Some(argument)));
                 }
@@ -7238,6 +7494,11 @@ mod elec_setup_tests {
             ("ELEC_TAG_START".to_string(), "7".to_string()),
             ("ELEC_WIREFMT".to_string(), "W%N".to_string()),
             ("ELEC_WIRE_START".to_string(), "42".to_string()),
+            ("ELEC_TAGINC".to_string(), "5".to_string()),
+            ("ELEC_TAGFALL".to_string(), "No".to_string()),
+            ("ELEC_WIREINC".to_string(), "2".to_string()),
+            ("ELEC_WIREKIND".to_string(), "Alphabetical".to_string()),
+            ("ELEC_WIREEMPTY".to_string(), "Yes".to_string()),
         ];
         let setup = read_setup(&document);
         assert_eq!(setup.tag_format, "%N");
@@ -7246,6 +7507,12 @@ mod elec_setup_tests {
         assert!(setup.references_are_fixed());
         assert_eq!(setup.wire_format, "W%N");
         assert_eq!(setup.wire_start, 42);
+        // The SkyCAD numbering extras round-trip through the same properties.
+        assert_eq!(setup.tag_increment, 5);
+        assert!(!setup.tag_fallthrough);
+        assert_eq!(setup.wire_increment, 2);
+        assert!(setup.wire_alphabetical);
+        assert!(setup.wire_empty_first);
     }
 
     #[test]
@@ -7264,13 +7531,45 @@ mod elec_setup_tests {
         let _ = app.update(Message::ElecSetup(
             crate::ui::window::elec_setup::SetupMsg::WireStart("5".into()),
         ));
+        let _ = app.update(Message::ElecSetup(
+            crate::ui::window::elec_setup::SetupMsg::TagIncrement("3".into()),
+        ));
+        let _ = app.update(Message::ElecSetup(
+            crate::ui::window::elec_setup::SetupMsg::TagFallthrough("No".into()),
+        ));
+        let _ = app.update(Message::ElecSetup(
+            crate::ui::window::elec_setup::SetupMsg::WireKind("Alphabetical".into()),
+        ));
+        let _ = app.update(Message::ElecSetup(
+            crate::ui::window::elec_setup::SetupMsg::WireEmptyFirst("Yes".into()),
+        ));
         let _ = app.update(Message::ElecSetup(crate::ui::window::elec_setup::SetupMsg::Ok));
         assert!(app.elec_setup_dialog.is_none());
         let setup = read_setup(&app.tabs[i].scene.document);
         assert_eq!(setup.tag_format, "%F%N%S");
         assert_eq!(setup.tag_start, 12);
         assert_eq!(setup.wire_start, 5);
+        assert_eq!(setup.tag_increment, 3);
+        assert!(!setup.tag_fallthrough);
+        assert!(setup.wire_alphabetical);
+        assert!(setup.wire_empty_first);
         assert!(app.tabs[i].dirty);
+    }
+
+    #[test]
+    fn a_zero_increment_is_refused() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let _ = app.update(Message::Command("ELECSETUPEDIT".into()));
+        let _ = app.update(Message::ElecSetup(
+            crate::ui::window::elec_setup::SetupMsg::WireIncrement("0".into()),
+        ));
+        let _ = app.update(Message::ElecSetup(crate::ui::window::elec_setup::SetupMsg::Ok));
+        let state = app.elec_setup_dialog.as_ref().expect("dialog stays open");
+        assert_eq!(
+            state.error.as_deref(),
+            Some("The wire increment must be 1 or more.")
+        );
     }
 
     #[test]

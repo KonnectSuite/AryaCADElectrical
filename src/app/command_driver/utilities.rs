@@ -1109,6 +1109,9 @@ impl OpenCADStudio {
             || tokens[0].eq_ignore_ascii_case("ELECCABLELIST")
             || tokens[0].eq_ignore_ascii_case("ELECCABLEDEL")
             || tokens[0].eq_ignore_ascii_case("ELECWIRELABELS")
+            // `ELECSETUP TAGINC=2 ...` acts on its whole line: probing the bare word
+            // printed the defaults and left the argument queued as the next input.
+            || tokens[0].eq_ignore_ascii_case("ELECSETUP")
             || tokens[0].eq_ignore_ascii_case("ELECREV")
             || tokens[0].eq_ignore_ascii_case("ELECBUILT")
             || tokens[0].eq_ignore_ascii_case("ELECPROJNEW")

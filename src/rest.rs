@@ -728,10 +728,18 @@ pub(crate) fn plan(method: &str, rest: &[&str], request: &HttpRequest) -> Plan {
             fields: body,
             created: 201,
         },
-        ("POST", ["commands"]) => Plan::Run {
-            request: json!({"op":"run","cmd":body["cmd"]}),
-            created: 200,
-        },
+        ("POST", ["commands"]) => {
+            let mut request = json!({"op":"run","cmd":body["cmd"]});
+            // The GUI bridge serves one tab per document and refuses a run
+            // without `document_id`; forward the caller's like save/undo do.
+            if let Some(id) = body["document_id"].as_u64() {
+                request["document_id"] = json!(id);
+            }
+            Plan::Run {
+                request,
+                created: 200,
+            }
+        }
         ("POST", ["undo"]) | ("POST", ["redo"]) => {
             let op = if rest == ["undo"] { "undo" } else { "redo" };
             let mut request = json!({"op":op});

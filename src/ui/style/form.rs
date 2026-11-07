@@ -204,6 +204,33 @@ where
         .into()
 }
 
+/// A `label : dropdown` row whose closed state names what choosing does.
+///
+/// `labeled_pick_list` leaves an unselected list blank, which reads as a broken
+/// field; a preset/apply dropdown needs a caption that says it is a shortcut
+/// rather than a value.
+pub fn labeled_pick_list_placeholder<'a, T>(
+    label: Cow<'static, str>,
+    options: Vec<T>,
+    placeholder: &'a str,
+    on_select: impl Fn(T) -> Message + 'a,
+    width: Length,
+) -> Element<'a, Message>
+where
+    T: ToString + Clone + PartialEq + 'a,
+{
+    let list = pick_list(None::<T>, options, |value| value.to_string())
+        .placeholder(placeholder)
+        .on_select(on_select)
+        .text_size(12)
+        .padding([3, 6])
+        .width(width);
+    row![row_label(label), list]
+        .spacing(8)
+        .align_y(iced::Center)
+        .into()
+}
+
 /// A `label : dropdown` row that renders read-only when `enabled` is false.
 pub fn labeled_pick_list_enabled<'a, T>(
     label: Cow<'static, str>,

@@ -9,7 +9,9 @@
 use crate::app::Message;
 use crate::ui::modal::ModalSizing;
 use crate::ui::style::common::muted_style;
-use crate::ui::style::form::{dialog_button, hdivider, labeled_field, labeled_pick_list};
+use crate::ui::style::form::{
+    dialog_button, hdivider, labeled_field, labeled_pick_list, labeled_pick_list_placeholder,
+};
 use iced::widget::{column, container, row, text, Space};
 use iced::{Background, Border, Element, Length};
 
@@ -25,6 +27,13 @@ pub struct State {
     pub wire_start: String,
     pub xref_format: String,
     pub sheet: String,
+    /// SkyCAD parity: step between numbers, contacts follow their coil, wire
+    /// numbering kind, and whether the first wire is left blank.
+    pub tag_increment: String,
+    pub tag_fallthrough: String,
+    pub wire_increment: String,
+    pub wire_kind: String,
+    pub wire_empty_first: String,
     pub error: Option<String>,
 }
 
@@ -34,12 +43,26 @@ pub enum SetupMsg {
     TagMode(String),
     TagStart(String),
     TagSuffixes(String),
+    TagIncrement(String),
+    TagFallthrough(String),
     WireFormat(String),
     WireMode(String),
     WireStart(String),
+    WireIncrement(String),
+    WireKind(String),
+    WireEmptyFirst(String),
     XrefFormat(String),
     Sheet(String),
     Ok,
+}
+
+/// Two-value pick lists for the SkyCAD numbering options.
+pub fn yes_no_options() -> Vec<String> {
+    vec!["Yes".to_string(), "No".to_string()]
+}
+
+pub fn wire_kind_options() -> Vec<String> {
+    vec!["Numerical".to_string(), "Alphabetical".to_string()]
 }
 
 /// The mode pick list shows the letter with its meaning; `mode_letter` maps the
@@ -87,10 +110,10 @@ pub(crate) fn view(state: &State, sizing: ModalSizing) -> Element<'_, Message> {
             |value| Message::ElecSetup(SetupMsg::TagFormat(value)),
             field_width,
         ),
-        labeled_pick_list(
+        labeled_pick_list_placeholder(
             "Preset".into(),
             tag_presets,
-            None::<String>,
+            "Use a preset...",
             |value| Message::ElecSetup(SetupMsg::TagFormat(value)),
             preset_width,
         ),
@@ -113,7 +136,23 @@ pub(crate) fn view(state: &State, sizing: ModalSizing) -> Element<'_, Message> {
             |value| Message::ElecSetup(SetupMsg::TagSuffixes(value)),
             field_width,
         ),
-        text("Comma-separated per-sheet suffixes, e.g. A,B.")
+        row![
+            labeled_field(
+                "Increment".into(),
+                &state.tag_increment,
+                |value| Message::ElecSetup(SetupMsg::TagIncrement(value)),
+                60.0,
+            ),
+            labeled_pick_list(
+                "Follow through".into(),
+                yes_no_options(),
+                Some(state.tag_fallthrough.clone()),
+                |value| Message::ElecSetup(SetupMsg::TagFallthrough(value)),
+                Length::Fixed(120.0),
+            ),
+        ]
+        .spacing(14),
+        text("Comma-separated per-sheet suffixes, e.g. A,B. Follow through numbers a contact with its coil.")
             .size(10)
             .style(muted_style),
     ]
@@ -134,10 +173,10 @@ pub(crate) fn view(state: &State, sizing: ModalSizing) -> Element<'_, Message> {
             |value| Message::ElecSetup(SetupMsg::WireFormat(value)),
             field_width,
         ),
-        labeled_pick_list(
+        labeled_pick_list_placeholder(
             "Preset".into(),
             wire_presets,
-            None::<String>,
+            "Use a preset...",
             |value| Message::ElecSetup(SetupMsg::WireFormat(value)),
             preset_width,
         ),
@@ -153,6 +192,29 @@ pub(crate) fn view(state: &State, sizing: ModalSizing) -> Element<'_, Message> {
             &state.wire_start,
             |value| Message::ElecSetup(SetupMsg::WireStart(value)),
             field_width,
+        ),
+        row![
+            labeled_field(
+                "Increment".into(),
+                &state.wire_increment,
+                |value| Message::ElecSetup(SetupMsg::WireIncrement(value)),
+                60.0,
+            ),
+            labeled_pick_list(
+                "Numbers".into(),
+                wire_kind_options(),
+                Some(state.wire_kind.clone()),
+                |value| Message::ElecSetup(SetupMsg::WireKind(value)),
+                Length::Fixed(120.0),
+            ),
+        ]
+        .spacing(14),
+        labeled_pick_list(
+            "Empty first value".into(),
+            yes_no_options(),
+            Some(state.wire_empty_first.clone()),
+            |value| Message::ElecSetup(SetupMsg::WireEmptyFirst(value)),
+            Length::Fixed(160.0),
         ),
         text("%F is the drawing family, %S the sheet, %N the next number.")
             .size(10)
