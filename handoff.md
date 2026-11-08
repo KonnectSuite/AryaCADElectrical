@@ -574,3 +574,47 @@ genuinely differ: coils as circles, `| |` / `|/|` contacts, zigzag fuse). Regene
 IO_MODULE, HMI, NETWORK_SWITCH, JUNCTION, DIN_RAIL, WIRE_DUCT, WIRE_LABEL, CABLE_ENTRY,
 SERVO_MOTOR, GEAR_MOTOR, connector variants) are still hand-drawn; `ELECLIST` prints the block
 name as the class for library-less symbols; `EXPORTPDF` has no clickable cross-reference links.
+
+## 18. Round 29 (2026-11-08): the NECA pipeline, and why it needed a batch exporter
+
+**The problem.** The NEC half of the library has to come from the published set: NECA 100-2024
+ships 396 `.dwg` symbols in section folders (`1.0 Wiring Methods` … `14.0 Nurse Call System`,
+plus `Schedules` and `One-Line Riser Diagrams`). This app already reads DWG, so `--export`
+converted one file correctly - but the app is single-instance and every launch costs 5-10 s of
+GPU probe, so a folder took tens of minutes and 396 files took hours. A `Start-Process -Wait`
+loop converted **1 of 108** files in 45 minutes before it was killed.
+
+**The fix.** `--export-dir SRC DST` (`src/cli.rs`, `src/main.rs`,
+`src/app/automation.rs::export_dir_headless`) walks the tree once inside one process, mirroring
+relative folders and writing `.dxf` beside each source name. The whole archive now converts in
+one run:
+
+```
+export-dir: 396 of 396 drawing(s) -> target\tmp\neca2024\dxf2
+```
+
+Commit `c2448bd` "Convert a folder of drawings in one process, not one process per drawing".
+
+**The importer.** `tools/neca_symbols.py` reads those DXFs (they are plain `LINE` /
+`LWPOLYLINE` art, no blocks or inserts), normalises each to the 10-unit canvas and derives two
+pins from the outermost lead ends, because NECA drawings carry no pin objects the way
+QElectroTech's `<terminal>` does. Output: `tools/neca_shapes.json`, **340 shapes** keyed by
+NECA code (`5.0/5-001`, `11.0/11-001`, …). The remaining 56 drawings are schedules,
+abbreviation sheets and one-line risers with no geometry to import.
+
+**Where the NEC library stands.** Converted and normalised, not yet named: the mapping from
+NECA code to our block name still has to be written (`5.0` motors/controls — 45 files,
+`11.0` breakers and GFCI — 63, `8.0` distribution, `1.0` wiring methods, `4.0` switches and
+sensors, `12.0` miscellaneous). Once that table exists, `make_library.py --standard nec`
+prefers the NECA shapes, the 25 blocks without any published equivalent stay hand-drawn, and
+both standards regenerate from one catalogue.
+
+**Verification at this point.** `cargo check --release` clean, `cargo build --release -j 4`
+4 m 51 s, `export-dir` 396/396, smoke suite still 116/116 on the IEC library.
+
+**Next.** (1) Name the 340 shapes section by section, starting with `5.0` and `11.0`, which
+cover contactors, overloads, breakers and GFCIs; (2) wire the mapping into `make_library.py`
+and regenerate `library/nec`; (3) rebuild, run the smoke suite, re-shoot
+`docs/screenshots/ecad-symbol-library.png`; (4) add the generator pair the user asked for —
+`tools/symbol_maker.py` for single blocks and an `ELECMAKEMODULE` flow for N-channel
+components, so neither library needs a hand-edited table again.
