@@ -1,0 +1,2613 @@
+{
+ "1-001": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Conduit concealed in finished areas, exposed in unfinished areas.",
+  "section": "1.0",
+  "token": "1.001"
+ },
+ "1-002": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Conduit concealed in or under floor slab.",
+  "section": "1.0",
+  "token": "1.002"
+ },
+ "1-003": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Non-rigid raceway system.",
+  "section": "1.0",
+  "token": "1.003"
+ },
+ "1-004": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Normal/emergency circuit.",
+  "section": "1.0",
+  "token": "1.004"
+ },
+ "1-005": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Emergency battery system wiring, minimum 10 AWG.",
+  "section": "1.0",
+  "token": "1.005"
+ },
+ "1-006": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Heat trace.",
+  "section": "1.0",
+  "token": "1.006"
+ },
+ "1-007": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Underfloor power raceway.",
+  "section": "1.0",
+  "token": "1.007"
+ },
+ "1-008": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Underfloor telecommunications raceway.",
+  "section": "1.0",
+  "token": "1.008"
+ },
+ "1-009": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Underfloor raceway for power and telecommunications.",
+  "section": "1.0",
+  "token": "1.009"
+ },
+ "1-010": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Underfloor signal raceway.",
+  "section": "1.0",
+  "token": "1.010"
+ },
+ "1-011": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Underfloor raceway for power, telephone, and data.",
+  "section": "1.0",
+  "token": "1.011"
+ },
+ "1-012": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Undercarpet flat conductor cable (FCC) wiring system, power.",
+  "section": "1.0",
+  "token": "1.012"
+ },
+ "1-013": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Undercarpet flat conductor cable (FCC) wiring system, tele- phone",
+  "section": "1.0",
+  "token": "1.013"
+ },
+ "1-014": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Undercarpet flat conductor cable (FCC) wiring system, data. UCD 1.1 Raceways\u2014Indicators",
+  "section": "1.0",
+  "token": "1.014"
+ },
+ "1-101": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Conduit stub. Terminate with bushing or cap if underground.",
+  "section": "1.0",
+  "token": "1.101"
+ },
+ "1-102": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Conduit turning up.",
+  "section": "1.0",
+  "token": "1.102"
+ },
+ "1-103": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Conduit turning down.",
+  "section": "1.0",
+  "token": "1.103"
+ },
+ "1-104": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Indicates trade size 2 or 53 mm conduit with (4) 1 AWG and (1) 6 AWG ground.",
+  "section": "1.0",
+  "token": "1.104"
+ },
+ "1-105": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Indicates (2) trade size 2 or 53 mm conduits with (4) 1 AWG and (1) 6 AWG ground conductors in each conduit.",
+  "section": "1.0",
+  "token": "1.105"
+ },
+ "1-106": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Homerun to panelboard. Number of arrows indicates number of circuits. (Example: Homerun to panel L211 CKTS. #1 and #3.)",
+  "section": "1.0",
+  "token": "1.106"
+ },
+ "1-107": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Flexible connection to equipment.",
+  "section": "1.0",
+  "token": "1.107"
+ },
+ "1-108": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Direct connection to equipment. 1.109 Branch circuit, full hashes indicate ungrounded-\u201chot\u201d (or switch-leg) circuit conductors. Half hashes indicates grounded neutral circuit conductors. (No hashes indicates 1 hot and 1 neutral.) Dots indicate grounding conductors. Equipment bond size U.N.O. \u201cIG\u201d indicates an isolated grounding conductor. SZ 2C,4#1&1#6GND. OR SZ 53cm,4#1&1#6GND. (2)SZ 2C,4#1&1#6GND. OR (2)SZ 53cm,4#1&1#6GND. L211\u20131,3 IG 1.2 Raceways\u2014Boxes and Busways",
+  "section": "1.0",
+  "token": "1.108"
+ },
+ "1-201": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Underfloor raceway system junction box, flush floor mounted.",
+  "section": "1.0",
+  "token": "1.201"
+ },
+ "1-202": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Power pole with devices indicated in the specifications and on the drawing, \u201cP\u201d indicates type, \u201c2\u201d indicates circuit.",
+  "section": "1.0",
+  "token": "1.202"
+ },
+ "1-203": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Telecom pole with devices indicated in the specifications and on the drawings, \u201cT\u201d indicates type.",
+  "section": "1.0",
+  "token": "1.203"
+ },
+ "1-204": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Telecom/Power pole with devices indicated in the specifications and on the drawings, \u201cTP\u201d indicates type, \u201c2\u201d indicates power circuit.",
+  "section": "1.0",
+  "token": "1.204"
+ },
+ "1-205": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Pull box\u2014size as indicated or required.",
+  "section": "1.0",
+  "token": "1.205"
+ },
+ "1-206": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Cabletray size as indicated.",
+  "section": "1.0",
+  "token": "1.206"
+ },
+ "1-207": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Cabletray size as indicated, concealed.",
+  "section": "1.0",
+  "token": "1.207"
+ },
+ "1-208": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Busway with cable tap box, rating and type as indicated on drawings.",
+  "section": "1.0",
+  "token": "1.208"
+ },
+ "1-209": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Busway with plug-in device as indicated, shown with fused dis- connect.",
+  "section": "1.0",
+  "token": "1.209"
+ },
+ "1-210": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Busway feeding up.",
+  "section": "1.0",
+  "token": "1.210"
+ },
+ "1-211": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Busway feeding down.",
+  "section": "1.0",
+  "token": "1.211"
+ },
+ "1-212": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Busway expansion joint.",
+  "section": "1.0",
+  "token": "1.212"
+ },
+ "1-213": {
+  "alt": false,
+  "file_section": "1.0",
+  "name": "Wireway, size as indicated or required. J P 2 T TP 2 TR TR TR TR TR TR BW BW BW CTB BW BW BW F BW WW WW WW PB OR 2.0 Luminaires (Lighting Fixtures)",
+  "section": "1.0",
+  "token": "1.213"
+ },
+ "10-001": {
+  "alt": false,
+  "file_section": "10.0",
+  "name": "Underground feeder.",
+  "section": "10.0",
+  "token": "10.001"
+ },
+ "10-002": {
+  "alt": false,
+  "file_section": "10.0",
+  "name": "Underground telephone.",
+  "section": "10.0",
+  "token": "10.002"
+ },
+ "10-003": {
+  "alt": false,
+  "file_section": "10.0",
+  "name": "Underground fire alarm.",
+  "section": "10.0",
+  "token": "10.003"
+ },
+ "10-004": {
+  "alt": false,
+  "file_section": "10.0",
+  "name": "Underground television (CATV).",
+  "section": "10.0",
+  "token": "10.004"
+ },
+ "10-005": {
+  "alt": false,
+  "file_section": "10.0",
+  "name": "Above ground pole mounted electrical.",
+  "section": "10.0",
+  "token": "10.005"
+ },
+ "10-006": {
+  "alt": false,
+  "file_section": "10.0",
+  "name": "Above ground pole mounted telephone.",
+  "section": "10.0",
+  "token": "10.006"
+ },
+ "10-007": {
+  "alt": false,
+  "file_section": "10.0",
+  "name": "Above ground pole mounted fire alarm.",
+  "section": "10.0",
+  "token": "10.007"
+ },
+ "10-008": {
+  "alt": false,
+  "file_section": "10.0",
+  "name": "Above ground pole mounted television (CATV).",
+  "section": "10.0",
+  "token": "10.008"
+ },
+ "10-009": {
+  "alt": false,
+  "file_section": "10.0",
+  "name": "Manhole.",
+  "section": "10.0",
+  "token": "10.009"
+ },
+ "10-010": {
+  "alt": false,
+  "file_section": "10.0",
+  "name": "Handhole.",
+  "section": "10.0",
+  "token": "10.010"
+ },
+ "10-011": {
+  "alt": false,
+  "file_section": "10.0",
+  "name": "Utility pole. \u201cPxxxx\u201d indicates pole number.",
+  "section": "10.0",
+  "token": "10.011"
+ },
+ "10-012": {
+  "alt": false,
+  "file_section": "10.0",
+  "name": "Combination pre-fabricated manholes for power and tel/data systems. \u201cE\u201d = denotes power, \u201cT\u201d = denotes tel/data.",
+  "section": "10.0",
+  "token": "10.012"
+ },
+ "10-013": {
+  "alt": false,
+  "file_section": "10.0",
+  "name": "\u201cJ\u201d hook. UF E UT UFA UTV T F TV HH E T MH Pxxxx P 11.0 Schematic and One-line Diagram Symbols",
+  "section": "10.0",
+  "token": "10.013"
+ },
+ "11-001": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Capacitor.",
+  "section": "11.0",
+  "token": "11.001"
+ },
+ "11-002": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Circuit breaker (open). \u201cxxAF\u201d indicates frame size. \u201cyyAT\u201d indicates trip size.",
+  "section": "11.0",
+  "token": "11.002"
+ },
+ "11-003": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Circuit breaker (enclosed). \u201cxxAF indicates frame size. \u201cyyAT\u201d indicates trip size.",
+  "section": "11.0",
+  "token": "11.003"
+ },
+ "11-004": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Primary draw out type circuit breaker. \u201cxxAF\u201d indi- cates frame size. \u201cyyAT\u201d indicates trip size.",
+  "section": "11.0",
+  "token": "11.004"
+ },
+ "11-005": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Low voltage draw out type circuit breaker. \u201cxxAF\u201d indicates frame size. \u201cyyAT\u201d indicates trip size.",
+  "section": "11.0",
+  "token": "11.005"
+ },
+ "11-006": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Low voltage draw out type circuit breaker with current limiting fuses. \u201cxxAF\u201d indicates frame size. \u201cyyAT\u201d indicates trip size. \u201czzA\u201d indicates fuse rating.",
+  "section": "11.0",
+  "token": "11.006"
+ },
+ "11-007": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Contact, normally open (NO) (\u201cTC\u201d\u2014with timed closing).",
+  "section": "11.0",
+  "token": "11.007"
+ },
+ "11-008": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Contact, normally closed (NC). (\u201cTO\u201d\u2014with timed opening).",
+  "section": "11.0",
+  "token": "11.008"
+ },
+ "11-009": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Current transformer cabinet.",
+  "section": "11.0",
+  "token": "11.009"
+ },
+ "11-010": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Fused cutout. \u201czzA\u201d indicates fuse rating.",
+  "section": "11.0",
+  "token": "11.010"
+ },
+ "11-011": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Disconnect switch unfused.",
+  "section": "11.0",
+  "token": "11.011"
+ },
+ "11-012": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Disconnect switch air break with fuse. \u201czzA\u201d indi- cates fused rating.",
+  "section": "11.0",
+  "token": "11.012"
+ },
+ "11-013": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Fuse. \u201czzA\u201d indicates fuse rating. xxAF yyAT xxAF yyAT xxAF yyAT xxAF yyAT xxAF yyAT zzA CT zzA zzA zzA zzA 11.0 Schematic and One-line Diagram Symbols",
+  "section": "11.0",
+  "token": "11.013"
+ },
+ "11-014": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Overload relay.",
+  "section": "11.0",
+  "token": "11.014"
+ },
+ "11-015": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Grounding connection\u2014system and or equipment.",
+  "section": "11.0",
+  "token": "11.015"
+ },
+ "11-016": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Kirk key interlock system. \u201c2\u201d\u2014indicates related kirk keys.",
+  "section": "11.0",
+  "token": "11.016"
+ },
+ "11-017": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Lightning arrester and grounding to protect all phases.",
+  "section": "11.0",
+  "token": "11.017"
+ },
+ "11-018": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Motor and label. \u201c3\u201d denotes horsepower.",
+  "section": "11.0",
+  "token": "11.018"
+ },
+ "11-019": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Motor operator for circuit breakers or switches.",
+  "section": "11.0",
+  "token": "11.019"
+ },
+ "11-020": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Network protector.",
+  "section": "11.0",
+  "token": "11.020"
+ },
+ "11-021": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Panelboard.",
+  "section": "11.0",
+  "token": "11.021"
+ },
+ "11-022": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Pothead.",
+  "section": "11.0",
+  "token": "11.022"
+ },
+ "11-023": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Stress cone.",
+  "section": "11.0",
+  "token": "11.023"
+ },
+ "11-024": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Resistor.",
+  "section": "11.0",
+  "token": "11.024"
+ },
+ "11-025": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Shunt trip.",
+  "section": "11.0",
+  "token": "11.025"
+ },
+ "11-026": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Magnetic starter with NEMA size indicated. K2 xx-xx-x-x MO PANEL ST 1 3 11.0 Schematic and One-line Diagram Symbols",
+  "section": "11.0",
+  "token": "11.026"
+ },
+ "11-027": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Ground fault circuit interrupter, personnel protec- tion.",
+  "section": "11.0",
+  "token": "11.027"
+ },
+ "11-028": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Generator.",
+  "section": "11.0",
+  "token": "11.028"
+ },
+ "11-029": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Transformer, dry type. Unless otherwise indicated.",
+  "section": "11.0",
+  "token": "11.029"
+ },
+ "11-030": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Potential transformer. \u201c3\u201d\u2014indicates quantity.",
+  "section": "11.0",
+  "token": "11.030"
+ },
+ "11-031": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Current transformer. \u201c3\u201d\u2014indicates quantity, \u201c400- 5A\u201d indicates ratio.",
+  "section": "11.0",
+  "token": "11.031"
+ },
+ "11-032": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "3-phase, 3-wire delta connection.",
+  "section": "11.0",
+  "token": "11.032"
+ },
+ "11-033": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Corner grounded delta.",
+  "section": "11.0",
+  "token": "11.033"
+ },
+ "11-034": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "3-phase, 4-wire wye connection (grounded neutral).",
+  "section": "11.0",
+  "token": "11.034"
+ },
+ "11-035": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Adjustable frequency drive. 3 references detail number.",
+  "section": "11.0",
+  "token": "11.035"
+ },
+ "11-036": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Busduct or busway.",
+  "section": "11.0",
+  "token": "11.036"
+ },
+ "11-037": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Wireway. GFCI G xxx KW xxxV-x\u00f8 GENERATOR OOOO OOOO Tx xxx KVA xxxV x\u00f8 xW PRI xxxY/xxxV x\u00f8 xW SEC (3) OO OO (3) 400-5A AFD xx-x-x 3 XX\u2019 xxxV BUSDUCT XX\u2019 xxxV WIREWAY 11.1 One-line Diagram Symbols\u2014Switchboard Meters",
+  "section": "11.0",
+  "token": "11.037"
+ },
+ "11-101": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Customer meter.",
+  "section": "11.0",
+  "token": "11.101"
+ },
+ "11-102": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Totalizing watt hour meter.",
+  "section": "11.0",
+  "token": "11.102"
+ },
+ "11-103": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Varmeter.",
+  "section": "11.0",
+  "token": "11.103"
+ },
+ "11-104": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Ammeter.",
+  "section": "11.0",
+  "token": "11.104"
+ },
+ "11-105": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Ammeter phase switch.",
+  "section": "11.0",
+  "token": "11.105"
+ },
+ "11-106": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Demand meter.",
+  "section": "11.0",
+  "token": "11.106"
+ },
+ "11-107": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Ground detector.",
+  "section": "11.0",
+  "token": "11.107"
+ },
+ "11-108": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Synchroscope.",
+  "section": "11.0",
+  "token": "11.108"
+ },
+ "11-109": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Power factor meter.",
+  "section": "11.0",
+  "token": "11.109"
+ },
+ "11-110": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Frequency meter.",
+  "section": "11.0",
+  "token": "11.110"
+ },
+ "11-111": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Voltmeter.",
+  "section": "11.0",
+  "token": "11.111"
+ },
+ "11-112": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Volt-ammeter.",
+  "section": "11.0",
+  "token": "11.112"
+ },
+ "11-113": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Voltmeter phase switch. CM TWM A AS D GD P PF Hz V VA VS VAR 11.1 One-line Diagram Symbols\u2014Switchboard Meters",
+  "section": "11.0",
+  "token": "11.113"
+ },
+ "11-114": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Wattmeter.",
+  "section": "11.0",
+  "token": "11.114"
+ },
+ "11-115": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Watthour meter. WM W 11.2 Schematic and One-line Diagram Symbols\u2014Switches",
+  "section": "11.0",
+  "token": "11.115"
+ },
+ "11-201": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Transfer switch.",
+  "section": "11.0",
+  "token": "11.201"
+ },
+ "11-202": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Push button (start).",
+  "section": "11.0",
+  "token": "11.202"
+ },
+ "11-203": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Push button (stop).",
+  "section": "11.0",
+  "token": "11.203"
+ },
+ "11-204": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Limit switch.",
+  "section": "11.0",
+  "token": "11.204"
+ },
+ "11-205": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Flow switch.",
+  "section": "11.0",
+  "token": "11.205"
+ },
+ "11-206": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Pressure switch.",
+  "section": "11.0",
+  "token": "11.206"
+ },
+ "11-207": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Float switch.",
+  "section": "11.0",
+  "token": "11.207"
+ },
+ "11-208": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Pilot light. Letter indicates color. Example: R=red.",
+  "section": "11.0",
+  "token": "11.208"
+ },
+ "11-209": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "Solenoid. N L E AUTO/MANUAL TRANSFER SWTICH xxA-xP R 12.0 Miscellaneous",
+  "section": "11.0",
+  "token": "11.209"
+ },
+ "11-210": {
+  "alt": false,
+  "file_section": "11.0",
+  "name": "11-210",
+  "section": "11.0",
+  "token": "11.210"
+ },
+ "12-001": {
+  "alt": false,
+  "file_section": "12.0",
+  "name": "Ground bar. Length to be noted.",
+  "section": "12.0",
+  "token": "12.001"
+ },
+ "12-002": {
+  "alt": false,
+  "file_section": "12.0",
+  "name": "Mechanical equipment tag number, refer to mechan- ical equipment schedule.",
+  "section": "12.0",
+  "token": "12.002"
+ },
+ "12-003": {
+  "alt": false,
+  "file_section": "12.0",
+  "name": "Equipment tag number, refer to equipment sched- ule, \u201cK\u201d\u2014indicates kitchen, \u201cC\u201d\u2014indicates comput- er.",
+  "section": "12.0",
+  "token": "12.003"
+ },
+ "12-004": {
+  "alt": false,
+  "file_section": "12.0",
+  "name": "Note symbol, refer to note as indicated.",
+  "section": "12.0",
+  "token": "12.004"
+ },
+ "12-005": {
+  "alt": false,
+  "file_section": "12.0",
+  "name": "Feeder number, refer to \u201cfeeder schedule\u201d.",
+  "section": "12.0",
+  "token": "12.005"
+ },
+ "12-006": {
+  "alt": false,
+  "file_section": "12.0",
+  "name": "Typical/similar room or area layout symbol. \u201cA\u201d\u2014 indicates layout type.",
+  "section": "12.0",
+  "token": "12.006"
+ },
+ "12-007": {
+  "alt": false,
+  "file_section": "12.0",
+  "name": "Typical layout symbol\u2014refer to layout type. \u201cA\u201d on drawing E-2, circuits to be used are as indicated.",
+  "section": "12.0",
+  "token": "12.007"
+ },
+ "12-008": {
+  "alt": false,
+  "file_section": "12.0",
+  "name": "Detail header, indicating detail No. 2 on drawing E-4.",
+  "section": "12.0",
+  "token": "12.008"
+ },
+ "12-009": {
+  "alt": false,
+  "file_section": "12.0",
+  "name": "Section identifier, indicating section \u201cB\u201d on drawing E-2. Left or right arrow.",
+  "section": "12.0",
+  "token": "12.009"
+ },
+ "12-010": {
+  "alt": false,
+  "file_section": "12.0",
+  "name": "Detail identifier, indicating detail No. 2 on drawing E-4. G K2 B 1 A A E\u20132 CKT/ P21\u20135,7 DESCRIPTION SCALE: N.T.S. 2 E\u20134 t B E\u20132 2 E\u20134 t AC 2 13.0 Abbreviations Abbreviation Description Abbreviation Description 1P One pole 2P Two pole 3P Three pole 4P Four pole 1P1W One pole, one wire 1P2W One pole, two wire 2P2W Two pole, two wire 2P3W Two pole, three wire 3P2W Three pole, two wire 3P3W Three pole, three wire 3P4W Three pole, four wire 4P4W Four pole, four wire A Ampere AC Alternating current AF AMP frame AFCI Arc-fault circuit interrupter AFF Above finished floor AFG Above finished grade AHU Air handling unit AIC Ampere interrupting capacity AL Aluminum AS AMP switch AT AMP trip ARCH Architect ATS Automatic transfer switch AUD Audiometer box connection AUX Auxiliary A/ V Audio visual AWG American wire gauge BLDG Building C Conduit (Generic term for raceway. Provide as specified.) CAM Camera CAT Catalog CATV Cable television CB Circuit breaker CKT Circuit COL Column C.T. Current transformer CU Copper Centerline DC Direct Current Delta DET Detector DISC Disconnect DIST Distribution DN Down DWG Drawing DT Dusttight(*) E Wired on emergency circuit EA Each EC Electrical contractor EF Exhaust fan ELEC Electric(al) EMER Emergency EMT Electric metallic tubing ENCL Enclosure EOL End of line EPO Emergency power off EQUIP Equipment EWC Electric water cooler EWH Electric water heater EXIST. Existing F Flush FA Fire alarm FBO Furnished by others FC Fire protection contractor FCU Fan coil unit FDN Foundation FIXT Fixture FLA Full load amps FLEX Flexible FLR Floor FMC Flexible metallic conduit FRE Fiberglass reinforced epoxy conduit FURN Furniture GC General contractor GEN Generator GFCI Ground fault circuit interrupter GFPE Ground fault protection equipment GND Grounded GRC Galvanized rigid conduit HGT Height HP Horsepower HV High voltage HVAC Heating, ventilating and air conditioning HW Hot water Hz Hertz (cycle per second) IAM Individual addressable module CL 13.0 Abbreviations Abbreviation Description Abbreviation Description IC Intercommunication ID Identification IG Isolated ground IMC Intermediate metal conduit IPS Interruptible power supply IR Passive infrared JB Junction box KCMIL Thousand circular mils K/O Knock-out KVA Kilovolt ampere KVAR Kilovolt ampere reactive KW Kilowatt LFMC Liquidtight flexible metallic conduit LFNC Liquidtight flexible nonmetallic conduit LP Lighting panelboard LS Limit switch LTG Lighting LV Low voltage MAINT Maintained MAU Make-up air unit MAX Maximum MC Metal clad cable MCB Main circuit breaker MCC Motor control center MD Motorized damper MDP Main distribution panel MISC Miscellaneous MFR Manufacturer MLO Main lugs only MOD Motor operated disconnect switch MTD Mounted MTG Mounting MTS Manual transfer switch N North N/A Not applicable NC Normally closed NEC National Electrical Code NF Non-fused NIC Not in contract NL Night light NM Nonmetallic sheathed cable NO Normally open NRTL Nationally recognized testing lab # NTS Not to scale O2 Oxygen OHD Overhead door operator P Pole PB Pull box PC Plumbing system contractor PE Primary service PH \u00f8 Phase PNL Panel(board) PIV Post indicating valve PP Power panel PR Pair PRI Primary PT Potential transformer PVC Polyvinyl chloride conduit PWR Power RE Remove existing REC Recessed RECP Receptacle REF Roof exhaust fan RL Relocate existing RM Room RMC Rigid metal conduit RT Raintight(*) RTU Rooftop unit RSC Rigid steel conduit S Surface mounted SCH Schedule SD Smoke damper SE Secondary electric service SEC Secondary SIG Signal SN Solid neutral SP Spare SPKR Speaker SPL Splice SS Stainless steel STP Shielded twisted pair STL Carbon steel SUSP Suspended SW Switch SWBD Switchboard (*) It is recommended that the appropriate NEMA designation be used in place of this abbreviation. 13.0 Abbreviations Abbreviation Description Abbreviation Description SWGR Switchgear TC Telephone cabinet TCI Telecommunications cabling installer TCP Temperature control panel TEL/DATA Telephone/data TEL Telephone TEMP Temporary TERM Terminal(s) TV Television TYP Typical UC Under counter UG Underground UH Unit heater U.O.I. Unless otherwise indicated UPS Uninterruptible power source UTIL Utility UTP Unshielded twisted pair V Volt VT Vaportight(*) Y Wye W Watt W/ With WH Watthour WP Weatherproof WP Weatherproof WT Watertight(*) XFMR Transformer XP Explosion proof(*) ZAM Zone adapter module +72 Mounting units to centerline above finished floor or grade",
+  "section": "12.0",
+  "token": "12.010"
+ },
+ "13.0 Abbreviations": {
+  "alt": false,
+  "file_section": "13.0",
+  "name": "13.0 Abbreviations",
+  "section": "13.0",
+  "token": "13.0 Abbreviations"
+ },
+ "14-001": {
+  "alt": false,
+  "file_section": "14.0",
+  "name": "Nurse call annunicator.",
+  "section": "14.0",
+  "token": "14.001"
+ },
+ "14-002": {
+  "alt": false,
+  "file_section": "14.0",
+  "name": "Emergency pull cord station.",
+  "section": "14.0",
+  "token": "14.002"
+ },
+ "14-003": {
+  "alt": false,
+  "file_section": "14.0",
+  "name": "Dome light with tone.",
+  "section": "14.0",
+  "token": "14.003"
+ },
+ "14-004": {
+  "alt": false,
+  "file_section": "14.0",
+  "name": "Nurse call\u2014patient station. \u201cA\u201d = denotes connec- tion to remote annunicator in emergency room. \u201cPC\u201d = denotes patient pull station. \u201cSA\u201d = denotes staff assist station.",
+  "section": "14.0",
+  "token": "14.004"
+ },
+ "14-005": {
+  "alt": false,
+  "file_section": "14.0",
+  "name": "Duty station.",
+  "section": "14.0",
+  "token": "14.005"
+ },
+ "14-006": {
+  "alt": false,
+  "file_section": "14.0",
+  "name": "Staff station.",
+  "section": "14.0",
+  "token": "14.006"
+ },
+ "14-007": {
+  "alt": false,
+  "file_section": "14.0",
+  "name": "Nurse call system central cabinet. 14.0 Nurse Call System NC NCA DS SS NCC E 1. Scope Annex A: Alternate Fire Safety Symbols (Annexes are not a part of the standard) Not all of the following fire safety symbols are in common use on electrical construction drawings at this time. They are reprinted here for reference with permission from NFPA 170-2012, Fire Safety Symbols (ANSI). This excerpt does not represent the official position of the National Fire Protection Association, which is repre- sented only by the standard in its entirety. The following symbols are copyright \u00a92013, National Fire Protection Association, Quincy, MA. 5-5 Symbols for Control Panels 505.1 Control Panel Basic shape. (a) Fire Alarm Control Panel (b) Fire System Annunciator (c) Fire Alarm Transponder or Transmitter (d) Elevator Status/Recall (e) Fire Alarm Communicator (f) Halon Control Panel (g) Control panel for heating, ventilation, air conditioning, exhaust stairwell pressurization or similar equipment. 5-6 Symbols Related to Means of Egress",
+  "section": "14.0",
+  "token": "14.007"
+ },
+ "2-001": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Luminaire: (drawn to approximate shape and to scale or large enough for clarity).",
+  "section": "2.0",
+  "token": "2.001"
+ },
+ "2-002": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Luminaire strip type (length drawn to scale).",
+  "section": "2.0",
+  "token": "2.002"
+ },
+ "2-003": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Fluorescent strip luminaire.",
+  "section": "2.0",
+  "token": "2.003"
+ },
+ "2-004": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Fixture\u2014double or single head spotlight.",
+  "section": "2.0",
+  "token": "2.004"
+ },
+ "2-005": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Exit luminaire fixture. Arrows and exit face as indicated on drawings (mounting heights to be determined by job specifications).",
+  "section": "2.0",
+  "token": "2.005"
+ },
+ "2-006": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Light track. Length as indicated on the drawings, with number of fixtures as indicated on drawings, and as indicated in the fixture schedule.",
+  "section": "2.0",
+  "token": "2.006"
+ },
+ "2-007": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Emergency battery remote luminaire heads.",
+  "section": "2.0",
+  "token": "2.007"
+ },
+ "2-008": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Emergency battery unit with luminaire heads.",
+  "section": "2.0",
+  "token": "2.008"
+ },
+ "2-009": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Single luminaire pole mounted site luminaire fix- ture.",
+  "section": "2.0",
+  "token": "2.009"
+ },
+ "2-010": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Twin luminaire pole mounted site luminaire fix- ture.",
+  "section": "2.0",
+  "token": "2.010"
+ },
+ "2-011": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Roadway luminaire\u2014cobra head.",
+  "section": "2.0",
+  "token": "2.011"
+ },
+ "2-012": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Bollard type site luminaire.",
+  "section": "2.0",
+  "token": "2.012"
+ },
+ "2-013": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Outdoor wallpack. 2.1 Luminaire Fixtures\u2014Basic Modifiers Mounting 2.2 Luminaire Fixtures\u2014Basic Modifiers Orientation",
+  "section": "2.0",
+  "token": "2.013"
+ },
+ "2-100": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Surface mounted fixture. Recessed fixture. Wall mounted fixture. Suspended, pendant, chain, stem or cable hung fixture. Pole mounted with arm. Pole mounted on top. In-ground or floor mounted. (Box around sym- bol.)",
+  "section": "2.0",
+  "token": "2.100"
+ },
+ "2-200": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Accent/directional arrow, with or without tail. (Drawn from photometric center in direction of optics or photometric orientation.) Directional aiming line. (Drawn from photomet- ric center and may be extended to actual aiming point if required.) Track mounted; length, luminaire types and quan- tities as shown. (Track length drawn to scale.) 2.3 Luminaire Fixtures\u2014Emergency 2.4 Luminaire Fixtures\u2014Extended Modifiers",
+  "section": "2.0",
+  "token": "2.200"
+ },
+ "2-300": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Luminaire providing emergency illumination. (Filled in.)",
+  "section": "2.0",
+  "token": "2.300"
+ },
+ "2-401": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Standard designations for all luminaire fixtures. \u201cA\u201d = Fixture type, refer to fixture schedule \u201cNL\u201d = Unswitched night light \u201c2\u201d = Circuit number \u201ca\u201d = Switch control",
+  "section": "2.0",
+  "token": "2.401"
+ },
+ "2-402": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Mounting height.",
+  "section": "2.0",
+  "token": "2.402"
+ },
+ "2-403": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Louvers.",
+  "section": "2.0",
+  "token": "2.403"
+ },
+ "2-404": {
+  "alt": false,
+  "file_section": "2.0",
+  "name": "Recessed, emergency fixture. A A NL a a 2 2 +1.2m (48 in.) NOTE: Modifiers are shown with specific base symbols for clarity. Each modifier can be used with any of the base symbols. 3.0 Outlets and Receptacles",
+  "section": "2.0",
+  "token": "2.404"
+ },
+ "3-001": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Floor duplex receptacle. F=flush MTD. S=surface MTD.",
+  "section": "3.0",
+  "token": "3.001"
+ },
+ "3-002": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Duplex convenience receptacle. 20A 125V.",
+  "section": "3.0",
+  "token": "3.002"
+ },
+ "3-003": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Duplex convenience receptacle on e mergency/standby circuit. Specify panelboard and circuit.",
+  "section": "3.0",
+  "token": "3.003"
+ },
+ "3-004": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Single convenience receptacle.",
+  "section": "3.0",
+  "token": "3.004"
+ },
+ "3-005": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Single convenience receptacle on emergency/standby circuit. Specify panelboard and circuit.",
+  "section": "3.0",
+  "token": "3.005"
+ },
+ "3-006": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Double duplex convenience receptacle.",
+  "section": "3.0",
+  "token": "3.006"
+ },
+ "3-007": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Double duplex convenience receptacle on emergency/standby circuit. Specify panelboard and circuit.",
+  "section": "3.0",
+  "token": "3.007"
+ },
+ "3-008": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Multi-outlet assembly with outlets on centers as indicated on the drawings and in the specifications, mounted 150 mm (6 in.) above counter or at height as directed, A - indicates type.",
+  "section": "3.0",
+  "token": "3.008"
+ },
+ "3-009": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Multioutlet assembly, devices as indicated.",
+  "section": "3.0",
+  "token": "3.009"
+ },
+ "3-010": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Special receptacle - typical notation: 1\u2014 indicates example \u201c1\u201d = __A, ___/___V., _ Pole, _ Wire, _ NEMA __-__ \u201c2\u201d = __A, ___/___V., _ Pole, _ Wire, _ NEMA __-__ \u201c3\u201d = __A, ___/___V., _ Pole, _ Wire, _ NEMA __-__",
+  "section": "3.0",
+  "token": "3.010"
+ },
+ "3-011": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Clock hanger outlet recessed mounted 2.5m (8\u2019) AFF or 200 mm (8 in.) below ceiling as appropriate and as directed.",
+  "section": "3.0",
+  "token": "3.011"
+ },
+ "3-012": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Flush mounted floor box, adjustable, with both power and voice/data receptacles.",
+  "section": "3.0",
+  "token": "3.012"
+ },
+ "3-013": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Junction box. \u201cAxBxC\u201d indicates dimensions of junc- tion box in either inches or centimeters. F EP\u20132 CKT.1 EP\u20132 CKT.3 EP\u20132 CKT.5 A 1 1 OR F 1 J J AxBxC 3.0 Outlets and Receptacles",
+  "section": "3.0",
+  "token": "3.013"
+ },
+ "3-014": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Duples receptacle ceiling mounted 20A 125V.",
+  "section": "3.0",
+  "token": "3.014"
+ },
+ "3-015": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Double duplex receptacle\u2014ceiling mounted. Receptacles And Outlets Typical Outlet Notations: \u201ca\u201d = Switched outlet, \u201ca\u201d\u2014indicates switch control. \u201cB\u201d = Pedestal mounted on bench top. \u201cBF\u201d = Below floor. \u201cC\u201d = Mounted 150mm (6 in.) above counter of 1.0 m (42 in.) AFF. Coordinate exact mounting height with architectural drawings. \u201cCLG\u201d = Ceiling mounted. \u201cD\u201d = Dedicated device on individual branch circuit. \u201cE\u201d = Emergency. \u201cEXIST.\u201d = Existing device/equipment. \u201cF\u201d = Flush floor box with fire/smoke rated penetration. \u201cGFCI\u201d = Ground fault circuit interupter, personal protection. \u201cGFPE\u201d = Ground fault protection of equipment. \u201cH\u201d = Horizontally mounted. \u201cIG\u201d = Isolated ground receptacle with separate green ground conductor to isolated ground bus in panel. \u201cM\u201d = Modular furniture service\u2014provide flexible connection, coordinate exact location with furniture plans. \u201cPED\u201d = Pedestal mounted with two hour fire/smoke rated penetration. \u201cPT\u201d = Poke thru with two hour fire/smoke rated penetration. \u201cS\u201d = Surface mounted floor box. \u201cSP\u201d = Surge protection receptacle. \u201cT\u201d = Tamper resistant safety receptacle. \u201cTL\u201d = Twist-lock. \u201cW\u201d = Wall mounted device at 1.2m (48 in.) AFF unless otherwise indicated. \u201cWP\u201d = Weatherproof receptacle with \u201cNRTL\u201d listed coverplate for wet location with plug installed. MTD. 1.2m (48 in.) AFF unless otherwise indicated. +XX = Dimensioned height. 4.0 Switches and Sensors",
+  "section": "3.0",
+  "token": "3.015"
+ },
+ "3-016": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "3-016",
+  "section": "3.0",
+  "token": "3.016"
+ },
+ "4-001": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Single pole switch.",
+  "section": "4.0",
+  "token": "4.001"
+ },
+ "4-002": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Double pole switch.",
+  "section": "4.0",
+  "token": "4.002"
+ },
+ "4-003": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Three way switch.",
+  "section": "4.0",
+  "token": "4.003"
+ },
+ "4-004": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Four way switch.",
+  "section": "4.0",
+  "token": "4.004"
+ },
+ "4-005": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Switch control (lower case letter).",
+  "section": "4.0",
+  "token": "4.005"
+ },
+ "4-006": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Circuit breaker switch.",
+  "section": "4.0",
+  "token": "4.006"
+ },
+ "4-007": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Single pole/double throw switch.",
+  "section": "4.0",
+  "token": "4.007"
+ },
+ "4-008": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Glow switch toggle, glows in off position.",
+  "section": "4.0",
+  "token": "4.008"
+ },
+ "4-009": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Horizontally mounted\u2014with on position to the left.",
+  "section": "4.0",
+  "token": "4.009"
+ },
+ "4-010": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Key operated switch.",
+  "section": "4.0",
+  "token": "4.010"
+ },
+ "4-011": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Key operated switch with pilot light on when switch is on.",
+  "section": "4.0",
+  "token": "4.011"
+ },
+ "4-012": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Low voltage switch.",
+  "section": "4.0",
+  "token": "4.012"
+ },
+ "4-013": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Low voltage master switch. $ or S $2 or S2 $3 or S3 $4 or S4 $a or Sa $CB or SCB $DT or SDT $G or SG $H or SH $K or SK $KP or SKP $LV or SLV $LM or SLM 4.0 Switches and Sensors",
+  "section": "4.0",
+  "token": "4.013"
+ },
+ "4-014": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Momentary contact switch.",
+  "section": "4.0",
+  "token": "4.014"
+ },
+ "4-015": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Switch with pilot light on when switch is on.",
+  "section": "4.0",
+  "token": "4.015"
+ },
+ "4-016": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Timer switch.",
+  "section": "4.0",
+  "token": "4.016"
+ },
+ "4-017": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Weatherproof single pole switch.",
+  "section": "4.0",
+  "token": "4.017"
+ },
+ "4-018": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Dimmer switch. Rated 1000W, unless otherwise indi- cated. \u201cLV\u201d = low voltage \u201cFL\u201d = fluorescent.",
+  "section": "4.0",
+  "token": "4.018"
+ },
+ "4-019": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Occupancy sensor, wall mounted with off\u2014auto override switch.",
+  "section": "4.0",
+  "token": "4.019"
+ },
+ "4-020": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Occupancy sensor\u2014ceiling mounted, \u201cP\u201d\u2014indicates multiple switches wired in parallel.",
+  "section": "4.0",
+  "token": "4.020"
+ },
+ "4-021": {
+  "alt": false,
+  "file_section": "4.0",
+  "name": "Motorized projection screen raise/lower switch. $MC or SMC $PROJ or SPROJ $P or SP $WP or SWP D $T or ST M P M 5.0 Motorized and HVAC Equipment\u2014Controls",
+  "section": "4.0",
+  "token": "4.021"
+ },
+ "5-001": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Disconnect switch, unfused type, size as indicated on drawings. \u201cxxA\u201d indicates amperage.",
+  "section": "5.0",
+  "token": "5.001"
+ },
+ "5-002": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Disconnect switch, fused type, size as indicated on drawings. \u201cxxAF\u201d indicates frame size. \u201cxxAT\u201d indi- cates trip size.",
+  "section": "5.0",
+  "token": "5.002"
+ },
+ "5-003": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Enclosed circuit breaker, size as indicated. \u201cxxAF\u201d indicates frame size. \u201cxxAT\u201d indicates trip size.",
+  "section": "5.0",
+  "token": "5.003"
+ },
+ "5-004": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Magnetic contactor, size as indicated on drawings.",
+  "section": "5.0",
+  "token": "5.004"
+ },
+ "5-005": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Adjustable speed drive.",
+  "section": "5.0",
+  "token": "5.005"
+ },
+ "5-006": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Motor starter switch.",
+  "section": "5.0",
+  "token": "5.006"
+ },
+ "5-007": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Magnetic motor starter. \u201cRV\u201d indicates reduced voltage. Starter size as indicated.",
+  "section": "5.0",
+  "token": "5.007"
+ },
+ "5-008": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Combination magnetic starter and disconnect switch. Starter size and fuse rating as indicated.",
+  "section": "5.0",
+  "token": "5.008"
+ },
+ "5-009": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Automatic temperature control panel.",
+  "section": "5.0",
+  "token": "5.009"
+ },
+ "5-010": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Equipment control panel.",
+  "section": "5.0",
+  "token": "5.010"
+ },
+ "5-011": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Relay.",
+  "section": "5.0",
+  "token": "5.011"
+ },
+ "5-012": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Toggle disconnect switch.",
+  "section": "5.0",
+  "token": "5.012"
+ },
+ "5-013": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Thermal motor switch with handle guard and pad- lock capability. \u201cP\u201d\u2014indicates pilot light. xxA F xxAF yyAT CB xxAF yyAT C ASD $M RV NEMA x F NEMA x xxA\u2013xP ATC CP R TD TS P 5.0 Motorized and HVAC Equipment\u2014Controls",
+  "section": "5.0",
+  "token": "5.013"
+ },
+ "5-014": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Emergency power shunt trip.",
+  "section": "5.0",
+  "token": "5.014"
+ },
+ "5-015": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Pushbutton.",
+  "section": "5.0",
+  "token": "5.015"
+ },
+ "5-016": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "On/off pushbutton station.",
+  "section": "5.0",
+  "token": "5.016"
+ },
+ "5-017": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Three function pushbutton switch (up/down/stop).",
+  "section": "5.0",
+  "token": "5.017"
+ },
+ "5-018": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Aquastat.",
+  "section": "5.0",
+  "token": "5.018"
+ },
+ "5-019": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Firestat.",
+  "section": "5.0",
+  "token": "5.019"
+ },
+ "5-020": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Humidistat.",
+  "section": "5.0",
+  "token": "5.020"
+ },
+ "5-021": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Line voltage thermostat.",
+  "section": "5.0",
+  "token": "5.021"
+ },
+ "5-022": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Low voltage thermostat.",
+  "section": "5.0",
+  "token": "5.022"
+ },
+ "5-023": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Thermostat.",
+  "section": "5.0",
+  "token": "5.023"
+ },
+ "5-024": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Solenoid valve.",
+  "section": "5.0",
+  "token": "5.024"
+ },
+ "5-025": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Time switch.",
+  "section": "5.0",
+  "token": "5.025"
+ },
+ "5-026": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Air flow switch. A F H T T T SV TS L LV AF 5.0 Motorized and HVAC Equipment\u2014Controls",
+  "section": "5.0",
+  "token": "5.026"
+ },
+ "5-027": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Electric/pneumatic switch.",
+  "section": "5.0",
+  "token": "5.027"
+ },
+ "5-028": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Hand/off/automatic selector switch.",
+  "section": "5.0",
+  "token": "5.028"
+ },
+ "5-029": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Flow switch.",
+  "section": "5.0",
+  "token": "5.029"
+ },
+ "5-030": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Irrigation control.",
+  "section": "5.0",
+  "token": "5.030"
+ },
+ "5-031": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Limit switch.",
+  "section": "5.0",
+  "token": "5.031"
+ },
+ "5-032": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Pneumatic/electric switch.",
+  "section": "5.0",
+  "token": "5.032"
+ },
+ "5-033": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Photo cell or photo control.",
+  "section": "5.0",
+  "token": "5.033"
+ },
+ "5-034": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Pressure switch. EP HOA FS IC LS PE PC PS 5.1 Motorized and HVAC Equipment",
+  "section": "5.0",
+  "token": "5.034"
+ },
+ "5-101": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Capacitor.",
+  "section": "5.0",
+  "token": "5.101"
+ },
+ "5-102": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Motor \u201c3\u201d\u2014indicates horsepower.",
+  "section": "5.0",
+  "token": "5.102"
+ },
+ "5-103": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Motorized damper.",
+  "section": "5.0",
+  "token": "5.103"
+ },
+ "5-104": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Baseboard heater.",
+  "section": "5.0",
+  "token": "5.104"
+ },
+ "5-105": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Baseboard heater with box.",
+  "section": "5.0",
+  "token": "5.105"
+ },
+ "5-106": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Resistance heater.",
+  "section": "5.0",
+  "token": "5.106"
+ },
+ "5-107": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Unit type heater.",
+  "section": "5.0",
+  "token": "5.107"
+ },
+ "5-108": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Ceiling fan.",
+  "section": "5.0",
+  "token": "5.108"
+ },
+ "5-109": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Paddle fan.",
+  "section": "5.0",
+  "token": "5.109"
+ },
+ "5-110": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Wall fan.",
+  "section": "5.0",
+  "token": "5.110"
+ },
+ "5-111": {
+  "alt": false,
+  "file_section": "5.0",
+  "name": "Water heater. 3 D WH 6.0 Security",
+  "section": "5.0",
+  "token": "5.111"
+ },
+ "5-5.1": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "5-5.1",
+  "section": "NFPA",
+  "token": "5-5.1"
+ },
+ "5-6.1": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Emergency Light, Battery-Powered Indicate if light head(s) [lamp(s)] is remote from battery.",
+  "section": "NFPA",
+  "token": "5-6.1"
+ },
+ "5-6.2": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Illuminated Exit Indicate direction of flow for the face. Sign, Single Face",
+  "section": "NFPA",
+  "token": "5-6.2"
+ },
+ "5-6.3": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Illuminated Exit Indicate direction of flow for each face. Sign, Double Face",
+  "section": "NFPA",
+  "token": "5-6.3"
+ },
+ "5-6.4": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Combined Battery- Powered Emergency Indicate if light head(s) [lamp(s)] is Light and Illuminated remote from battery. Indicate direction of Exit Sign flow for the face. FCP FSA FSA ESR FAC HCP HVA Fire Safety Symbols 5-7 Symbols for Fire Alarms, Detection, and Related Equipment 5-7.1 Signal Initiating Devices and Switches.",
+  "section": "NFPA",
+  "token": "5-6.4"
+ },
+ "5-7.1.1": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Manual Stations Basic shape (a) Halon (b) Carbon Dioxide (c) Dry Chemical (d) Foam (e) Wet Chemical (f) Pull Station 5-7.1.1.1* Fire Service or (a) Accessible Emergency Telephone Station (b) Jack (c) Hand-set",
+  "section": "NFPA",
+  "token": "5-7.1.1"
+ },
+ "5-7.1.1.1": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "5-7.1.1.1",
+  "section": "NFPA",
+  "token": "5-7.1.1.1"
+ },
+ "5-7.1.1.2": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Abort Switch",
+  "section": "NFPA",
+  "token": "5-7.1.1.2"
+ },
+ "5-7.1.2": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Automatic Detection and Supervisory Devices Basic shape 5-7.1.1.1\u2020 Heat Detector (a) Combination\u2014Rate of Rise (Thermal Detector) and Fixed Temperature (b) Rate Compensation (c) Fixed Temperature (d) Rate of Rise Only Referent (Synonym) Symbol Comments H C D F W P R/F R/C F R A J H \u2020 Symbol orientation not to be changed. 5-7.1.2.2\u2020 Smoke Detector (a) Photoelectric Products of Combustion Detector (b) Ionization Products of Combustion Detector (c) Beam Transmitter (d) Beam Receiver",
+  "section": "NFPA",
+  "token": "5-7.1.2"
+ },
+ "5-7.1.2.1": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "5-7.1.2.1",
+  "section": "NFPA",
+  "token": "5-7.1.2.1"
+ },
+ "5-7.1.2.10": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Valve with Tamper Detector/Switch 5-7.2 Indicating Appliances",
+  "section": "NFPA",
+  "token": "5-7.1.2.10"
+ },
+ "5-7.1.2.2": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "5-7.1.2.2",
+  "section": "NFPA",
+  "token": "5-7.1.2.2"
+ },
+ "5-7.1.2.3": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Smoke Detector in Duct",
+  "section": "NFPA",
+  "token": "5-7.1.2.3"
+ },
+ "5-7.1.2.4": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Gas Detector 5-7.1.2.5\u2020 Flame Detector Indicate ultraviolet, infrared, or (Flicker Detector) visible radiation-type detector.",
+  "section": "NFPA",
+  "token": "5-7.1.2.4"
+ },
+ "5-7.1.2.5": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "5-7.1.2.5",
+  "section": "NFPA",
+  "token": "5-7.1.2.5"
+ },
+ "5-7.1.2.6": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Flow Detector/Switch 5-7.1.2.7\u2020 Pressure Detector/Switch Specify type\u2014water, low air, high air, etc. 5-7.1.2.8\u2020 Level Detector/Switch",
+  "section": "NFPA",
+  "token": "5-7.1.2.6"
+ },
+ "5-7.1.2.7": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "5-7.1.2.7",
+  "section": "NFPA",
+  "token": "5-7.1.2.7"
+ },
+ "5-7.1.2.8": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "5-7.1.2.8",
+  "section": "NFPA",
+  "token": "5-7.1.2.8"
+ },
+ "5-7.1.2.9": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Tamper Detector Alternate term\u2014tamper switch.",
+  "section": "NFPA",
+  "token": "5-7.1.2.9"
+ },
+ "5-7.2.1": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Speaker/Horn (a) Mini-Horn (Flicker Detector)",
+  "section": "NFPA",
+  "token": "5-7.2.1"
+ },
+ "5-7.2.2": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Bell (Gong)",
+  "section": "NFPA",
+  "token": "5-7.2.2"
+ },
+ "5-7.2.3": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Water Motor Alarm Shield optional. (Water Motor Gong) \u2020 Symbol orientation not to be changed. M P I BT BR s s s s s s s s s s s s s s Referent (Synonym) Symbol Comments \u2020 Symbol orientation not to be changed. Referent (Synonym) Symbol Comments",
+  "section": "NFPA",
+  "token": "5-7.2.3"
+ },
+ "5-7.2.4": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Horn with Light (a) Horn with light as separate assembly. (b) Horn with light as one assembly. 5-7.2.5\u2020 Light (Lamp, Signal Light, Indicator Lamp, Strobe) 5-7.3 Related Equipment",
+  "section": "NFPA",
+  "token": "5-7.2.4"
+ },
+ "5-7.2.5": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "5-7.2.5",
+  "section": "NFPA",
+  "token": "5-7.2.5"
+ },
+ "5-7.3.1": {
+  "alt": false,
+  "file_section": "NFPA",
+  "name": "Door Holder s s 1. Scope This annex provides examples of typical schedules, riser diagrams, and one-line diagrams that are included in electrical construction drawings. A given set of drawings will not necessarily include every typical example included here. This annex includes the following: Type Page Panel schedule 49 Lighting fixture schedule 50 Transformer schedule 51 Mechanical equipment schedule 52 Feeder schedule 53 Electrical one-line diagram 54 Fire alarm riser 55 Annex B: Typical Risers, One-line Diagrams, and Schedules Panel: _____________ Voltage: ___________________ Phase: _____________ Wires: ___________ Mains: __________________________ Mount: _______________________ Enclosure: __________________________ Location: _______________________________________________ Load Bkr. Ckt. Ckt. Bkr. Load Load Name (VA) Frame Trip No. A B C No. Trip Frame (VA) Load Name 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 Phase A: _____________________ Phase B: _____________________ Phase C: _____________________ Total VA: ________________________ Mfg./Type: ________________________ Modifications: __________________________ Amps RMS. Sym.: ________________________________ Panel Schedule Type Manufacturer Catalog No. Mounting Lamps Lighting Fixture Schedule PRI. Sec. Ground Catalog Conductor Sec. Conductor Conductor Designation Manufacturer KVA \u00f8 PRI. Volts Size/No. Volts Size/No. Size/No. Mounting Transformer Schedule Min. Max. Min. Remarks/ Wire Fuse CCT Disconnect Designation Quantity Volt \u00f8 FLA HP KVA Size/Type Size Amps Type Mechanical Equipment Schedule No. No. Runs No. Wires/Size Insul. CU/AL Conduit Origin Termination Feeder Schedule # Electrical One-Line Diagram FROM EMERG. SWITCHGEAR 3EH01B6 3EHA1B6B 1200A 480V, 3W+G, 3P 65,000A RMS SYM CLOSING AND WITHSTAND RATING FROM 480V UNIT SUBSTATION #8 1200A EMERGENCY DISTRIBUTION SWITCHBOARD 3EH01C6B, 1200A, 480V, 3\u00d8, 3W+G, 65,000 IER 1 600A 800A 800A 800A 240A 400A 240A EMERGENCY DISTRIBUTION SWITCHBOARD 3EHM8D8B, 800A, 480V, 3\u00d8, 3W+G, 65,000 IER 250/M RVNR 22,000 IER 125 C-26-1-1 AFD 36-2-2 250 F-36-2-2 150 P-32-5-2 AFD 32-5-2 150A 3EHT185 75 KVA 480V 3\u00d8 3W PRI 120/208V 3\u00d8 4W SEC 3EHL1B5 OOOO OOOO 800 EMERGENCY DISTRIBUTION SWITCHBOARD 3EHM1D4B, 800A, 480V, 3\u00d8, 3W+G, 65,000 IER 300A AFD 32-2-2 150 EF-32-2-2 240A AFD 32-2-4 125 EF-32-2-4 240A 240A SPARE SPARE 1 3 1 2 2 3 4 9 10 11 5 6 600 EMERGENCY DISTRIBUTION SWITCHBOARD 3EHM1D4D, 600A, 480V, 3\u00d8, 3W+G, 65,000 IER 240A AFD 32-2-8 125 EF-32-2-8 240A AFD 32-2-10 125 EF-32-2-10 240A SPARE 1 3 7 8 N E L 125A SPARE 4 5 Fire Alarm Riser BUILDING 7 H F 01 56 H F 01 57 H F 01 58 H F 01 59 H F 01 60 H F 01 61 16GA 1PR TWISTED ABOVE CEILING S D 01 31 RTS 16GA 5C S 01 32 S D 01 33 RTS S D 01 34 RTS S D 01 35 RTS S D 01 36 S D 01 37 RTS 16GA 4C S D 01 38 RTS S 01 46 S 01 45 S 01 44 S 01 43 S 01 42 S 01 41 S 01 40 S 01 39 RTS 16GA 5C 14GA 2C (24V PWR) S 01 47 S 01 48 S 01 49 S 01 50 02 06 S 01 51 S 01 52 S 01 53 D F 16GA 1PR TWISTED S D 01 55 RTS 16GA 5C S 01 54 14GA 2C (24V PWR) BUILDING 5 H F H F H F H F H F H F H F H F S A 16GA 1PR TWISTED H F ABOVE CEILING S D S S S D S S H F S S S S 16GA 1PR TWISTED S 01 14 S S S S S D F S S S F S S D H F FS 16GA 2C TS 16GA 2C S 01 01 S D 01 02 02 06 F S S D S S D H F 16GA 1PR TWISTED F F F F F EOL HORN, STROBE CIR #3 F F F F F F F L L HORN, STROBE CIR #4 EOL 14GA 2C (A/V CIRCUIT #2) 14GA 2C (A/V CIRCUIT #1) F F F F F F F F F F F F F F EOL 14GA 2C (A/V CIRCUIT #4) EOL 14GA 2C (A/V CIRCUIT #3) F.A.C.P. 3C 115 V.A.C. 14GA 3C M BUILDING 7 GROUND FLOOR BUILDING 5 GROUND FLOOR RTS LEGEND HEAT DET. BELOW CEILING SMOKE DET. ABOVE CEILING MANUAL FIRE ALARM STATION SMOKE DETECTOR, PHOTOELECTOR TYPE \u201cE\u201d INDICATES DEVICE PROGRAMMED FOR ELEVATOR ACTION ADDRESSABLE HEAT DETECTOR, RATE-OF-RISE & FIXED TEMPERATURE ABOVE CEILING INTERFACE ADDRESSABLE MODULE (IAM) CONTROL RELAY FLOW SWITCH TAMPER SWITCH DUCT MOUNTED SMOKE DETECTOR REMOTE TEST STATION END-OF-LINE RESISTOR FIRE ALARM HORN WITH LIGHT FIRE ALARM LIGHT ONLY FIRE ALARM MASTER BOX FIRE ALARM CONTROL PANEL NOTES: 1. ADDRESSES LISTED ON THIS RISER ARE PRELIMINARY AND TO BE USED FOR PLANNING PURPOSES ONLY. ACTUAL ADDRESSED MUST BE OBTAINED VIA THE OPERATING FIRE ALARM CONTROL PANEL. H S A S E H F S D F I CR FS TS RTS EOL F L M FACP 16GA 1PR TWISTED 1. Scope This annex includes standards referenced this publication, as well as other electrical symbol references that are not specifically referred to in NECA 100. American Institute of Architects (AIA) 1735 New York Avenue, NW Washington, DC 20006 (202) 626-7300 (202) 626-7587 fax www.aiaonline.com CAD Layer Guidelines American Society for Testing and Materials (ASTM) 100 Barr Harbor Drive West Conshohocken, PA 19428-2959 (610) 832-9500 (610) 832-9555 fax www.astm.org ASTM F967-2011, Standard Practice for Security Engineer Symbols Institute of Electrical and Electronics Engineers (IEEE) 445 Hoes Lane PO Box 1331 Piscataway, NJ 08855-1331 (800) 678-4333 (732) 981-9667 fax www.ieee.org ANSI/IEEE 91-1991, Standard Graphic Symbols for Logic Functions ANSI/IEEE 280-1997, Letter Symbols for Quantities Used in Electrical Science and Electrical Engineering ANSI/IEEE 315-1975 (R1994), Standard Graphic Symbols for Electrical and Electronics Diagrams ANSI/IEEE 991-1986 (R1994), Standard for Logic Circuit Diagrams Annex C: Reference Standards Illuminating Engineering Society of North America (IESNA) 120 Wall Street, Floor 17 New York, NY 10005-4001 (212) 248-5000 (212) 248-5017 fax www.iesna.org\u00ad ANSI/IESNA DG-3-2000, Application of Luminaire Symbols on Lighting Design Drawings National Fire Protection Association (NFPA) P.O. Box 9101 One Batterymarch Park Quincy, MA 02269-9101 (617) 770-3000 (617) 770-3500 fax www.nfpa.org NFPA 70-2011, National Electrical Code (ANSI) NFPA 170-2012, Fire Safety Symbols (ANSI) Security Industry Association (SIA) 635 Slaters Lane, Suite 110 Alexandria, VA 22314 (703) 683-2075 (703) 683-2469 fax www.siaonline.org Architectural Graphics Standard\u2014CAP Security Symbols Release 2.0 Current NEIS Published by NECA: National Electrical Contractors Association 3 Bethesda Metro Center, Suite 1100 Bethesda, MD 20814 (301) 657-3110 tel (301) 215-4500 fax www.neca-neis.org NECA 1-2010, Standard for Good Workmanship in Electrical Construction (ANSI) NECA 90-2009, Recommended Practice for Commissioning Building Electrical Systems (ANSI) NECA 100-2013, Symbols for Electrical Construction Drawings (ANSI) NECA 101-2006, Standard for Installing Steel Conduits (Rigid, IMC, EMT) (ANSI) NECA 102-2004, Standard for Installing Aluminum Rigid Metal Conduit (ANSI) NECA/AA 104-2006, Recommended Practice for Installing Aluminum Building Wire and Cable (ANSI) NECA/NEMA 105-2007, Recommended Practice for Installing Metal Cable Tray Systems (ANSI) NECA 111-2003, Standard for Installing Nonmetallic Raceways (RNC, ENT, LFNC) (ANSI) NECA/NACMA 120-2012, Standard for Installing Armored Cable (AC) and Metal-Clad Cable (MC) (ANSI) NECA 130-2010, Standard for Installing and Maintaining Wiring Devices (ANSI) NECA 169-2010, Standard for Installing and Maintaining Arc-Fault Circuit Interrupters (AFCIs) and Ground-Fault Circuit Interrupters (GFCIs) (ANSI) NECA 200-2010, Recommended Practice for Installing and Maintaining Temporary Electric Power at Construction Sites (ANSI) NECA 202-2006, Standard for Installing and Maintaining Industrial Heat Tracing Systems (ANSI) NECA 230-2010, Standard for Selecting, Installing, and Maintaining Electric Motors and Motor Controllers (ANSI) NECA/FOA 301-2009, Standard for Installing and Testing Fiber Optic Cables (ANSI) NECA 303-2005, Standard for Installing Closed-Circuit Television (CCTV) Systems (ANSI) NECA 305-2010, Standard for Fire Alarm System Job Practices (ANSI) NECA 331-2009, Standard for Building and Service Entrance Grounding and Bonding NECA 400-2007, Standard for Installing and Maintaining Switchboards (ANSI) NECA 402-2007, Recommended Practice for Installing and Maintaining Motor Control Centers (ANSI) NECA/EGSA 404-2007, Standard for Installing Generator Sets (ANSI) NECA 406-2003, Standard for Installing Residential Generator Sets (ANSI) NECA 407-2009, Standard for Installing and Maintaining Panelboards (ANSI) NECA 408-2009, Standard for Installing and Maintaining Busways (ANSI) NECA 409-2009, Standard for Installing and Maintaining Dry-Type Transformers (ANSI) NECA 410-2005, Standard for Installing and Maintaining Liquid-Filled Transformers (ANSI) NECA 411-2006, Standard for Installing and Maintaining Uninterruptible Power Supplies (UPS) (ANSI) NECA 412-2012, Standard for Installing and Maintaining Photovoltaic (PV) Power Systems (ANSI) NECA 413-2012, Standard for Installing and Maintaining Electric Vehicle Supply Equipment (ANSI) NECA 420-2007, Standard for Fuse Applications (ANSI) NECA 430-2006, Standard for Installing Medium-Voltage Metal-Clad Switchgear (ANSI) NECA/IESNA 500-2006, Standard for Installing Indoor Commercial Lighting Systems (ANSI) NECA/IESNA 501-2006, Standard for Installing Exterior Lighting Systems (ANSI) NECA/IESNA 502-2006, Standard for Installing Industrial Lighting Systems (ANSI) NECA 503-2005, Standard for Installing Fiber Optic Lighting Systems NECA/BICSI 568-2006, Standard for Installing Commercial Building Telecommunications Cabling (ANSI) NECA/MACSCB 600-2003, Recommended Practice for Installing and Maintaining Medium-Voltage Cable (ANSI) NECA/NEMA 605-2005, Recommended Practice for Installing Underground Nonmetallic Utility Duct (ANSI) NECA/BICSI 607-2011, Standard for Telecommunications Bonding and Grounding Planning and Installation Methods for Commercial Buildings NECA 700-2010, Standard for Installing Overcurrent Protection to Achieve Selective Coordination (ANSI) National Electrical Contractors Association 3 Bethesda Metro Center, Suite 1100 Bethesda, Maryland 20785 301-657-3110 \u2022 301-214-4500 fax www.necanet.org Index # NECA 100-13 |",
+  "section": "NFPA",
+  "token": "5-7.3.1"
+ },
+ "6-001": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "CCVT camera. \u201cWP\u201d indicates weather-proof exterior camera.",
+  "section": "6.0",
+  "token": "6.001"
+ },
+ "6-002": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "CCTV Coaxial cable outlet and power outlet.",
+  "section": "6.0",
+  "token": "6.002"
+ },
+ "6-003": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "CCTV monitor outlet.",
+  "section": "6.0",
+  "token": "6.003"
+ },
+ "6-004": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Doorbell.",
+  "section": "6.0",
+  "token": "6.004"
+ },
+ "6-005": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Door buzzer.",
+  "section": "6.0",
+  "token": "6.005"
+ },
+ "6-006": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Door chime.",
+  "section": "6.0",
+  "token": "6.006"
+ },
+ "6-007": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Electric door opener.",
+  "section": "6.0",
+  "token": "6.007"
+ },
+ "6-008": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Electric door strike.",
+  "section": "6.0",
+  "token": "6.008"
+ },
+ "6-009": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Intercom unit\u2014flush MTD.",
+  "section": "6.0",
+  "token": "6.009"
+ },
+ "6-010": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Master intercom and directory unit.",
+  "section": "6.0",
+  "token": "6.010"
+ },
+ "6-011": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Motion detector.",
+  "section": "6.0",
+  "token": "6.011"
+ },
+ "6-012": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Security door alarm magnetic lock.",
+  "section": "6.0",
+  "token": "6.012"
+ },
+ "6-013": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Security card reader. \u201cWP\u201d indicates weather-proof. C WP CCTV MTV B B B DR ES IC MI MD ML CR WP 6.0 Security",
+  "section": "6.0",
+  "token": "6.013"
+ },
+ "6-014": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Security control panel.",
+  "section": "6.0",
+  "token": "6.014"
+ },
+ "6-015": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Security door contacts.",
+  "section": "6.0",
+  "token": "6.015"
+ },
+ "6-016": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Security exit push button.",
+  "section": "6.0",
+  "token": "6.016"
+ },
+ "6-017": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Security keypad.",
+  "section": "6.0",
+  "token": "6.017"
+ },
+ "6-018": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Infra-red detector.",
+  "section": "6.0",
+  "token": "6.018"
+ },
+ "6-019": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Ultrasonic detector.",
+  "section": "6.0",
+  "token": "6.019"
+ },
+ "6-020": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Door alarm.",
+  "section": "6.0",
+  "token": "6.020"
+ },
+ "6-021": {
+  "alt": false,
+  "file_section": "6.0",
+  "name": "Panic bar. SCP DC K ID UD DA P 7.0 Fire Alarm Communications and Panels",
+  "section": "6.0",
+  "token": "6.021"
+ },
+ "7-001": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Fire alarm master box.",
+  "section": "7.0",
+  "token": "7.001"
+ },
+ "7-002": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Fire fighter\u2019s phone.",
+  "section": "7.0",
+  "token": "7.002"
+ },
+ "7-003": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Coded transmitter.",
+  "section": "7.0",
+  "token": "7.003"
+ },
+ "7-004": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Drill key switch.",
+  "section": "7.0",
+  "token": "7.004"
+ },
+ "7-005": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Key repository (knox box).",
+  "section": "7.0",
+  "token": "7.005"
+ },
+ "7-006": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Annunciator panel.",
+  "section": "7.0",
+  "token": "7.006"
+ },
+ "7-007": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Fire alarm control panel.",
+  "section": "7.0",
+  "token": "7.007"
+ },
+ "7-008": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Voice evacuation panel.",
+  "section": "7.0",
+  "token": "7.008"
+ },
+ "7-009": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Fire alarm terminal cabinet.",
+  "section": "7.0",
+  "token": "7.009"
+ },
+ "7-010": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Battery pack and charger.",
+  "section": "7.0",
+  "token": "7.010"
+ },
+ "7-011": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Air sampling control/detector panel with associated air sampling piping network.",
+  "section": "7.0",
+  "token": "7.011"
+ },
+ "7-012": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Transponder.",
+  "section": "7.0",
+  "token": "7.012"
+ },
+ "7-013": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Individual addressable module. M FT DK K FAA FACP EVAC FATC BATT ASFP TPR IAM 7.0 Fire Alarm Communications and Panels",
+  "section": "7.0",
+  "token": "7.013"
+ },
+ "7-014": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Zone adapter module.",
+  "section": "7.0",
+  "token": "7.014"
+ },
+ "7-015": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Control zone adapter module.",
+  "section": "7.0",
+  "token": "7.015"
+ },
+ "7-016": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Monitor zone adapter module.",
+  "section": "7.0",
+  "token": "7.016"
+ },
+ "7-017": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Synchronized module.",
+  "section": "7.0",
+  "token": "7.017"
+ },
+ "7-018": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Kitchen hood system. ZAM CZAM MZAM SYN KHS 7.1 Fire Alarm Indicators",
+  "section": "7.0",
+  "token": "7.018"
+ },
+ "7-101": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Control relay.",
+  "section": "7.0",
+  "token": "7.101"
+ },
+ "7-102": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Door holder.",
+  "section": "7.0",
+  "token": "7.102"
+ },
+ "7-103": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Horn and strobe. \u00ad7.104 Mini horn and strobe.",
+  "section": "7.0",
+  "token": "7.103"
+ },
+ "7-104": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "7-104",
+  "section": "7.0",
+  "token": "7.104"
+ },
+ "7-105": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Horn unit only.",
+  "section": "7.0",
+  "token": "7.105"
+ },
+ "7-106": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Strobe unit only.",
+  "section": "7.0",
+  "token": "7.106"
+ },
+ "7-107": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Bell and strobe.",
+  "section": "7.0",
+  "token": "7.107"
+ },
+ "7-108": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Buzzer and strobe.",
+  "section": "7.0",
+  "token": "7.108"
+ },
+ "7-109": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Chime and strobe.",
+  "section": "7.0",
+  "token": "7.109"
+ },
+ "7-110": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Speaker and strobe.",
+  "section": "7.0",
+  "token": "7.110"
+ },
+ "7-111": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "LED pilot light.",
+  "section": "7.0",
+  "token": "7.111"
+ },
+ "7-112": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Indicating beacon. \u201cWP\u201d indicates weather-proof.",
+  "section": "7.0",
+  "token": "7.112"
+ },
+ "7-113": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Speaker\u2014ceiling mounted. DH F CR F H s S s F F F F S F S WP 7.2 Fire Alarm Sensors",
+  "section": "7.0",
+  "token": "7.113"
+ },
+ "7-201": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Manual pull station.",
+  "section": "7.0",
+  "token": "7.201"
+ },
+ "7-202": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Smoke detector.",
+  "section": "7.0",
+  "token": "7.202"
+ },
+ "7-203": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Duct smoke detector with two auxiliary contacts.",
+  "section": "7.0",
+  "token": "7.203"
+ },
+ "7-204": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Remote station for duct mounted smoke detectors.",
+  "section": "7.0",
+  "token": "7.204"
+ },
+ "7-205": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Area type smoke detector used at duct work open- ing.",
+  "section": "7.0",
+  "token": "7.205"
+ },
+ "7-206": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Elevator recall with auxiliary contacts.",
+  "section": "7.0",
+  "token": "7.206"
+ },
+ "7-207": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Self-contained smoke detector\u2014single station type.",
+  "section": "7.0",
+  "token": "7.207"
+ },
+ "7-208": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Smoke detector\u2014visual and audible signal.",
+  "section": "7.0",
+  "token": "7.208"
+ },
+ "7-209": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Beam smoke detector \u201cS\u201d\u2014indicates sending unit \u201cR\u201d\u2014indicates receiver.",
+  "section": "7.0",
+  "token": "7.209"
+ },
+ "7-210": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Carbon monoxide detector. Line voltage with bat- tery backup.",
+  "section": "7.0",
+  "token": "7.210"
+ },
+ "7-211": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Flame detector.",
+  "section": "7.0",
+  "token": "7.211"
+ },
+ "7-212": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Automatic heat detector (135\u00b0F rate of rise).",
+  "section": "7.0",
+  "token": "7.212"
+ },
+ "7-213": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Automatic heat detector. \u201cF\u201d\u2014indicates fixed tem- perature 190\u00b0F. F S S D RTS S A S E S SC S V B R C F H H F 7.2 Fire Alarm Sensors",
+  "section": "7.0",
+  "token": "7.213"
+ },
+ "7-214": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Hydrogen detector.",
+  "section": "7.0",
+  "token": "7.214"
+ },
+ "7-215": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Motor operated fire/smoke duct damper.",
+  "section": "7.0",
+  "token": "7.215"
+ },
+ "7-216": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Water flow switch.",
+  "section": "7.0",
+  "token": "7.216"
+ },
+ "7-217": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Low pressure switch.",
+  "section": "7.0",
+  "token": "7.217"
+ },
+ "7-218": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Tamper switch.",
+  "section": "7.0",
+  "token": "7.218"
+ },
+ "7-219": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "Post indicator valve.",
+  "section": "7.0",
+  "token": "7.219"
+ },
+ "7-220": {
+  "alt": false,
+  "file_section": "7.0",
+  "name": "End-of-line resistor. H2 FS FS PS TS PIV EOL D 8.0 Power Distribution Equipment",
+  "section": "7.0",
+  "token": "7.220"
+ },
+ "8-001": {
+  "alt": false,
+  "file_section": "8.0",
+  "name": "Lighting or power panel, recessed.",
+  "section": "8.0",
+  "token": "8.001"
+ },
+ "8-002": {
+  "alt": false,
+  "file_section": "8.0",
+  "name": "Lighting or power panel, surface.",
+  "section": "8.0",
+  "token": "8.002"
+ },
+ "8-003": {
+  "alt": false,
+  "file_section": "8.0",
+  "name": "Distribution panel.",
+  "section": "8.0",
+  "token": "8.003"
+ },
+ "8-004": {
+  "alt": false,
+  "file_section": "8.0",
+  "name": "Lighting or power panel on normal/generator feeder.",
+  "section": "8.0",
+  "token": "8.004"
+ },
+ "8-005": {
+  "alt": false,
+  "file_section": "8.0",
+  "name": "Distribution panel on normal/generator feeder.",
+  "section": "8.0",
+  "token": "8.005"
+ },
+ "8-006": {
+  "alt": false,
+  "file_section": "8.0",
+  "name": "Motor control center.",
+  "section": "8.0",
+  "token": "8.006"
+ },
+ "8-007": {
+  "alt": false,
+  "file_section": "8.0",
+  "name": "Dry type transformer, refer to transformer schedule, \u201cT45\u201d\u2014indicates transformer type floor mounted. Unless otherwise indicated, \u201cW\u201d\u2014indicates wall, \u201cS\u201d\u2014indicates suspended. \u201cR\u201d\u2014indicates K rating.",
+  "section": "8.0",
+  "token": "8.007"
+ },
+ "8-008": {
+  "alt": false,
+  "file_section": "8.0",
+  "name": "Transformer\u2014pad mount.",
+  "section": "8.0",
+  "token": "8.008"
+ },
+ "8-009": {
+  "alt": false,
+  "file_section": "8.0",
+  "name": "Current transformer cabinet.",
+  "section": "8.0",
+  "token": "8.009"
+ },
+ "8-010": {
+  "alt": false,
+  "file_section": "8.0",
+  "name": "Generator. Size as noted.",
+  "section": "8.0",
+  "token": "8.010"
+ },
+ "8-011": {
+  "alt": false,
+  "file_section": "8.0",
+  "name": "Meter\u2014single.",
+  "section": "8.0",
+  "token": "8.011"
+ },
+ "8-012": {
+  "alt": false,
+  "file_section": "8.0",
+  "name": "Meter and socket.",
+  "section": "8.0",
+  "token": "8.012"
+ },
+ "8-013": {
+  "alt": false,
+  "file_section": "8.0",
+  "name": "Transfer switch. \u201cTS\u201d=manual transfer switch. \u201cATS\u201d=automatic transfer switch. XFMR NUMBER MCC T T45-1 T CT xxkW M M TS G 9.0 Communications\u2014Teledata",
+  "section": "8.0",
+  "token": "8.013"
+ },
+ "9-001": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Data outlet.",
+  "section": "9.0",
+  "token": "9.001"
+ },
+ "9-002": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Data outlet floor type. \u201cF\u201d indicates flush mounted. \u201cS\u201d indicates surface mounted.",
+  "section": "9.0",
+  "token": "9.002"
+ },
+ "9-003": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Telephone/data outlet.",
+  "section": "9.0",
+  "token": "9.003"
+ },
+ "9-004": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Telephone/data outlet floor type. \u201cF\u201d indicates flush mounted. \u201cS\u201d indicates surface mounted.",
+  "section": "9.0",
+  "token": "9.004"
+ },
+ "9-005": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Telephone outlet.",
+  "section": "9.0",
+  "token": "9.005"
+ },
+ "9-006": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Telephone outlet\u2014wall mounted.",
+  "section": "9.0",
+  "token": "9.006"
+ },
+ "9-007": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Telephone outlet floor type. \u201cF\u201d indicates flush mounted. \u201cS\u201d indicates surface mounted. F F tW tF t F 9.1 Communications\u2014Audio/Visual",
+  "section": "9.0",
+  "token": "9.007"
+ },
+ "9-101": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Call in switch.",
+  "section": "9.0",
+  "token": "9.101"
+ },
+ "9-102": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Cable antenna system outlet. (CATV)",
+  "section": "9.0",
+  "token": "9.102"
+ },
+ "9-103": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Master antenna system outlet. (MATV)",
+  "section": "9.0",
+  "token": "9.103"
+ },
+ "9-104": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Microphone outlet\u2014floor mounted.",
+  "section": "9.0",
+  "token": "9.104"
+ },
+ "9-105": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Microphone outlet\u2014wall mounted.",
+  "section": "9.0",
+  "token": "9.105"
+ },
+ "9-106": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Speaker\u2014ceiling mounted.",
+  "section": "9.0",
+  "token": "9.106"
+ },
+ "9-107": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Speaker\u2014wall mounted.",
+  "section": "9.0",
+  "token": "9.107"
+ },
+ "9-108": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Speaker horn.",
+  "section": "9.0",
+  "token": "9.108"
+ },
+ "9-109": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Speaker bi-directional paging\u2014wall mounted.",
+  "section": "9.0",
+  "token": "9.109"
+ },
+ "9-110": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Speaker bi-directional paging\u2014ceiling mounted.",
+  "section": "9.0",
+  "token": "9.110"
+ },
+ "9-111": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Intercom unit\u2014flush mounted.",
+  "section": "9.0",
+  "token": "9.111"
+ },
+ "9-112": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Master intercom and directory unit.",
+  "section": "9.0",
+  "token": "9.112"
+ },
+ "9-113": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Volume control. TV TV M M M S S S P P IC MI VC 9.2 Communications\u2014Equipment",
+  "section": "9.0",
+  "token": "9.113"
+ },
+ "9-201": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Equipment cabinet.",
+  "section": "9.0",
+  "token": "9.201"
+ },
+ "9-202": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Equipment rack\u2014wall mounted.",
+  "section": "9.0",
+  "token": "9.202"
+ },
+ "9-203": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Equipment rack\u2014free standing.",
+  "section": "9.0",
+  "token": "9.203"
+ },
+ "9-204": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Terminal cabinet with 19mm (3/4 in.) plywood back- ing.",
+  "section": "9.0",
+  "token": "9.204"
+ },
+ "9-205": {
+  "alt": false,
+  "file_section": "9.0",
+  "name": "Plywood backboard. TCC 10.0 Site Work",
+  "section": "9.0",
+  "token": "9.205"
+ },
+ "FRISER": {
+  "alt": false,
+  "file_section": "One-Line",
+  "name": "FRISER",
+  "section": "One-Line",
+  "token": "FRISER"
+ },
+ "Feeder Schedule": {
+  "alt": false,
+  "file_section": "Schedules",
+  "name": "Feeder Schedule",
+  "section": "Schedules",
+  "token": "Feeder Schedule"
+ },
+ "Lighting Fixture Schedule": {
+  "alt": false,
+  "file_section": "Schedules",
+  "name": "Lighting Fixture Schedule",
+  "section": "Schedules",
+  "token": "Lighting Fixture Schedule"
+ },
+ "Mechanical Equipment Schedule": {
+  "alt": false,
+  "file_section": "Schedules",
+  "name": "Mechanical Equipment Schedule",
+  "section": "Schedules",
+  "token": "Mechanical Equipment Schedule"
+ },
+ "Outlet & Receptacle Abbreviation Legend": {
+  "alt": false,
+  "file_section": "3.0",
+  "name": "Outlet & Receptacle Abbreviation Legend",
+  "section": "3.0",
+  "token": "Outlet & Receptacle Abbreviation Legend"
+ },
+ "Panel Schedule": {
+  "alt": false,
+  "file_section": "Schedules",
+  "name": "Panel Schedule",
+  "section": "Schedules",
+  "token": "Panel Schedule"
+ },
+ "Transformer Schedule": {
+  "alt": false,
+  "file_section": "Schedules",
+  "name": "Transformer Schedule",
+  "section": "Schedules",
+  "token": "Transformer Schedule"
+ },
+ "one-line": {
+  "alt": false,
+  "file_section": "One-Line",
+  "name": "one-line",
+  "section": "One-Line",
+  "token": "one-line"
+ }
+}

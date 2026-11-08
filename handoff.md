@@ -618,3 +618,96 @@ and regenerate `library/nec`; (3) rebuild, run the smoke suite, re-shoot
 `docs/screenshots/ecad-symbol-library.png`; (4) add the generator pair the user asked for —
 `tools/symbol_maker.py` for single blocks and an `ELECMAKEMODULE` flow for N-channel
 components, so neither library needs a hand-edited table again.
+
+## 19. Round 30 (2026-11-08): the NECA symbols are named, and `library/nec` ships them
+
+The mapping round 18 left open is done. `library/nec` is now **414 symbols**: our 78 control
+blocks (NEMA variants) plus **336 real NECA 100 construction symbols**, each carrying the
+Standard's own wording.
+
+**How the shapes are named.** `tools/neca_index.py` joins `tools/neca_shapes.json` to the
+Standard's text (`target/tmp/neca100.txt`, the 66-page PDF dumped with PyMuPDF): it derives the
+printed token from the drawing stem (`5-001` -> `5.001`, NFPA annex stems keep their own
+spelling), finds that line, and takes the wording up to the next printed token, dropping page
+furniture. Two page layouts needed special handling: section 4 prints the number, the drawing
+and one description per row; section 1.0 prints a **block of thirteen numbers, then a block of
+thirteen wordings, then the letter column**, so those pages are paired by ordinal
+(`list_page_groups`). Output `tools/neca_index.json`: 373 entries, 356 named, 17 unnamed (the
+abbreviation legend, eight NFPA annex numbers that print in a different style, the two one-line
+risers and the five schedules).
+
+**Three defects the drawings exposed.**
+
+| Defect | Evidence | Fix |
+|---|---|---|
+| The device's identifying letter is an `ATTDEF`, not `TEXT` (305 across the set) | a time switch is a box + ATTDEF `TS`; a thermostat a circle + `T` | `walk()` reads `ATTDEF` (value = `s(1) or s(2)`) |
+| Filled detail is `SOLID` (37 model-space, 86 in blocks) | pull stations, panel hatching, LED sections | `dxfio` writes R12 `SOLID`; the importer, `make_library.py` and the renderer all carry it |
+| Drawings are *examples* and carry contractor annotation outside the art | `5-001` has an amperage `A` 33 units to the left; `5-007` `NEMA-XX`/`RV` | `trim_annotation()` drops text outside the drawable bbox + 0.35 span |
+
+**Section 4 needed a merge, not a table.** Every base switch drawing (`4-001` … `4-017`) is the
+same wall line plus the letter `S`; the variant is in the companion `a`-suffixed drawing, which
+is **text only** (`4-002a` = `S` + `2`, `4-006a` = `S` + `CB`, `4-011a` = `S` + `KP`). Importing
+them separately produced twenty-one identical `S` blocks and twenty-two floating labels, so
+`merge_alternates()` folds an alternate's extra letters into the base drawing (matching ops
+within 0.05 units) and drops an alternate that adds nothing. The switch page now shows `S`,
+`S2`, `S3`, `S4`, `SCB`, `SDT`, `SG`, `SH`, `SK`, `SKP`, `SLV`, `SLM`, `SMC`, `SP`, `ST`,
+`SWP`, `SPROJ`.
+
+**The old NEC bug is gone.** `build_symbol()` now reads, for `--standard nec`,
+`entry.get("geom_nec") or entry["geom"]` and never the QElectroTech (EN 60617) shape; the
+previous code silently fell back to the hand-drawn IEC geometry for every block without a
+`geom_nec`, which is why the NEC run looked like a copy of the starter set. `NECA_GLYPH` keeps
+1-5 letter codes and 1-2 alphanumeric ones (`S2`, `4`) while dropping example annotations
+(`240A`, `(a)`, `xxxV x%%C xW PRI`); `_slug` pops trailing stop words so names do not end
+mid-phrase.
+
+**Two tools.** `tools/render_library.py` draws a contact sheet per class
+(`--library DIR --cls CLASS --out PNG`) with each symbol on its own tile so art cannot bleed
+across cells; `dxfio`'s `Entity.vertices` is empty for `LWPOLYLINE` (parse the repeated 10/20
+`pairs` instead). The sheets are how the import was reviewed, and six are in `docs/screenshots`:
+`ecad-neca-wiring-methods.png`, `ecad-neca-motor-controls.png`, `ecad-neca-switches.png`,
+`ecad-neca-fire-alarm.png`, `ecad-neca-distribution.png`, `ecad-neca-luminaires.png`.
+
+**Verified end to end, headless.** The built editor loads the folder and inserts from it:
+
+```
+ELECLIB: loaded 336 symbol(s) from ...\library\nec; 78 already in this drawing,
+         0 failed, 414 in the catalogue, 1680 attribute definition point(s),
+         7022 preview segment(s).
+ELECINSERT: placed N5-011_RELAY as -N1 at 0.00,0.00.
+ELECLIST -> class NECA Motor Controls / NECA Wiring Methods / NECA Fire Alarm /
+            NECA Ground Fault / NECA Switches
+```
+
+Regenerate the folder in this order (the DXF names change when a description is fixed, so stale
+files must go):
+
+```
+Remove-Item library\nec\*.dxf -Force
+py -3.13 tools\neca_symbols.py      # shapes  (only after the DXF set or importer changes)
+py -3.13 tools\neca_index.py        # names   (only after the PDF text or the shapes change)
+py -3.13 tools\make_library.py --standard nec
+py -3.13 tools\make_library.py --standard nec --check   # 414 symbols, 414 manifest rows
+```
+
+**Verification**
+
+| Check | Result |
+|---|---|
+| `py -3.13 tools\make_library.py --standard nec --check` | in sync, 414 symbols, 414 manifest rows |
+| `py -3.13 tools\make_library.py --check` | in sync, 78 symbols (IEC untouched) |
+| `py -3.13 tests\ecad\run_smoke.py` | 116/116 checks passed |
+| headless `ELECLIB` on `library/nec` | 414 in catalogue, 78 already loaded, 0 failed |
+| `ELECINSERT` of five NECA symbols + `ELECLIST` | placed as `-N1`..`-N5`, classes correct |
+
+**Still open.** Eleven drawings still carry a code-only name because the 2013 PDF text does not
+list them (`N3-016`, `N7-104`, `N11-210` and the eight NFPA annex numbers whose printed
+numbering differs from the file stem); the 25 hand-drawn blocks remain hand-drawn; `ELECLIST`
+still prints the block name as the class for library-less symbols; `EXPORTPDF` has no clickable
+cross-reference links. The NECA set is plan-view symbology, so it lives in its own palette
+classes next to the schematic control blocks rather than replacing them.
+
+**Next.** The feature table the user handed over (STANDARD / ADVANCED / PRO, nineteen rows) still
+needs to be audited row by row against the command surface — round 30 spent its time on the
+library, which was the stated focus. Then the generator pair (`tools/symbol_maker.py` and
+`ELECMAKEMODULE`) and re-shooting `docs/screenshots/ecad-symbol-library.png` from the app.

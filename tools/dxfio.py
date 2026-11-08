@@ -146,6 +146,19 @@ class DxfDocument:
         self.entities.append(self._point(x, y, layer))
         return self
 
+    @staticmethod
+    def _solid(points, layer="0"):
+        """A filled quadrilateral (R12 SOLID): corners 10/11/12/13, in order."""
+        token = [(0, "SOLID"), (8, layer)]
+        for index, (x, y) in enumerate(points[:4]):
+            code = 10 + index
+            token.extend([(code, _num(x)), (code + 10, _num(y))])
+        return token
+
+    def add_solid(self, points, layer="0"):
+        self.entities.append(self._solid(points, layer))
+        return self
+
     # -- blocks ------------------------------------------------------------ #
 
     def define_block(self, name, base=(0.0, 0.0, 0.0), entities=None, layer="0"):

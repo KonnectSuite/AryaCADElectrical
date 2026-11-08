@@ -53,6 +53,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -861,6 +862,9 @@ def geometry_bounds(geom):
         elif kind == "poly":
             for x, y in op[1]:
                 take(x, y)
+        elif kind == "solid":
+            for x, y in op[1]:
+                take(x, y)
     return min_x, min_y, max_x, max_y
 
 
@@ -881,6 +885,8 @@ def emit_entity(doc, op):
         doc.entities.append(dxfio.DxfDocument._arc(*op[1:]))
     elif kind == "poly":
         doc.entities.append(dxfio.DxfDocument._lwpolyline(op[1], op[2]))
+    elif kind == "solid":
+        doc.entities.append(dxfio.DxfDocument._solid(op[1]))
     elif kind == "text":
         doc.entities.append(dxfio.DxfDocument._text(*op[1:]))
     else:  # pragma: no cover - a typo in the catalogue, not a runtime path
@@ -903,6 +909,8 @@ def scale_ops(geom, factor):
             scaled.append(("arc", cx * factor, cy * factor, r * factor, start, end))
         elif kind == "poly":
             scaled.append(("poly", [(x * factor, y * factor) for x, y in op[1]], op[2]))
+        elif kind == "solid":
+            scaled.append(("solid", [(x * factor, y * factor) for x, y in op[1]]))
         elif kind == "text":
             _, value, x, y, height, rotation = op
             scaled.append(("text", value, x * factor, y * factor, height * factor, rotation))
@@ -932,20 +940,155 @@ if os.path.exists(_qet_file):
         QET_SYMBOLS = json.load(_handle)
 
 
+# --------------------------------------------------------------------------- #
+# NECA 100 published construction symbols
+# --------------------------------------------------------------------------- #
+
+# ``tools/neca_symbols.py`` unfolds every drawing in the Standard's CAD set to
+# 10-unit canvas ops; ``tools/neca_index.py`` reads the Standard's own text to
+# name each one.  These are drawings of real symbols, so the NEMA library uses
+# them verbatim instead of hand-drawn approximations.
+NECA_SHAPES = {}
+_neca_shapes_path = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "neca_shapes.json"
+)
+if os.path.exists(_neca_shapes_path):
+    with open(_neca_shapes_path, encoding="utf-8") as _handle:
+        NECA_SHAPES = json.load(_handle)
+
+NECA_INDEX = {}
+_neca_index_path = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "neca_index.json"
+)
+if os.path.exists(_neca_index_path):
+    with open(_neca_index_path, encoding="utf-8") as _handle:
+        NECA_INDEX = json.load(_handle)
+
+# Schedules, legends, one-line risers and the NFPA 170 plates are drawings, not
+# symbols; the abbreviation sheet is a legend as well.
+NECA_SKIP_SECTIONS = {"Schedules", "One-Line", "13.0", "NFPA"}
+
+# The Standard's section numbers, named the way the palette groups them.
+NECA_CLASSES = {
+    "1.0": "NECA Wiring Methods",
+    "2.0": "NECA Luminaire Fixtures",
+    "3.0": "NECA Outlets",
+    "4.0": "NECA Switches",
+    "5.0": "NECA Motor Controls",
+    "6.0": "NECA Security",
+    "7.0": "NECA Fire Alarm",
+    "8.0": "NECA Power Distribution",
+    "9.0": "NECA Teledata",
+    "10.0": "NECA Site Work",
+    "11.0": "NECA Ground Fault",
+    "12.0": "NECA Miscellaneous",
+    "14.0": "NECA Nurse Call",
+}
+
+# A drawing keeps its identifying letter (a thermostat's "T", a pull station's
+# "F"); the rest of its text is the Standard's example annotation ("240A",
+# "(a)", "xxxV x%%C xW PRI") and does not belong on a library symbol.  Up to two
+# characters may carry a digit: a switch's pole count is written "S2"/"S3"/"4".
+NECA_GLYPH = re.compile(r"^(?:[A-Za-z&+]{1,5}|[A-Za-z0-9]{1,2})$")
+
+
+def neca_geometry(geom):
+    """The drawable ops of a NECA drawing, with example annotation removed."""
+    ops = []
+    for op in geom:
+        if op[0] == "text":
+            if not NECA_GLYPH.match(op[1]):
+                continue
+            ops.append(tuple(op))
+        else:
+            ops.append(tuple(op))
+    return ops
+
+
+def _slug(text, limit):
+    """`SINGLE POLE SWITCH, 20A` -> `SINGLE_POLE_SWITCH` (at most `limit`)."""
+    words = re.findall(r"[A-Z0-9]+", text.upper())
+    out = []
+    length = 0
+    for word in words:
+        extra = len(word) if not out else len(word) + 1
+        if length + extra > limit:
+            break
+        out.append(word)
+        length += extra
+    # A name that ends on a preposition reads like a truncation.
+    while out and out[-1] in {"A", "AN", "AND", "AS", "AT", "BY", "FOR", "IN", "OF", "ON", "OR", "THE", "TO", "WITH"}:
+        out.pop()
+    return "_".join(out)
+
+
+def neca_catalogue():
+    """Catalogue entries for the published NECA 100 construction symbols.
+
+    The block name is ``N<code>_<words of the Standard's description>``, so the
+    palette can be searched by either; the description of the Standard is kept
+    on the entry for documentation.
+    """
+    entries = []
+    used = {entry["name"] for entry in SYMBOLS}
+    for key, shape in sorted(NECA_SHAPES.items()):
+        section, stem = key.split("/", 1)
+        meta = NECA_INDEX.get(stem, {})
+        file_section = meta.get("file_section", section)
+        if file_section in NECA_SKIP_SECTIONS:
+            continue
+        description = (meta.get("name") or "").strip()
+        if not description or "Legend" in description or "Schedule" in description:
+            continue
+        geom = neca_geometry(shape["geom"])
+        if not any(op[0] != "text" for op in geom):
+            continue
+        code = stem.upper()
+        prefix = "N" + code
+        room = max(40 - len(prefix) - 1, 4)
+        name = prefix + "_" + (_slug(description, room) or "SYMBOL")
+        if name in used:
+            name = name[:38] + "_2"
+        used.add(name)
+        entries.append(
+            dict(
+                name=name,
+                cls=NECA_CLASSES.get(file_section, "NECA Symbols"),
+                attrs=A_DEVICE,
+                desc=description,
+                geom=geom,
+                # No declared pins: the drawing has no terminal objects, so the
+                # app derives the connection points from its leads (`insert_pins`).
+                pins=[],
+            )
+        )
+    return entries
+
+
+
 def build_symbol(entry):
-    """Return (dxf text, manifest row tuple) for one catalogue entry."""
+    """Return (dxf document, manifest row tuple) for one catalogue entry."""
     name = entry["name"]
-    # The NEMA run prefers the hand-drawn ANSI variant where one exists; the IEC
-    # run prefers the published EN 60617 shape.
-    imported = QET_SYMBOLS.get(name)
-    if STANDARD == "nec" and "geom_nec" in entry:
-        imported = None
-    if imported is not None:
-        geom = scale_ops(flatten(imported["geom"]), UNIT_SCALE)
-        pins = [tuple(pin) for pin in imported["pins"]] or entry.get("pins", PINS_2TERM)
-    else:
-        geom = scale_ops(flatten(entry["geom"]), UNIT_SCALE)
+    # Which geometry family the run uses:
+    #   IEC  - the published EN 60617 shape from QElectroTech when there is one,
+    #          otherwise our hand-drawn IEC drawing;
+    #   NEMA - the NECA 100 drawing for a construction-symbol entry, the
+    #          hand-drawn ANSI variant where a block has one, otherwise our IEC
+    #          drawing.  The EN 60617 shape is never used: it is the other
+    #          standard, and handing it to a NEMA run was the old bug.
+    if STANDARD == "nec":
+        geom = scale_ops(flatten(entry.get("geom_nec") or entry["geom"]), UNIT_SCALE)
         pins = entry.get("pins", PINS_2TERM)
+    else:
+        imported = QET_SYMBOLS.get(name)
+        if imported is not None:
+            geom = scale_ops(flatten(imported["geom"]), UNIT_SCALE)
+            pins = [tuple(pin) for pin in imported["pins"]] or entry.get(
+                "pins", PINS_2TERM
+            )
+        else:
+            geom = scale_ops(flatten(entry["geom"]), UNIT_SCALE)
+            pins = entry.get("pins", PINS_2TERM)
     attrs = entry["attrs"]
 
     doc = dxfio.DxfDocument()
@@ -1017,9 +1160,12 @@ def _prompt_for(tag):
 
 def build_all():
     """Return (files: {name: text}, manifest: str) without touching the disk."""
+    entries = list(SYMBOLS)
+    if STANDARD == "nec":
+        entries.extend(neca_catalogue())
     files = {}
     rows = []
-    for entry in SYMBOLS:
+    for entry in entries:
         doc, row = build_symbol(entry)
         files[f"{entry['name']}.dxf"] = doc.render()
         rows.append(row)
