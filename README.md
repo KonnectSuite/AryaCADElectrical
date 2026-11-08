@@ -59,13 +59,25 @@ Report buttons open real tables, with search and class filters (the parts librar
 |---|---|
 | ![Parts library](docs/screenshots/ui-parts-library.png) | ![Component list](docs/screenshots/ui-component-list.png) |
 
-Symbols are chosen from a palette with class chips and a search field (seventy-eight symbols
-ship in `library/starter`, each with real pins and attribute definitions), and the same
-library is editable from the Symbol Manager:
+Symbols are chosen from a palette with class chips and a search field. The starter library
+holds seventy-eight symbols with real pins and attribute definitions, and the geometry is
+real published symbology rather than approximations: fifty-three blocks are imported from the
+QElectroTech element collection (its EN 60617 / IEC set), and the rest are drawn to the same
+conventions. A NEMA-style set ships next to it in `library/nec`:
 
-| Symbol palette | Symbol Manager |
-|---|---|
-| ![Symbol palette with class chips](docs/screenshots/ecad-palette.png) | ![Symbol Manager dialog](docs/screenshots/ecad-symbol-manager.png) |
+```bash
+py -3.13 tools/qet_import.py --source <qelectrotech-elements>/10_electric   # refresh the shapes
+py -3.13 tools/make_library.py                     # library/starter (IEC)
+py -3.13 tools/make_library.py --standard nec      # library/nec (NEMA)
+```
+
+| Symbol library (IEC) | Symbol palette | Symbol Manager |
+|---|---|---|
+| ![Symbol library](docs/screenshots/ecad-symbol-library.png) | ![Symbol palette with class chips](docs/screenshots/ecad-palette.png) | ![Symbol Manager dialog](docs/screenshots/ecad-symbol-manager.png) |
+
+The library is editable from the Symbol Manager: a symbol's class can be changed, a symbol
+deleted, or the current drawing selection added as a new symbol with a name, class and pin
+count (both pick lists, so the common case needs no typing).
 
 Device tags and wire numbers follow a contract stored on the drawing, edited without an
 AutoCAD Electrical `WD_M` block: format, mode, start, step, follow-through and the wire

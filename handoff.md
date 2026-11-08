@@ -545,3 +545,32 @@ then `ELECEXPORT <out> dwg`, and asserts the summary, that the folder holds exac
 
 **Still open**: `ELECLIST` prints the block name as the class for library-less symbols, and
 `EXPORTPDF` produces searchable text but no clickable cross-reference links.
+
+## 17. Round 29 (2026-11-07): real symbology from a published library
+
+The starter symbols were hand-approximated shapes, so this round replaced their geometry with
+published symbology instead of drawing more of them.
+
+**Where the shapes come from.** The SkyCAD install keeps no DXF: its catalogue is
+`*.SKYCADFILE`, a serialized .NET object graph (`07 00 00 00`, length-prefixed
+`SkyCadKernel.SkyCadWorkObject`, `%<guid>`), so importing it means reversing that serializer.
+The QElectroTech element collection publishes the EN 60617 (IEC) symbols as XML under a real
+ECAD project, so `tools/qet_import.py` reads those element files and writes
+`tools/qet_symbols.json`; `tools/make_library.py` prefers that shape for the 53 blocks it
+covers and keeps our block name, class and attribute set. The importer rotates vertical
+elements, fits each element into the 10-unit design canvas, centres it, and names the pins
+`X4TERMnn` / `X1TERMnn` - the tag form the loader already reads.
+
+**Two sets.** `library/starter` (IEC) and `library/nec` (NEMA variants where the standards
+genuinely differ: coils as circles, `| |` / `|/|` contacts, zigzag fuse). Regenerate with
+`py -3.13 tools/make_library.py` and `py -3.13 tools/make_library.py --standard nec`;
+`--check` reports both in sync at 78 symbols.
+
+**Verification.** `cargo check --release` clean, `cargo build --release -j 4` 4 m 57 s,
+`py -3.13 tests\ecad\run_smoke.py` **116/116**, `py -3.13 tools/parts_check.py` passes, and
+`docs/screenshots/ecad-symbol-library.png` is a rendered sheet of the industrial set.
+
+**Still open.** The 25 blocks without a QElectroTech equivalent (PLC-DI/DO/AI/AO/CPU/PSU/COUPLER,
+IO_MODULE, HMI, NETWORK_SWITCH, JUNCTION, DIN_RAIL, WIRE_DUCT, WIRE_LABEL, CABLE_ENTRY,
+SERVO_MOTOR, GEAR_MOTOR, connector variants) are still hand-drawn; `ELECLIST` prints the block
+name as the class for library-less symbols; `EXPORTPDF` has no clickable cross-reference links.
