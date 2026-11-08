@@ -612,6 +612,69 @@ def run_makesymbol(baseline):
               f"TAG1 = {attrs['TAG1'].s(1) if 'TAG1' in attrs else '-'}")
 
 
+def run_makemodule(baseline):
+    section("5. ELECMAKEMODULE: generate a parametric module symbol")
+    lib_copy = os.path.join(WORK, "lib_makemodule")
+    if os.path.isdir(lib_copy):
+        shutil.rmtree(lib_copy)
+    shutil.copytree(STARTER, lib_copy)
+    sheet = blank_drawing(os.path.join(WORK, "makemodule.dxf"))
+    batch = write_batch(
+        os.path.join(HERE, "makemodule_batch.txt"),
+        os.path.join(WORK, "makemodule_batch.txt"),
+        {"@LIB@": lib_copy},
+    )
+    code, text = run(baseline, [baseline, "--each", batch, sheet], "makemodule")
+    check("makemodule batch exits 0", code == 0, f"exit {code}")
+    check("ELECMAKEMODULE reported writing both modules",
+          text.count("ELECMAKEMODULE:") >= 2 and "written to" in text, "")
+
+    module_path = os.path.join(lib_copy, "SMOKE_MODULE.dxf")
+    check("ELECMAKEMODULE wrote library/SMOKE_MODULE.dxf",
+          os.path.exists(module_path), module_path)
+    if os.path.exists(module_path):
+        counts = kind_counts(dxfio.load(module_path))
+        check("the generated module has its body and one lead per channel",
+              counts.get("LINE") == 16, f"{counts}")
+        check("the generated module declares two pins per channel and four component attributes",
+              counts.get("ATTDEF") == 16, f"{counts.get('ATTDEF', 0)} ATTDEFs")
+    with open(os.path.join(lib_copy, "library.tsv"), "r", encoding="ascii") as handle:
+        manifest_text = handle.read()
+    check("ELECMAKEMODULE appended the manifest rows",
+          "SMOKE_MODULE\tModule\t" in manifest_text
+          and "SMOKE_STRIP\tStrip\t" in manifest_text,
+          [line[:36] for line in manifest_text.splitlines()
+           if line.startswith("SMOKE_")])
+
+    drawing = dxfio.load(sheet)
+    placed = insert_of_block(drawing, "SMOKE_MODULE")
+    check("ELECMAKEMODULE placed one instance of the module",
+          placed is not None, "INSERT SMOKE_MODULE")
+    if placed is not None:
+        tags = set(attribute_map(placed))
+        check("the placed module carries its pin attributes",
+              {"X1TERM01", "X1TERM06", "X4TERM01", "X4TERM06"} <= tags,
+              sorted(tag for tag in tags if "TERM" in tag))
+
+    section("5b. reload the generated module and place it again")
+    sheet2 = blank_drawing(os.path.join(WORK, "makemodule_reload.dxf"))
+    batch2 = write_batch(
+        os.path.join(HERE, "makemodule_reload_batch.txt"),
+        os.path.join(WORK, "makemodule_reload_batch.txt"),
+        {"@LIB@": lib_copy},
+    )
+    code, text = run(baseline, [baseline, "--each", batch2, sheet2], "makemodule reload")
+    check("module reload batch exits 0", code == 0, f"exit {code}")
+    match = re.search(r"ELECLIB: loaded (\d+) symbol", text)
+    expected = len([name for name in os.listdir(lib_copy) if name.lower().endswith(".dxf")])
+    check("the library reloads with the generated modules",
+          match is not None and int(match.group(1)) == expected,
+          f"loaded {match.group(1) if match else '?'} of {expected}")
+    check("the generated module can be placed after a reload",
+          insert_of_block(dxfio.load(sheet2), "SMOKE_MODULE") is not None,
+          "INSERT SMOKE_MODULE")
+
+
 def run_edge_cases(baseline):
     """Loader contract edge cases: the scale column, block-only symbols, failure modes."""
     section("6. the manifest scale column, and what ELECINSERT does with it")
@@ -1417,6 +1480,7 @@ def main(argv=None):
     try:
         run_smoke(baseline, symbols)
         run_makesymbol(baseline)
+        run_makemodule(baseline)
         run_edge_cases(baseline)
         run_fabricated(baseline)
         run_client_library(baseline, current, client_symbols)

@@ -1,0 +1,5 @@
+# Reload a library that ELECMAKEMODULE has written into, then place its module.
+#   @LIB@  the writable library copy that already holds SMOKE_MODULE.dxf
+ELECLIB @LIB@
+ELECINSERT SMOKE_MODULE
+QSAVE

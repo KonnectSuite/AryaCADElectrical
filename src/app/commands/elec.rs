@@ -1691,6 +1691,7 @@ fn class_for_reference(tag: &str) -> &'static str {
                     "ELECPALETTE                   browse the loaded symbols",
                     "ELECINSERT <symbol>           place a symbol",
                     "ELECMAKESYMBOL <name> [CLASS=x] [PINS=n]  turn the selection into a symbol",
+                    "ELECMAKEMODULE <name> <channels> [SIDES=both] [PITCH=n]  generate a terminal module",
                     "ELECSETATTR <tag> NAME=value  edit a device's attributes",
                 ],
             ),
@@ -3165,7 +3166,12 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
         let anchors = &graph.anchors;
         let label_of = |id: u64| graph.label_of(id);
 
-        let mut terminals: Vec<(String, Vec<String>)> = Vec::new();
+        // A terminal symbol can carry one anchor per side, and the wire graph anchors each
+        // pin separately. Group the anchors back into the component they belong to before
+        // reporting, or one terminal would be counted once per pin and every peer list
+        // would only hold the devices of the pin that happened to come first.
+        let mut by_label: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
         let mut others: Vec<String> = Vec::new();
         for anchor in anchors {
             let peers: Vec<String> = netlist
@@ -3181,11 +3187,21 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
                 })
                 .unwrap_or_default();
             if ::elec::parse_terminal_tag(&anchor.label).is_some() {
-                terminals.push((anchor.label.clone(), peers));
+                by_label.entry(anchor.label.clone()).or_default().extend(peers);
             } else {
                 others.push(anchor.label.clone());
             }
         }
+        let terminals: Vec<(String, Vec<String>)> = by_label
+            .into_iter()
+            .map(|(label, mut peers)| {
+                peers.sort();
+                peers.dedup();
+                (label, peers)
+            })
+            .collect();
+        others.sort();
+        others.dedup();
 
         if terminals.is_empty() {
             self.show_elec_report(
@@ -4163,12 +4179,18 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
             return Task::none();
         }
 
-        let terminals: Vec<u64> = anchors
-            .iter()
-            .filter(|anchor| ::elec::parse_terminal_tag(&anchor.label).is_some())
-            .map(|anchor| anchor.id)
-            .collect();
-        if terminals.is_empty() {
+        // One symbol is one terminal. A terminal block anchors each of its pins separately,
+        // so analyse a terminal as the group of its pins and give each pin its own side:
+        // that is what makes a two-pin block read as "A: ... | B: ..." instead of two
+        // single-sided terminals with the same name.
+        let mut groups: std::collections::BTreeMap<String, Vec<u64>> =
+            std::collections::BTreeMap::new();
+        for anchor in &anchors {
+            if ::elec::parse_terminal_tag(&anchor.label).is_some() {
+                groups.entry(anchor.label.clone()).or_default().push(anchor.id);
+            }
+        }
+        if groups.is_empty() {
             self.command_line
                 .push_output("ELECTSIDES: no terminals found (no component tagged strip:index).");
             return Task::none();
@@ -4182,7 +4204,23 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
                 .unwrap_or_else(|| "?".to_string())
         };
 
-        let results = terminal_sides(&wires, &anchors, &terminals, TOLERANCE);
+        let mut results: Vec<::elec::TerminalSides> = Vec::new();
+        for (label, pins) in &groups {
+            let mut sides: Vec<::elec::SideNet> = Vec::new();
+            let mut seen: std::collections::BTreeSet<Vec<u64>> = std::collections::BTreeSet::new();
+            for entry in terminal_sides(&wires, &anchors, pins, TOLERANCE) {
+                for side in entry.sides {
+                    if seen.insert(side.wires.clone()) {
+                        sides.push(side);
+                    }
+                }
+            }
+            results.push(::elec::TerminalSides {
+                terminal: pins[0],
+                label: label.clone(),
+                sides,
+            });
+        }
         let through = results.iter().filter(|entry| entry.is_through()).count();
         let single = results
             .iter()
@@ -4759,39 +4797,22 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
             .ok()
             .and_then(|guard| guard.clone())
             .or_else(remembered_library);
-        let mut written: Option<String> = None;
-        if let Some(folder) = folder {
-            let safe: String = name
-                .chars()
-                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' { c } else { '_' })
-                .collect();
-            let path = folder.join(format!("{safe}.dxf"));
-            let mut document = codec::Document::new();
-            let translate = crate::command::EntityTransform::Translate(glam::DVec3::new(-min_x, -min_y, 0.0));
-            let mut ok = true;
-            for entity in &with_attributes {
-                let mut copy = entity.clone();
-                crate::scene::view::dispatch::apply_transform(&mut copy, &translate);
-                if document.add_entity(copy).is_err() {
-                    ok = false;
-                    break;
-                }
-            }
-            if ok && crate::io::save(&document, &path).is_ok() {
-                let class = class.map(str::trim).filter(|value| !value.is_empty()).unwrap_or("Symbol");
-                let tags = attributes.join("|");
-                let manifest = folder.join("library.tsv");
-                let mut text = std::fs::read_to_string(&manifest).unwrap_or_else(|_| {
-                    "symbol\tclass\tattributes\tsheets\n".to_string()
-                });
-                if !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                text.push_str(&format!("{safe}\t{class}\t{tags}\t1\n"));
-                let _ = std::fs::write(&manifest, text);
-                written = Some(path.display().to_string());
-            }
-        }
+        let class = class
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Symbol");
+        let written = folder.and_then(|folder| {
+            store_library_symbol(
+                &folder,
+                name,
+                &with_attributes,
+                class,
+                &attributes,
+                glam::DVec3::new(min_x, min_y, 0.0),
+            )
+            .ok()
+            .map(|path| path.display().to_string())
+        });
 
         let message = match written {
             Some(path) => format!(
@@ -4807,6 +4828,197 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
         Task::none()
     }
 
+    /// `ELECMAKEMODULE <name> <channels>` builds a parametric module symbol.
+    ///
+    /// Modules are the shape an electrical drawing repeats most: a body with a fixed
+    /// number of channels and one terminal per channel. Drawing every size by hand is
+    /// exactly the typing the symbol generator exists to remove, so this builds the
+    /// block, inserts one instance and writes it into the loaded library for reuse.
+    ///
+    /// `SIDES=` picks which edges carry terminals (`BOTH` default, `LEFT`, `RIGHT`),
+    /// `PITCH=` the channel spacing, `CLASS=` the palette class and `X=`/`Y=` where the
+    /// first instance lands. The generated attribute tags follow the library convention
+    /// (`X1TERM01` on the right, `X4TERM01` on the left), so `ELECLIB` reloads them as
+    /// terminal definitions and the netlist anchors wires to the leads.
+    pub(crate) fn elec_make_module(
+        &mut self,
+        i: usize,
+        name: &str,
+        channels: usize,
+        class: Option<&str>,
+        sides: &str,
+        pitch: f64,
+        at: Option<(f64, f64)>,
+    ) -> Task<Message> {
+        let name = name.trim();
+        if name.is_empty() {
+            self.command_line.push_output(
+                "ELECMAKEMODULE: give the module a name, e.g. ELECMAKEMODULE MODULE-8 8",
+            );
+            return Task::none();
+        }
+        if channels == 0 || channels > 64 {
+            self.command_line
+                .push_output("ELECMAKEMODULE: channels must be between 1 and 64.");
+            return Task::none();
+        }
+        if self.tabs[i].scene.document.block_records.get(name).is_some() {
+            let message = format!("ELECMAKEMODULE: a block named \"{name}\" already exists.");
+            self.command_line.push_output(&message);
+            return Task::none();
+        }
+
+        let pitch = if pitch > 0.0 { pitch.clamp(0.05, 5.0) } else { 0.25 };
+        let with_left = !sides.eq_ignore_ascii_case("right");
+        let with_right = !sides.eq_ignore_ascii_case("left");
+        let width = 0.8_f64;
+        let top = channels as f64 * pitch;
+        let label_height = (pitch * 0.4).clamp(0.05, 0.5);
+
+        let mut entities: Vec<codec::EntityType> = Vec::new();
+        let mut line = |ax: f64, ay: f64, bx: f64, by: f64| {
+            let mut entity = codec::entities::Line::from_points(
+                codec::types::Vector3::new(ax, ay, 0.0),
+                codec::types::Vector3::new(bx, by, 0.0),
+            );
+            entity.common.layer = "ELEC-SYMBOLS".to_string();
+            entities.push(codec::EntityType::Line(entity));
+        };
+        line(0.0, 0.0, width, 0.0);
+        line(width, 0.0, width, top);
+        line(width, top, 0.0, top);
+        line(0.0, top, 0.0, 0.0);
+        for channel in 0..channels {
+            let y = (channel as f64 + 0.5) * pitch;
+            if with_left {
+                line(-0.15, y, 0.0, y);
+            }
+            if with_right {
+                line(width, y, width + 0.15, y);
+            }
+        }
+
+        // Invisible terminal definitions, one per lead. They make each stub a declared
+        // pin instead of a guessed connection point.
+        let mut tags: Vec<String> = Vec::new();
+        let mut pins: Vec<(String, f64, f64)> = Vec::new();
+        for channel in 0..channels {
+            let y = (channel as f64 + 0.5) * pitch;
+            if with_left {
+                pins.push((format!("X4TERM{:02}", channel + 1), -0.15, y));
+            }
+            if with_right {
+                pins.push((format!("X1TERM{:02}", channel + 1), width + 0.15, y));
+            }
+        }
+        for (tag, x, y) in &pins {
+            let mut definition = codec::entities::AttributeDefinition::new(
+                tag.clone(),
+                "Terminal".to_string(),
+                String::new(),
+            );
+            definition.height = label_height;
+            definition.flags.invisible = true;
+            definition.insertion_point = codec::types::Vector3::new(*x, *y, 0.0);
+            definition.alignment_point = definition.insertion_point;
+            entities.push(codec::EntityType::AttributeDefinition(definition));
+            tags.push(tag.clone());
+        }
+
+        // The four component attributes sit down the right-hand side, clear of the pins.
+        for (row, (tag, prompt)) in [
+            ("TAG1", "Tag"),
+            ("CAT", "Part number"),
+            ("MFG", "Manufacturer"),
+            ("DESC1", "Description"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let mut definition = codec::entities::AttributeDefinition::new(
+                tag.to_string(),
+                prompt.to_string(),
+                String::new(),
+            );
+            definition.height = label_height;
+            definition.insertion_point = codec::types::Vector3::new(
+                width + 0.3,
+                top - (row as f64 + 1.0) * pitch * 1.4,
+                0.0,
+            );
+            definition.alignment_point = definition.insertion_point;
+            entities.push(codec::EntityType::AttributeDefinition(definition));
+            tags.push(tag.to_string());
+        }
+
+        if let Err(error) = self.tabs[i].scene.define_block_from_owned_entities(
+            entities.clone(),
+            name,
+            glam::DVec3::ZERO,
+        ) {
+            let message = format!("ELECMAKEMODULE: cannot define \"{name}\": {error}");
+            self.command_line.push_output(&message);
+            return Task::none();
+        }
+        self.tabs[i].dirty = true;
+
+        // One instance, so the command produces something you can see and wire.
+        let (x, y) = at.unwrap_or((0.0, 0.0));
+        let mut insert = codec::entities::Insert::new(
+            name.to_string(),
+            codec::types::Vector3::new(x, y, 0.0),
+        );
+        for (tag, px, py) in &pins {
+            let mut attribute =
+                codec::entities::AttributeEntity::new(tag.clone(), format!("{:.4},{:.4}", x + px, y + py));
+            attribute.height = label_height;
+            attribute.insertion_point = codec::types::Vector3::new(x + px, y + py, 0.0);
+            attribute.alignment_point = attribute.insertion_point;
+            insert.attributes.push(attribute);
+        }
+        for (row, tag) in ["TAG1", "CAT", "MFG", "DESC1"].iter().enumerate() {
+            let mut attribute = codec::entities::AttributeEntity::new(tag.to_string(), String::new());
+            attribute.height = label_height;
+            attribute.insertion_point = codec::types::Vector3::new(
+                x + width + 0.3,
+                y + top - (row as f64 + 1.0) * pitch * 1.4,
+                0.0,
+            );
+            attribute.alignment_point = attribute.insertion_point;
+            insert.attributes.push(attribute);
+        }
+        self.push_undo_snapshot(i, "ELECMAKEMODULE");
+        self.tabs[i]
+            .scene
+            .add_entity(codec::EntityType::Insert(insert));
+        self.tabs[i].dirty = true;
+
+        let class = class
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Module");
+        let folder = library_dir()
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .or_else(remembered_library);
+        let written = folder.and_then(|folder| {
+            store_library_symbol(&folder, name, &entities, class, &tags, glam::DVec3::ZERO)
+                .ok()
+                .map(|path| path.display().to_string())
+        });
+
+        let message = match written {
+            Some(path) => format!(
+                "ELECMAKEMODULE: \"{name}\" with {channels} channel(s) written to {path} and placed at {x:.2},{y:.2}.",
+            ),
+            None => format!(
+                "ELECMAKEMODULE: \"{name}\" with {channels} channel(s) defined and placed at {x:.2},{y:.2}; no library folder loaded, so it was not saved for reuse.",
+            ),
+        };
+        self.command_line.push_output(&message);
+        Task::none()
+    }
 
     /// The loaded symbols with the segments the palette draws, grouped by class then name.
     ///
@@ -6412,6 +6624,7 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
         // Pass 3: write the tags back, one sheet at a time, keeping a .bak beside each.
         let mut written = 0usize;
         let mut failed = 0usize;
+        let mut written_paths: Vec<std::path::PathBuf> = Vec::new();
         for sheet in &sheets {
             let Ok(mut document) = crate::io::load_file(&sheet.path) else {
                 failed += 1;
@@ -6466,13 +6679,32 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
             let backup = sheet.path.with_extension("dxf.bak");
             let _ = std::fs::copy(&sheet.path, &backup);
             match crate::io::save(&document, &sheet.path) {
-                Ok(()) => written += touched,
+                Ok(()) => {
+                    written += touched;
+                    written_paths.push(sheet.path.clone());
+                }
                 Err(_) => failed += 1,
             }
         }
 
+        // A sheet this session has open is now stale on disk: the tab still shows the old
+        // tags, and a later QSAVE would be refused as an outside change. Reload what changed.
+        let mut reloaded = 0usize;
+        for path in &written_paths {
+            if let Some(tab) = self.tab_showing(path) {
+                if self.reload_tab_from_disk(tab).is_ok() {
+                    reloaded += 1;
+                }
+            }
+        }
+
+        let open_note = if reloaded > 0 {
+            format!(" {reloaded} open drawing(s) reloaded.")
+        } else {
+            String::from(" Reopen any drawing you have open.")
+        };
         let message = format!(
-            "  wrote {written} tag(s) across {} sheet(s); {failed} failed. Sheets are backed up as .dxf.bak; reopen any drawing you have open.",
+            "  wrote {written} tag(s) across {} sheet(s); {failed} failed. Sheets are backed up as .dxf.bak.{open_note}",
             sheets.len()
         );
         self.command_line.push_output(&message);
@@ -6795,7 +7027,7 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
             // an argument, so a click used to answer "Unknown command" — a button that looks
             // broken. Answer with the usage line instead.
             "ELECLIB" | "ELECPART" | "ELECSETATTR" | "ELECPROJNEW" | "ELECPROJOPEN"
-            | "ELECPLC" | "ELECPLCNEXT" | "ELECPANEL" => {
+            | "ELECPLC" | "ELECPLCNEXT" | "ELECPANEL" | "ELECMAKEMODULE" => {
                 let usage = match cmd {
                     "ELECLIB" => "ELECLIB <folder>",
                     "ELECPART" => "ELECPART <parts.csv>",
@@ -6805,6 +7037,7 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
                     "ELECPLC" => "ELECPLC <tag> <points> <base> [x,y]",
                     "ELECPLCNEXT" => "ELECPLCNEXT <tag> <points> [prefix] [x,y]",
                     "ELECPANEL" => "ELECPANEL <out.dxf>",
+                    "ELECMAKEMODULE" => "ELECMAKEMODULE <name> <channels> [SIDES=both] [PITCH=n] [CLASS=x] [X=,Y=]",
                     _ => "",
                 };
                 self.command_line
@@ -6934,6 +7167,58 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
                     if !name.is_empty() {
                         return Some(self.elec_make_symbol(i, &name, class, pins));
                     }
+                }
+                if let Some(argument) = cmd.strip_prefix("ELECMAKEMODULE ") {
+                    let mut words = Vec::new();
+                    let mut class = None;
+                    let mut sides = "both".to_string();
+                    let mut pitch = 0.0_f64;
+                    let mut at = None;
+                    for word in argument.split_whitespace() {
+                        if let Some(value) = word
+                            .strip_prefix("CLASS=")
+                            .or_else(|| word.strip_prefix("class="))
+                        {
+                            class = Some(value);
+                        } else if let Some(value) = word
+                            .strip_prefix("SIDES=")
+                            .or_else(|| word.strip_prefix("sides="))
+                        {
+                            sides = value.to_string();
+                        } else if let Some(value) = word
+                            .strip_prefix("PITCH=")
+                            .or_else(|| word.strip_prefix("pitch="))
+                        {
+                            pitch = value.parse::<f64>().unwrap_or(0.0);
+                        } else if let Some(value) = word
+                            .strip_prefix("AT=")
+                            .or_else(|| word.strip_prefix("at="))
+                        {
+                            if let Some((x, y)) = value.split_once(',') {
+                                if let (Ok(x), Ok(y)) = (x.parse::<f64>(), y.parse::<f64>()) {
+                                    at = Some((x, y));
+                                }
+                            }
+                        } else {
+                            words.push(word);
+                        }
+                    }
+                    if words.len() >= 2 {
+                        let name = words[..words.len() - 1].join(" ");
+                        let channels = words[words.len() - 1].parse::<usize>().unwrap_or(0);
+                        return Some(self.elec_make_module(
+                            i,
+                            &name,
+                            channels,
+                            class,
+                            &sides,
+                            pitch,
+                            at,
+                        ));
+                    }
+                    self.command_line.push_output(
+                        "ELECMAKEMODULE: use ELECMAKEMODULE <name> <channels> [SIDES=both] [PITCH=n] [CLASS=x] [AT=x,y]",
+                    );
                 }
                 if let Some(argument) = cmd.strip_prefix("ELECSETATTR ") {
                     let mut words = argument.split_whitespace();
@@ -7128,6 +7413,52 @@ struct PanelLayout {
     height: f64,
     rails: usize,
     door_count: usize,
+}
+
+/// Write one symbol's entities into the loaded library, so `ELECLIB` can load it later.
+///
+/// Shared by `ELECMAKESYMBOL` and `ELECMAKEMODULE`: both define a block in the drawing and
+/// then want the same DXF and `library.tsv` row on disk, translated so the block origin is
+/// the symbol origin. Returns the DXF path that was written.
+fn store_library_symbol(
+    folder: &std::path::Path,
+    name: &str,
+    entities: &[codec::EntityType],
+    class: &str,
+    tags: &[String],
+    origin: glam::DVec3,
+) -> Result<std::path::PathBuf, String> {
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let path = folder.join(format!("{safe}.dxf"));
+    let mut document = codec::Document::new();
+    let translate = crate::command::EntityTransform::Translate(-origin);
+    for entity in entities {
+        let mut copy = entity.clone();
+        crate::scene::view::dispatch::apply_transform(&mut copy, &translate);
+        document
+            .add_entity(copy)
+            .map_err(|error| error.to_string())?;
+    }
+    crate::io::save(&document, &path).map_err(|error| error.to_string())?;
+
+    let manifest = folder.join("library.tsv");
+    let mut text = std::fs::read_to_string(&manifest)
+        .unwrap_or_else(|_| "symbol\tclass\tattributes\tsheets\n".to_string());
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&format!("{safe}\t{class}\t{}\t1\n", tags.join("|")));
+    std::fs::write(&manifest, text).map_err(|error| error.to_string())?;
+    Ok(path)
 }
 
 /// Read the footprint table: a project's own `footprints.tsv` wins over the library's.

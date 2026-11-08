@@ -115,6 +115,18 @@ fn read_revisions(root: &Path) -> Vec<Revision> {
     out
 }
 
+/// Find a snapshot by the id `ELECREV LIST` prints or by the bare number people type.
+///
+/// A snapshot folder is named `<order><label>` (`002-A`), so `002`, `2` and `002-A` all mean
+/// the same one. `COMPARE` and `RESTORE` share this rule so they never disagree.
+fn find_revision<'a>(revisions: &'a [Revision], token: &str) -> Option<&'a Revision> {
+    let token = token.trim();
+    let wanted_order = token.parse::<u32>().ok();
+    revisions
+        .iter()
+        .find(|revision| revision.name == token || wanted_order == Some(revision.order))
+}
+
 /// Snapshot files: `relative path \t bytes \t modified-unix`.
 fn revision_manifest(directory: &Path) -> Vec<(String, u64, u64)> {
     let path = directory.join("manifest.tsv");
@@ -272,12 +284,9 @@ impl OpenCADStudio {
             }
         };
         let revisions = read_revisions(&root);
-        let find = |id: &str| {
-            revisions
-                .iter()
-                .find(|revision| revision.name == id || revision.order.to_string() == id)
-        };
-        let (Some(left_revision), Some(right_revision)) = (find(left), find(right)) else {
+        let (Some(left_revision), Some(right_revision)) =
+            (find_revision(&revisions, left), find_revision(&revisions, right))
+        else {
             self.rev_output(&format!(
                 "ELECREV: no snapshot {left} or {right} — ELECREV LIST shows the ids."
             ));
@@ -333,10 +342,9 @@ impl OpenCADStudio {
             .map(|parent| parent.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
         let revisions = read_revisions(&root);
-        let Some(revision) = revisions
-            .iter()
-            .find(|revision| revision.name == id || revision.order.to_string() == id)
-        else {
+        // `ELECREV LIST` shows the snapshot name with its label (`002-A`), and people also
+        // type the bare number (`002` or `2`), so both spellings select the same snapshot.
+        let Some(revision) = find_revision(&revisions, id) else {
             self.rev_output(&format!("ELECREV: no snapshot {id} — ELECREV LIST shows the ids."));
             return Task::none();
         };
@@ -345,25 +353,38 @@ impl OpenCADStudio {
         let manifest = revision_manifest(&revision.directory);
         let mut restored = 0usize;
         let mut failed: Vec<String> = Vec::new();
+        let mut reloaded: Vec<String> = Vec::new();
         for (name, _, _) in &manifest {
             let source = revision.directory.join(name);
             let target = folder.join(name);
-            match std::fs::copy(&source, &target) {
-                Ok(_) => restored += 1,
+            // Restore goes through the same staged-rename path as Save. A plain copy cannot
+            // replace a drawing this session has open: the edit lease holds the file, and
+            // reading it back leaves the old design on screen while the disk changed under
+            // it, so an open drawing is also reloaded afterwards.
+            match crate::io::replace_file_from_source(&source, &target) {
+                Ok(_) => {
+                    restored += 1;
+                    if let Some(tab) = self.tab_showing(&target) {
+                        match self.reload_tab_from_disk(tab) {
+                            Ok(_) => reloaded.push(name.clone()),
+                            Err(error) => self.command_line.push_output(&format!(
+                                "ELECREV: restored {name} but could not reload it: {error}"
+                            )),
+                        }
+                    }
+                }
                 Err(error) => {
                     failed.push(name.clone());
-                    self.command_line.push_output(&format!(
-                        "ELECREV: could not replace {name}: {error}"
-                    ));
+                    self.command_line
+                        .push_output(&format!("ELECREV: could not replace {name}: {error}"));
                 }
             }
         }
-        // A restore that could not replace a file must not read as a success: a drawing
-        // that is open in this session cannot be overwritten, and reporting "restored"
-        // would leave the user believing an older design is in place.
+        // A restore that could not replace a file must not read as a success: reporting
+        // "restored" would leave the user believing an older design is in place.
         if !failed.is_empty() {
             self.command_line.push_output(&format!(
-                "ELECREV: restored {} of {} file(s) from {}; {} could not be replaced (close the drawing and retry).",
+                "ELECREV: restored {} of {} file(s) from {}; {} could not be replaced.",
                 restored,
                 manifest.len(),
                 revision.name,
@@ -371,9 +392,14 @@ impl OpenCADStudio {
             ));
             return Task::none();
         }
+        let reloaded_text = if reloaded.is_empty() {
+            String::new()
+        } else {
+            format!(" Reloaded {}.", reloaded.join(", "))
+        };
         match safety {
             Ok((name, _, _)) => self.command_line.push_output(&format!(
-                "ELECREV: restored {} file(s) from {} — the pre-restore state is snapshot {name}. Reopen the drawings to see it.",
+                "ELECREV: restored {} file(s) from {} — the pre-restore state is snapshot {name}.{reloaded_text}",
                 restored, revision.name
             )),
             Err(error) => self.command_line.push_output(&format!(

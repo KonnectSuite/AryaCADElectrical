@@ -711,3 +711,65 @@ classes next to the schematic control blocks rather than replacing them.
 needs to be audited row by row against the command surface — round 30 spent its time on the
 library, which was the stated focus. Then the generator pair (`tools/symbol_maker.py` and
 `ELECMAKEMODULE`) and re-shooting `docs/screenshots/ecad-symbol-library.png` from the app.
+
+## 20. Round 31 — the nineteen-row feature audit, and the generator pair
+
+The generator pair and the audit are both done. `tools/symbol_maker.py` writes module symbols in
+bulk from the command line; `ELECMAKEMODULE <name> <channels> [SIDES=both] [PITCH=n] [CLASS=x]
+[AT=x,y]` does the same inside the app (body, one lead per channel, invisible `X1TERMnn` /
+`X4TERMnn` pin ATTDEFs, `TAG1`/`CAT`/`MFG`/`DESC1`), writes the DXF into the loaded library, adds
+its manifest row and places one instance. Both were covered by new smoke sections, which is why
+`run_smoke.py` went from 116 to **127 checks**.
+
+**The audit.** `docs/ecad-feature-matrix.md` maps all nineteen printed rows to the command that
+implements them and to the check that proves it. Sixteen rows are implemented and tested — the
+three PRO-only rows are: *design by systems/sub-assemblies* (done: `ELECSYSTEM`), *configuration
+management* (partial: `ELECVARIANT`/`ELECOPTION`/`ELECREV`, not a full configuration matrix) and
+*harness design* (**not implemented** — there is no harness model). *License sharing* has no
+meaning for a local desktop editor. *Print to PDF* and the plot path open a dialog, so they are
+exercised by hand, not headlessly.
+
+**New suite: `tests/ecad/run_features.py`** — 35 checks, one batch per feature family, verified
+from the saved DXF wherever the file is the honest observable: cross-references, terminal strips,
+PLC generation, Excel I/O import, cabling + schedule CSV, panel layout + project report, systems
+and variants, revision snapshot/compare/restore, built-project control + project numbering, and
+the navigation commands. Raw logs land in `tests/ecad/_work/features/logs/`.
+
+**Defects the audit found, and the fixes**
+
+1. **Terminal reports counted a terminal once per pin** — two blocks with two pins each printed
+   "1 strip(s), 6 terminal(s)" and listed the contact four times. `ELECTERMINALS` groups anchors
+   by label before counting; `ELECTSIDES` merges the per-pin side reports of one terminal.
+2. **`ELECPROJNUM apply` left open sheets stale** — tags were written to disk, the tab kept the
+   old ones, the next `QSAVE` was refused as an outside change and `ELECGOTO` could not find the
+   new tag. The command now reloads every open sheet it rewrote (`reload_tab_from_disk`) and
+   prints "N open drawing(s) reloaded."
+3. **`ELECREV RESTORE` could not replace an open drawing** — the tab holds the file's edit lease.
+   Restore now stages through the Save path (`crate::io::replace_file_from_source`, same
+   temp-then-`ReplaceFileW` route) and reloads the tab, reporting "Reloaded <name>."
+4. **Snapshot ids had to be typed exactly** — `ELECREV RESTORE 002` failed against `002-A`, and
+   `COMPARE` had the same defect. Both now share `find_revision`, which accepts the printed name
+   or the bare order number.
+5. **Cross-reference labels printed insertion coordinates** (`40,0`) when a part had no contact
+   identifier, so the label went stale on the first drag. A part without an identifier is now
+   referenced as `<tag>:<ordinal>` (`-K1:2`); `crates/elec/src/xref.rs` and its unit test follow.
+
+**Verification**
+
+| Check | Result |
+|---|---|
+| `py -3.13 tests\ecad\run_smoke.py` | 127/127 checks passed |
+| `py -3.13 tests\ecad\run_features.py` | 35/35 checks passed |
+| `cargo test --release -p elec` | 131 passed, 0 failed |
+| `py -3.13 tools\make_library.py --check` | in sync, 78 symbols (IEC) |
+| `py -3.13 tools\make_library.py --standard nec --check` | in sync, 414 symbols |
+| `docs/screenshots/ecad-symbol-catalogue.png` | contact sheet of all 78 IEC blocks |
+
+**New screenshot.** `docs/screenshots/ecad-symbol-catalogue.png` is rendered straight from
+`library/starter` by `tools/render_library.py --library library\starter --per-page 80`, so it can
+be regenerated whenever the library changes; the six `ecad-neca-*.png` sheets from round 30 sit
+beside it.
+
+**Still open.** Harness design; a real configuration matrix for the PRO row; clickable
+cross-reference links in the PDF; the eleven code-only NECA names and the 25 hand-drawn control
+blocks noted in §19; and the GUI-only plot path has no headless proof.

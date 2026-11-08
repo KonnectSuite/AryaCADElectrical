@@ -1,0 +1,12 @@
+# ELECMAKEMODULE: generate parametric module symbols into a COPY of the library.
+#
+# Run by tests/ecad/run_smoke.py against a copy of library/starter (the command writes
+# <name>.dxf and appends to library.tsv, so the delivered library stays clean).
+#   @LIB@  absolute path of the writable library copy
+#
+# 6 channels on both sides: 4 body lines, 12 leads, 12 hidden pin attributes and the
+# four component attributes. The strip uses LEFT sides only, which halves its pins.
+ELECLIB @LIB@
+ELECMAKEMODULE SMOKE_MODULE 6 CLASS=Module AT=2,2
+ELECMAKEMODULE SMOKE_STRIP 12 SIDES=left CLASS=Strip AT=6,2
+QSAVE

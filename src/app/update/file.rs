@@ -1789,6 +1789,27 @@ impl OpenCADStudio {
         }
     }
 
+    /// Reload a tab's document from the file it is showing.
+    ///
+    /// Used after a command rewrote that file on disk (a revision restore): without this the
+    /// tab would keep the old design in memory and the next save would write it back over
+    /// the restored drawing.
+    pub(in crate::app) fn reload_tab_from_disk(&mut self, i: usize) -> Result<(), String> {
+        let Some(path) = self.tabs[i].current_path.clone() else {
+            return Err("the tab is not showing a file".to_string());
+        };
+        let document = crate::io::load_file(&path)?;
+        self.tabs[i].scene.document = document;
+        self.tabs[i].dirty = false;
+        self.tabs[i].recovery_save_as_required = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.tabs[i].disk_fingerprint =
+                crate::io::edit_lock::FileFingerprint::capture(&path).ok();
+        }
+        Ok(())
+    }
+
     /// Read through this session's lease when it covers `path`.
     #[cfg(not(target_arch = "wasm32"))]
     pub(in crate::app) fn read_drawing(&self, path: &std::path::Path) -> std::io::Result<Vec<u8>> {

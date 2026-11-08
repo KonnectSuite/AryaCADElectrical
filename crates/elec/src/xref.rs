@@ -83,33 +83,25 @@ impl DeviceRef {
 
     /// What to print beside one part: the *other* parts of the same device.
     ///
-    /// A contact identifier is used when the drawing carries one, otherwise the part's
-    /// position - the same fallback the report uses. The part itself is excluded, because a
-    /// reference that points at the symbol you are looking at is noise.
+    /// A contact identifier is used when the drawing carries one, otherwise the part is
+    /// named by its device tag and ordinal (`-K1:2`), which is stable across edits - unlike
+    /// an insertion coordinate, which moved every time someone dragged the symbol. The part
+    /// itself is excluded, because a reference that points at the symbol you are looking at
+    /// is noise.
     pub fn reference_for(&self, index: usize) -> String {
         let mut others: Vec<String> = self
             .parts
             .iter()
             .enumerate()
             .filter(|(other, _)| *other != index)
-            .map(|(_, part)| match &part.part_id {
+            .map(|(other, part)| match &part.part_id {
                 Some(id) => id.clone(),
-                None => format!("{},{}", format_coordinate(part.x), format_coordinate(part.y)),
+                None => format!("{}:{}", self.tag, other + 1),
             })
             .collect();
         others.sort();
         others.dedup();
         others.join(", ")
-    }
-}
-
-/// Coordinates in cross-reference text: no trailing zeros, one decimal at most.
-fn format_coordinate(value: f64) -> String {
-    let rounded = (value * 10.0).round() / 10.0;
-    if (rounded - rounded.trunc()).abs() < f64::EPSILON {
-        format!("{}", rounded as i64)
-    } else {
-        format!("{rounded}")
     }
 }
 
@@ -269,21 +261,21 @@ mod tests {
             .unwrap();
         // The coil references both contacts by identifier.
         assert_eq!(device.reference_for(coil), "13-14, 21-22");
-        // A contact references the other contact and the coil's position.
+        // A contact references the other contact and the coil by its device tag + ordinal.
         let from_contact = device.reference_for(first_contact);
         assert!(from_contact.contains("21-22"));
-        assert!(from_contact.contains("0,0"));
+        assert!(from_contact.contains("-K1:"));
         assert!(!from_contact.contains("13-14"));
     }
 
     #[test]
-    fn reference_falls_back_to_position_without_identifiers() {
+    fn reference_falls_back_to_the_device_tag_without_identifiers() {
         let input = vec![
             PlacedPart::new("Contactor", "-K1", 0.0, 0.0),
             PlacedPart::new("Contact", "-K1", 12.5, -3.0),
         ];
         let device = &cross_references(&input)[0];
-        assert_eq!(device.reference_for(0), "12.5,-3");
+        assert_eq!(device.reference_for(0), "-K1:2");
     }
 
     #[test]

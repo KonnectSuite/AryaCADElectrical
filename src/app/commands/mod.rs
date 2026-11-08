@@ -1344,6 +1344,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "ELECPROJECT",
         "ELECWIRE",
         "ELECMAKESYMBOL",
+        "ELECMAKEMODULE",
         "ELECJUNCTIONS",
         "ELECLIB",
         "SETVAR",

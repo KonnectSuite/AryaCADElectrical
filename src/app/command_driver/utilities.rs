@@ -1095,6 +1095,7 @@ impl OpenCADStudio {
             || tokens[0].eq_ignore_ascii_case("ELECPLACE")
             || tokens[0].eq_ignore_ascii_case("ELECSETATTR")
             || tokens[0].eq_ignore_ascii_case("ELECMAKESYMBOL")
+            || tokens[0].eq_ignore_ascii_case("ELECMAKEMODULE")
             // These also act on their arguments, and were missing from this list: the
             // bare probe ran them a second time (ELECSHEET drew its frame twice,
             // ELECPROJNUM previewed and then applied).

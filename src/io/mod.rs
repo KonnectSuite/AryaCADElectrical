@@ -2407,6 +2407,22 @@ pub fn save_owned_as_version_atomic(
     })
 }
 
+/// Replace `target` with the bytes of `source`, staging beside the destination first.
+///
+/// This is the same temp-then-replace path Save uses, so it can also replace a drawing the
+/// session currently has open: a plain `std::fs::copy` fails there because the edit lease
+/// holds the file. Used by `ELECREV RESTORE` to roll a project back.
+pub fn replace_file_from_source(source: &Path, target: &Path) -> Result<(), String> {
+    let temp_path = save_temp_path(target);
+    std::fs::copy(source, &temp_path)
+        .map_err(|error| format!("could not stage {}: {error}", target.display()))?;
+    if let Err(error) = replace_save_file(&temp_path, target) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(format!("{error}"));
+    }
+    Ok(())
+}
+
 fn save_owned_as_version_inner<F>(
     mut doc: Document,
     path: &Path,
