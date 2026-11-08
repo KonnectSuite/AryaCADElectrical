@@ -95,6 +95,15 @@ pub struct Cli {
     #[arg(help = crate::t!("Export and synchronize AI agent MCP tool schemas to ~/.gemini/antigravity/mcp/opencadstudio/ and exit.").into_owned(), long_help = None)]
     pub sync_mcp_schemas: bool,
 
+    /// Convert every drawing in a folder, then exit: `--export-dir SRC DST`.
+    ///
+    /// The batch form exists because one process per drawing is dominated by
+    /// start-up (GPU probe, codec warm-up): a folder of symbols takes seconds
+    /// here and many minutes through repeated `--export` calls.
+    #[arg(long, num_args = 2, value_names = ["SRC", "DST"])]
+    #[arg(help = crate::t!("Convert every drawing in SRC into DST (same name, .dxf), then exit.").into_owned(), long_help = None)]
+    pub export_dir: Option<Vec<PathBuf>>,
+
     /// TCP port for --serve (defaults to stdin/stdout).
     #[arg(long, value_name = "PORT")]
     #[arg(help = crate::t!("TCP port for --serve (defaults to stdin/stdout).").into_owned(), long_help = None)]

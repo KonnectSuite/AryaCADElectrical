@@ -155,6 +155,15 @@ fn main() -> iced::Result {
             app::serve(args.read_only);
             return Ok(());
         }
+        if let Some(pair) = &args.export_dir {
+            let code = app::export_dir_headless(
+                &pair[0],
+                &pair[1],
+                args.target_version.as_deref(),
+                args.allow_lossy,
+            );
+            std::process::exit(code);
+        }
         if let Some(io) = &args.export {
             // clap enforces exactly two values for --export.
             let code = app::export_headless(

@@ -102,6 +102,75 @@ pub fn export_headless(
 /// Unattended script run (`--batch SCRIPT`, or `--each SCRIPT FILES...`)
 /// with no window; returns the process exit code (2: unreadable script).
 #[cfg(not(target_arch = "wasm32"))]
+/// Convert every drawing in `input` into `output`, keeping relative folders.
+///
+/// `--export SRC DST` converts one file per process, and process start-up
+/// (GPU probe, codec warm-up) dwarfs the conversion itself, so an incoming
+/// symbol set of a few hundred drawings took tens of minutes. This form walks
+/// the tree once, inside one process, and writes DXF files named after their
+/// source: `SRC/5.0/5-001.dwg` becomes `DST/5.0/5-001.dxf`.
+pub fn export_dir_headless(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    target_version: Option<&str>,
+    allow_lossy: bool,
+) -> i32 {
+    fn walk(dir: &std::path::Path, found: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
+                if ext.eq_ignore_ascii_case("dwg") || ext.eq_ignore_ascii_case("dxf") {
+                    found.push(path);
+                }
+            }
+        }
+    }
+
+    let mut sources = Vec::new();
+    walk(input, &mut sources);
+    sources.sort();
+    if sources.is_empty() {
+        eprintln!("export-dir: no drawings under {}", input.display());
+        return 2;
+    }
+    let mut written = 0usize;
+    let mut failed = 0usize;
+    for source in &sources {
+        let relative = source.strip_prefix(input).unwrap_or(source);
+        let mut target = output.join(relative);
+        target.set_extension("dxf");
+        if let Some(parent) = target.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("export-dir: cannot create {}: {e}", parent.display());
+                failed += 1;
+                continue;
+            }
+        }
+        let code = export_headless(source, &target, target_version, allow_lossy);
+        if code == 0 {
+            written += 1;
+        } else {
+            failed += 1;
+        }
+    }
+    println!(
+        "export-dir: {written} of {} drawing(s) -> {}{}",
+        sources.len(),
+        output.display(),
+        if failed == 0 {
+            String::new()
+        } else {
+            format!(" ({failed} failed)")
+        }
+    );
+    i32::from(failed != 0)
+}
+
 pub fn run_batch(script: &std::path::Path, files: &[PathBuf], read_only: bool) -> i32 {
     match std::fs::read_to_string(script) {
         Ok(text) => OpenCADStudio::new_headless(read_only).run_batch(&text, files),

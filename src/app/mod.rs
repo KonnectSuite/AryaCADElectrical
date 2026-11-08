@@ -6,7 +6,7 @@ pub(crate) fn automation_action_names() -> &'static [&'static str] {
 }
 pub(crate) mod config;
 #[cfg(not(target_arch = "wasm32"))]
-pub use automation::{export_headless, run_batch, serve};
+pub use automation::{export_dir_headless, export_headless, run_batch, serve};
 mod annotation_data;
 mod extraction_catalog;
 mod array_grips;
