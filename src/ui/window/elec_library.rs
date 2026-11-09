@@ -458,6 +458,14 @@ impl Widget<Message, Theme, Renderer> for Palette {
             if index >= self.rows.len() || index >= tree.children.len() {
                 break;
             }
+            // A filtered-out row gets a zero-size node with no children. An
+            // operation (the modal's Unfocus, run on the first click inside the
+            // palette) must not descend into it: iced's button unwraps its
+            // content layout and panics on the missing child.
+            let bounds = child_layout.bounds();
+            if bounds.width <= 0.0 || bounds.height <= 0.0 {
+                continue;
+            }
             self.rows[index].as_widget_mut().operate(
                 &mut tree.children[index],
                 child_layout,

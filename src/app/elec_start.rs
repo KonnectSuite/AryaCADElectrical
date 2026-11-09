@@ -202,33 +202,74 @@ fn fallback_folders(requested: &Path) -> Vec<PathBuf> {
     candidates
 }
 
+/// Can this process put a file inside `folder`? Creating the folder is not
+/// proof: a folder that already exists can still refuse writes (catalog policy,
+/// a sync client, antivirus, or a deny ACE), and in that case `create_dir_all`
+/// reports success and every sheet then fails with a bare "Access is denied".
+fn folder_is_writable(folder: &Path) -> bool {
+    let probe = folder.join(format!(".ocs-write-probe-{}", std::process::id()));
+    match std::fs::write(&probe, b"") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// Create `requested`, or — if Windows denies access there — the first
 /// writable fallback. Returns the folder actually used plus a note when the
 /// requested folder could not be used.
 fn prepare_folder(requested: &Path) -> Result<(PathBuf, Option<String>), String> {
     match std::fs::create_dir_all(requested) {
-        Ok(()) => return Ok((requested.to_path_buf(), None)),
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            let mut denied = error;
-            for candidate in fallback_folders(requested) {
-                match std::fs::create_dir_all(&candidate) {
-                    Ok(()) => {
-                        return Ok((
-                            candidate.clone(),
-                            Some(format!(
-                                "{} is protected ({denied}); the set was created in {} instead.",
-                                requested.display(),
-                                candidate.display()
-                            )),
-                        ));
-                    }
-                    Err(error) => denied = error,
-                }
+        Ok(()) => {
+            if folder_is_writable(requested) {
+                return Ok((requested.to_path_buf(), None));
             }
-            Err(format!("cannot create {}: {denied}", requested.display()))
+            let denied = std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the folder exists but this app cannot write into it",
+            );
+            fall_back(requested, denied)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            fall_back(requested, error)
         }
         Err(error) => Err(format!("cannot create {}: {error}", requested.display())),
     }
+}
+
+/// Use the first fallback location that both creates and accepts a write.
+fn fall_back(
+    requested: &Path,
+    denied: std::io::Error,
+) -> Result<(PathBuf, Option<String>), String> {
+    let mut denied = denied;
+    for candidate in fallback_folders(requested) {
+        match std::fs::create_dir_all(&candidate) {
+            Ok(()) => {
+                if folder_is_writable(&candidate) {
+                    return Ok((
+                        candidate.clone(),
+                        Some(format!(
+                            "{} is protected ({denied}); the set was created in {} instead.",
+                            requested.display(),
+                            candidate.display()
+                        )),
+                    ));
+                }
+                denied = std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("{} is not writable", candidate.display()),
+                );
+            }
+            Err(error) => denied = error,
+        }
+    }
+    Err(format!(
+        "cannot write to {} ({denied}); choose another folder with Browse…",
+        requested.display()
+    ))
 }
 
 /// Find the shipped `templates/` folder: beside the executable, a few levels up
@@ -501,5 +542,65 @@ mod tests {
         assert!(titles.iter().any(|value| value == "ACME"));
         assert!(titles.iter().any(|value| value == "LINE 3"));
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// A folder that exists but answers every write with "Access is denied"
+    /// must not dead-end the wizard: `prepare_folder` has to hand back a
+    /// writable place and a note that says where the set went.
+    #[test]
+    fn a_folder_that_refuses_writes_falls_back() {
+        let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/tmp")
+            .join(format!("ecad_denied_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).expect("test folder");
+        assert!(folder_is_writable(&folder), "a plain folder accepts writes");
+
+        // Deny this user the right to write or create files in the folder. The
+        // folder still exists, so create_dir_all keeps succeeding: that is the
+        // trap the probe in prepare_folder exists to catch.
+        let user = std::env::var("USERNAME").unwrap_or_else(|_| "KNPhu".to_string());
+        let deny = format!("{user}:(OI)(CI)(W)");
+        let status = std::process::Command::new("icacls")
+            .arg(&folder)
+            .arg("/deny")
+            .arg(&deny)
+            .output();
+        match status {
+            Ok(output) if output.status.success() => {}
+            _ => {
+                let _ = std::fs::remove_dir_all(&folder);
+                return; // icacls is unavailable; nothing to prove here.
+            }
+        }
+
+        assert!(!folder_is_writable(&folder), "the deny ACE blocks the probe");
+
+        let config_candidate = crate::config::config_dir()
+            .map(|dir| dir.join("Projects").join("Project1"));
+        let existed_before = config_candidate.as_ref().map(|p| p.exists()).unwrap_or(true);
+
+        let (used, note) = prepare_folder(&folder).expect("the wizard falls back");
+        assert_ne!(used, folder, "the requested folder was not used");
+        assert!(folder_is_writable(&used), "the fallback accepts writes");
+        let note = note.expect("the user is told about the substitution");
+        assert!(note.contains("is protected"), "note was: {note}");
+        assert!(
+            note.contains(&used.display().to_string()),
+            "note does not name the fallback: {note}"
+        );
+
+        // Undo the deny ACE so the folder can be deleted again.
+        let _ = std::process::Command::new("icacls")
+            .arg(&folder)
+            .arg("/remove:d")
+            .arg(&user)
+            .output();
+        let _ = std::fs::remove_dir_all(&folder);
+        if !existed_before {
+            if let Some(candidate) = config_candidate {
+                let _ = std::fs::remove_dir_all(candidate);
+            }
+        }
     }
 }

@@ -773,3 +773,33 @@ beside it.
 **Still open.** Harness design; a real configuration matrix for the PRO row; clickable
 cross-reference links in the PDF; the eleven code-only NECA names and the 25 hand-drawn control
 blocks noted in §19; and the GUI-only plot path has no headless proof.
+
+## 21. Round 32 â€” the palette crash, and a wizard that survives a locked folder
+
+**The palette crash.** Clicking any filter chip in the Electrical Library closed the app. The
+panic was `widget/src/button.rs:254` `Option::unwrap()` on `None`, reached from
+`elec_library::Palette::operate` while iced ran its unfocus operation on the first mouse press
+inside the modal. Cause: a filtered-out row is laid out as a zero-size node with no children, and
+`Palette::operate` still descended into every row; iced's `Button::operate` expects its content
+child. `Palette::operate` now skips any row whose layout bounds are zero, matching the guard
+`update` and `draw` already had (`src/ui/window/elec_library.rs`). Verified on the rebuilt
+binary: clicking *Circuit Breaker* filters 78 rows down to 4 (MCB, MCCB, RCD, THERMAL_MAGNETIC),
+the chip highlights, a row click starts `ELECPLACE`, and no crash log is written.
+
+**The wizard folder error.** A user hit `cannot write ...\AR-0001-01.dxf: IO error: Access is
+denied. (os error 5)` when creating a drawing set. The folder existed but refused writes, and
+`prepare_folder` only fell back when `create_dir_all` itself failed â€” which it does not do for an
+existing, non-writable folder. It now probes the folder with a `.ocs-write-probe-<pid>` file
+(`folder_is_writable`), and on refusal either falls back to the configured/%TEMP% project folder
+with the note "`<requested>` is protected (<error>); the set was created in `<fallback>` instead.",
+or fails with "cannot write to `<folder>` (<error>); choose another folder with Browseâ€¦". A
+matching unit test denies writes with `icacls` and asserts the fallback (`cargo test --release
+--lib a_folder_that_refuses_writes_falls_back`).
+
+**Driving the GUI for verification.** `Start-Process` hangs the tool (the child inherits stdio);
+launch detached with `Invoke-CimMethod -ClassName Win32_Process -MethodName Create`. Inside the
+automation process call `SetProcessDpiAwarenessContext(-4)` before `SetCursorPos`, or clicks are
+DPI-virtualized. The window rect is `-8,-8`-`1928,1040` when maximized, so a screenshot pixel
+`(x,y)` is the screen point `(x-8, y-8)`. An *Update Available* dialog appears a few seconds after
+startup and swallows clicks meant for whatever is behind it; dismiss it (Escape or its close box)
+before clicking. Escape also cancels a pending `ELECPLACE`.
