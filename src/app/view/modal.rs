@@ -26,7 +26,15 @@ impl OpenCADStudio {
             Some(K::Options) => crate::tr!("action", "options"),
             Some(K::FindReplace) => crate::tr!("modal", "find-replace"),
             Some(K::Overkill) => crate::t!("Delete Duplicate Objects").into_owned(),
-            Some(K::ElectricalLibrary) => crate::t!("Electrical Library").into_owned(),
+            // The palette lists whatever folder ELECLIB loaded, and a drawing is either
+            // IEC or NEC — say which, because the title bar is the only place the palette
+            // can tell a user that they are looking at the other standard's symbols.
+            Some(K::ElectricalLibrary) => {
+                match crate::app::commands::elec::library_standard() {
+                    Some(standard) => format!("Electrical Library — {standard}"),
+                    None => crate::t!("Electrical Library").into_owned(),
+                }
+            }
             Some(K::ElecReport) => self.elec_report.title.clone(),
             Some(K::ElecLibManager) => crate::t!("Symbol library").into_owned(),
             Some(K::StartMode) => crate::t!("Open CAD Studio").into_owned(),

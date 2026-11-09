@@ -541,7 +541,8 @@ then `ELECEXPORT <out> dwg`, and asserts the summary, that the folder holds exac
 |---|---|
 | `cargo check --release` | clean |
 | `cargo build --release -j 4` | finished in 4 m 48 s |
-| `py -3.13 tests\ecadun_smoke.py` | **116/116 checks passed** |
+| `py -3.13 tests\ecad
+un_smoke.py` | **116/116 checks passed** |
 
 **Still open**: `ELECLIST` prints the block name as the class for library-less symbols, and
 `EXPORTPDF` produces searchable text but no clickable cross-reference links.
@@ -774,7 +775,7 @@ beside it.
 cross-reference links in the PDF; the eleven code-only NECA names and the 25 hand-drawn control
 blocks noted in §19; and the GUI-only plot path has no headless proof.
 
-## 21. Round 32 â€” the palette crash, and a wizard that survives a locked folder
+## 21. Round 32 — the palette crash, and a wizard that survives a locked folder
 
 **The palette crash.** Clicking any filter chip in the Electrical Library closed the app. The
 panic was `widget/src/button.rs:254` `Option::unwrap()` on `None`, reached from
@@ -788,11 +789,11 @@ the chip highlights, a row click starts `ELECPLACE`, and no crash log is written
 
 **The wizard folder error.** A user hit `cannot write ...\AR-0001-01.dxf: IO error: Access is
 denied. (os error 5)` when creating a drawing set. The folder existed but refused writes, and
-`prepare_folder` only fell back when `create_dir_all` itself failed â€” which it does not do for an
+`prepare_folder` only fell back when `create_dir_all` itself failed — which it does not do for an
 existing, non-writable folder. It now probes the folder with a `.ocs-write-probe-<pid>` file
 (`folder_is_writable`), and on refusal either falls back to the configured/%TEMP% project folder
 with the note "`<requested>` is protected (<error>); the set was created in `<fallback>` instead.",
-or fails with "cannot write to `<folder>` (<error>); choose another folder with Browseâ€¦". A
+or fails with "cannot write to `<folder>` (<error>); choose another folder with Browse…". A
 matching unit test denies writes with `icacls` and asserts the fallback (`cargo test --release
 --lib a_folder_that_refuses_writes_falls_back`).
 
@@ -803,3 +804,34 @@ DPI-virtualized. The window rect is `-8,-8`-`1928,1040` when maximized, so a scr
 `(x,y)` is the screen point `(x-8, y-8)`. An *Update Available* dialog appears a few seconds after
 startup and swallows clicks meant for whatever is behind it; dismiss it (Escape or its close box)
 before clicking. Escape also cancels a pending `ELECPLACE`.
+
+## 22. Round 33 - IEC and NEC are two libraries, and the app now says which is loaded
+
+A drawing is either drawn to IEC or to NEC, and the standard is decided by the library folder
+ELECLIB loaded, not by a setting: library/starter is the 78-symbol IEC control library and
+library/nec is the 414-symbol ANSI one (78 control blocks plus 336 NECA 100 construction
+symbols). The palette filters by *class*, so inside library/nec the NECA drawings appear under
+classes prefixed NECA ...; there was no way to tell from the palette which standard a user was
+looking at.
+
+What changed:
+
+- 	ools/make_library.py writes a fifth manifest column, standard (IEC or NEC), so the
+  catalogue records its own standard instead of the app guessing from geometry.
+- LibraryEntry carries that field. It is a hint, never a filter key: adding a fake
+  IEC/NEC chip row to a single-library palette would have been a chip that filters nothing.
+- ELECLIB NEC and ELECLIB IEC resolve against the loaded library's parent folder (or
+  <cwd>/library when nothing is loaded), so switching standard is a word, not a path.
+- A bare ELECLIB now reports which folder and standard are loaded - previously it printed a
+  usage error, which is what a user clicking the ribbon button saw.
+- The palette title is Electrical Library - IEC or Electrical Library - NEC; with no
+  recorded standard it stays the translated Electrical Library.
+- The load summary ends standard IEC. / standard NEC. and names the folder it actually read,
+  so ELECLIB NEC no longer echoes the word NEC where a path belongs.
+
+Verification: py -3.13 tests/ecad/run_features.py = **44/44 checks passed**, including a new
+section 10 that loads a copy of library/starter, switches to library/nec and back, and asserts
+the summaries, the alias resolution and both catalogue sizes (78 and 414). 
+un_smoke.py is
+still **127/127**. Screenshots: 	arget/tmp/n1.png (title IEC, 78/78) and 	arget/tmp/n5.png
+(title NEC, 414/414).

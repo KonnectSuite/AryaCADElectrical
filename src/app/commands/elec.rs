@@ -64,6 +64,75 @@ fn remembered_library() -> Option<std::path::PathBuf> {
     }
 }
 
+/// Resolve `IEC` and `NEC` to the library folder that sits beside the loaded one.
+///
+/// A drawing is either drawn to IEC or to NEC, and which one is decided by the folder
+/// `ELECLIB` loaded, not by a setting. Typing the short name is the point: `ELECLIB NEC`
+/// means the sibling `nec` folder of whatever is loaded now (or of `<cwd>/library` when
+/// nothing is loaded), so nobody has to paste a path to switch standard.
+fn resolve_library_alias(name: &str) -> Option<std::path::PathBuf> {
+    let wanted = name.trim().to_ascii_uppercase();
+    let candidates: &[&str] = match wanted.as_str() {
+        "IEC" => &["starter", "iec"],
+        "NEC" | "NEMA" | "NECA" | "ANSI" => &["nec", "neca", "ansi"],
+        _ => return None,
+    };
+    let roots: Vec<std::path::PathBuf> = remembered_library()
+        .and_then(|directory| directory.parent().map(|parent| parent.to_path_buf()))
+        .into_iter()
+        .chain(
+            std::env::current_dir()
+                .ok()
+                .map(|directory| directory.join("library")),
+        )
+        .collect();
+    for root in roots {
+        for candidate in candidates {
+            let path = root.join(candidate);
+            if path.is_dir() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// Which standard the loaded catalogue is drawn in: the last `ELECLIB`'s manifest, or —
+/// when a drawing was opened on its own and only the index exists — the majority of its
+/// standard column. `None` when nothing says.
+pub(crate) fn library_standard() -> Option<String> {
+    if let Some(standard) = library_standard_store().read().ok().and_then(|it| it.clone()) {
+        return Some(standard);
+    }
+    let index = library_index().read().ok()?;
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for entry in index.values() {
+        if !entry.standard.is_empty() {
+            *counts.entry(entry.standard.clone()).or_insert(0) += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(standard, _)| standard)
+}
+
+/// Folder and standard of the loaded library, for `ELECLIB` with no argument.
+fn library_summary() -> String {
+    let loaded = library_index()
+        .read()
+        .map(|index| index.len())
+        .unwrap_or(0);
+    let folder = remembered_library()
+        .or_else(library_directory)
+        .map(|directory| directory.display().to_string())
+        .unwrap_or_else(|| "no folder yet".to_string());
+    let standard = library_standard().unwrap_or_else(|| "standard not recorded".to_string());
+    format!(
+        "ELECLIB: {loaded} symbol(s) from {folder} — {standard}. Use ELECLIB <folder>, ELECLIB IEC or ELECLIB NEC to switch."
+    )
+}
+
 /// One symbol's catalogue entry: which class it belongs to and which attributes an
 /// instance of it carries.
 #[derive(Debug, Clone, Default)]
@@ -72,6 +141,10 @@ struct LibraryEntry {
     name: String,
     class: String,
     attributes: Vec<String>,
+    /// `IEC` or `NEC` when the manifest says which standard the drawing is in.
+    /// Older manifests have no such column, and `ELECMAKEMODULE` rows leave it
+    /// empty, so this is a hint for the palette title, never a filter key.
+    standard: String,
     /// Attribute text height that suits this symbol's own size, measured by `ELECLIB`
     /// from the loaded geometry. Zero means "not measured".
     label_height: f64,
@@ -114,6 +187,22 @@ static LIBRARY_INDEX: std::sync::OnceLock<
 
 fn library_index() -> &'static std::sync::RwLock<std::collections::BTreeMap<String, LibraryEntry>> {
     LIBRARY_INDEX.get_or_init(|| std::sync::RwLock::new(std::collections::BTreeMap::new()))
+}
+
+/// Standard of the library `ELECLIB` loaded last, so the palette title and `ELECLIB`
+/// with no argument report the folder actually in use rather than a majority of an
+/// index that may still hold symbols from an earlier folder.
+static LIBRARY_STANDARD: std::sync::OnceLock<std::sync::RwLock<Option<String>>> =
+    std::sync::OnceLock::new();
+
+fn library_standard_store() -> &'static std::sync::RwLock<Option<String>> {
+    LIBRARY_STANDARD.get_or_init(|| std::sync::RwLock::new(None))
+}
+
+fn set_library_standard(standard: Option<String>) {
+    if let Ok(mut guard) = library_standard_store().write() {
+        *guard = standard;
+    }
 }
 
 /// Load the library manifest lazily when a drawing is read on its own.
@@ -172,6 +261,12 @@ fn read_library_manifest(
             .and_then(|value| value.trim().parse::<f64>().ok())
             .filter(|value| *value > 0.0)
             .unwrap_or(1.0);
+        // The standard is the fifth column and is optional: a manifest written by
+        // `ELECMAKEMODULE` stops at the scale.
+        let standard = parts
+            .next()
+            .map(|value| value.trim().to_ascii_uppercase())
+            .unwrap_or_default();
         if symbol.is_empty() {
             continue;
         }
@@ -185,6 +280,7 @@ fn read_library_manifest(
                 } else {
                     attributes.split('|').map(|tag| tag.to_string()).collect()
                 },
+                standard,
                 // Measured once the geometry is loaded, not by the manifest reader.
                 label_height: 0.0,
                 scale,
@@ -3944,12 +4040,22 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
     /// space becomes a block definition, so `ELECINSERT CONTACTOR` can then place it even
     /// on a drawing that has never contained one.
     pub(crate) fn elec_lib(&mut self, i: usize, folder: &str) -> Task<Message> {
-        let directory = std::path::Path::new(folder);
+        // `ELECLIB NEC` is a switch between standards, not a path: resolve it to the
+        // sibling folder of the library in use.
+        let alias = resolve_library_alias(folder);
+        let directory = alias
+            .clone()
+            .unwrap_or_else(|| std::path::Path::new(folder).to_path_buf());
         if !directory.is_dir() {
             let message = format!("ELECLIB: {folder} is not a folder.");
             self.command_line.push_output(&message);
             return Task::none();
         }
+        if alias.is_some() {
+            let line = format!("ELECLIB: {folder} resolves to {}.", directory.display());
+            self.command_line.push_output(&line);
+        }
+        let directory = directory.as_path();
 
         let mut paths: Vec<std::path::PathBuf> = Vec::new();
         if let Ok(entries) = std::fs::read_dir(directory) {
@@ -3972,6 +4078,22 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
             std::collections::BTreeMap::new();
         let mut failed: Vec<String> = Vec::new();
         let manifest = read_library_manifest(directory);
+        // Name the standard before the entries are moved into the index: the manifest's
+        // own column is the only source that cannot be confused by an earlier folder.
+        let loaded_standard = {
+            let mut counts: std::collections::BTreeMap<&str, usize> =
+                std::collections::BTreeMap::new();
+            for entry in manifest.values() {
+                if !entry.standard.is_empty() {
+                    *counts.entry(entry.standard.as_str()).or_insert(0) += 1;
+                }
+            }
+            counts
+                .into_iter()
+                .max_by_key(|(_, count)| *count)
+                .map(|(name, _)| name.to_string())
+        };
+        set_library_standard(loaded_standard.clone());
 
         for path in paths {
             let Some(stem) = path
@@ -4151,8 +4273,10 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
             .map(|row| row.2.len())
             .sum();
         let summary = format!(
-            "ELECLIB: loaded {loaded} symbol(s) from {folder}; {skipped} already in this drawing, {} failed, {manifest_count} in the catalogue, {offset_points} attribute definition point(s), {preview_segments} preview segment(s).",
-            failed.len()
+            "ELECLIB: loaded {loaded} symbol(s) from {}; {skipped} already in this drawing, {} failed, {manifest_count} in the catalogue, {offset_points} attribute definition point(s), {preview_segments} preview segment(s), standard {standard}.",
+            directory.display(),
+            failed.len(),
+            standard = loaded_standard.unwrap_or_else(|| "not recorded".to_string())
         );
         self.command_line.push_output(&summary);
         for failure in &failed {
@@ -7025,11 +7149,17 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
             }
             // A ribbon button dispatches the bare verb, but these commands only exist with
             // an argument, so a click used to answer "Unknown command" — a button that looks
-            // broken. Answer with the usage line instead.
-            "ELECLIB" | "ELECPART" | "ELECSETATTR" | "ELECPROJNEW" | "ELECPROJOPEN"
+            // broken. Answer with the usage line instead. `ELECLIB` is the exception: it
+            // reports which library and standard are loaded, which is the question behind
+            // clicking that button.
+            "ELECLIB" => {
+                let summary = library_summary();
+                self.command_line.push_output(&summary);
+                Some(Task::none())
+            }
+            "ELECPART" | "ELECSETATTR" | "ELECPROJNEW" | "ELECPROJOPEN"
             | "ELECPLC" | "ELECPLCNEXT" | "ELECPANEL" | "ELECMAKEMODULE" => {
                 let usage = match cmd {
-                    "ELECLIB" => "ELECLIB <folder>",
                     "ELECPART" => "ELECPART <parts.csv>",
                     "ELECSETATTR" => "ELECSETATTR <tag> NAME=value,...",
                     "ELECPROJNEW" => "ELECPROJNEW <folder> [project.eprj]",

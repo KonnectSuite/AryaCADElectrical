@@ -331,6 +331,40 @@ def feature_built_control(exe):
     check("the saved drawing carries the new tag", insert is not None)
 
 
+def feature_standards(exe):
+    """IEC and NEC are separate folders; the app must say which one is loaded and switch
+    between them by name, because a drawing is drawn to one standard, not both."""
+    section("10. IEC and NEC libraries")
+    iec = os.path.join(WORK, "lib_iec")
+    shutil.rmtree(iec, ignore_errors=True)
+    shutil.copytree(LIB, iec)
+    nec = os.path.join(ROOT, "library", "nec")
+    check("the NEC library ships beside the IEC one", os.path.isdir(nec),
+          f"{nec} {'found' if os.path.isdir(nec) else 'missing'}")
+    sheet = blank(os.path.join(WORK, "standards.dxf"))
+    code, text = each(exe, "standards", [
+        "ELECNEW",
+        f"ELECLIB {iec}",
+        "ELECLIB",
+        "ELECLIB NEC",
+        "ELECLIB",
+        "ELECLIB IEC",
+        "ELECLIB",
+        "QSAVE",
+    ], sheet)
+    check("a load names the standard", "standard IEC." in text)
+    check("a bare ELECLIB reports the loaded library",
+          " — IEC. Use ELECLIB <folder>, ELECLIB IEC or ELECLIB NEC to switch." in text)
+    check("ELECLIB NEC resolves against the loaded folder", "resolves to" in text
+          and os.path.join("library", "nec").lower() in text.replace("/", "\\").lower())
+    check("the IEC catalogue loads", "loaded 78 symbol(s)" in text and "standard IEC." in text)
+    check("the NEC catalogue loads", "loaded 336 symbol(s)" in text
+          and "414 in the catalogue" in text and "standard NEC." in text)
+    check("a bare ELECLIB reports the switch to NEC", " — NEC. Use ELECLIB" in text)
+    check("ELECLIB IEC switches back", text.count("standard IEC.") >= 2)
+    check("the bare report follows the switch back", text.count(" — IEC. Use ELECLIB") >= 2)
+
+
 def first(text, needle):
     for line in text.splitlines():
         if needle in line:
@@ -363,6 +397,7 @@ def main(argv=None):
     feature_systems(exe)
     feature_revisions(exe)
     feature_built_control(exe)
+    feature_standards(exe)
 
     failed = [f for f in FINDINGS if not f[1]]
     print()

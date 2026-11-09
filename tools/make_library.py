@@ -70,7 +70,7 @@ UNIT_SCALE = 0.1
 # millimetre sheets the manifest asks ``ELECLIB``/``ELECPLACE`` for 25.4 x scale.
 LIBRARY_SCALE = 25.4
 
-HEADER = "symbol\tclass\tattributes\tscale"
+HEADER = "symbol\tclass\tattributes\tscale\tstandard"
 
 # Attribute sets.  ``field_for_attribute`` in elec.rs recognises the well-known
 # fields; the rest are carried verbatim on the insert (``Component::attributes``)
@@ -1130,7 +1130,10 @@ def build_symbol(entry):
 
     sector = 0
     documented = attrs + [tag for _, _, tag in pins]
-    return doc, (name, entry["cls"], "|".join(documented), str(LIBRARY_SCALE))
+    # The last column says which standard the drawing is in, so the palette can name
+    # the library it is showing (`ELECLIB NEC` loads library/nec, every row NEC).
+    standard = "NEC" if STANDARD == "nec" else "IEC"
+    return doc, (name, entry["cls"], "|".join(documented), str(LIBRARY_SCALE), standard)
 
 
 PROMPTS = {
