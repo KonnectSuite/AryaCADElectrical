@@ -808,30 +808,29 @@ before clicking. Escape also cancels a pending `ELECPLACE`.
 ## 22. Round 33 - IEC and NEC are two libraries, and the app now says which is loaded
 
 A drawing is either drawn to IEC or to NEC, and the standard is decided by the library folder
-ELECLIB loaded, not by a setting: library/starter is the 78-symbol IEC control library and
-library/nec is the 414-symbol ANSI one (78 control blocks plus 336 NECA 100 construction
-symbols). The palette filters by *class*, so inside library/nec the NECA drawings appear under
-classes prefixed NECA ...; there was no way to tell from the palette which standard a user was
+`ELECLIB` loaded, not by a setting: `library/starter` is the 78-symbol IEC control library and
+`library/nec` is the 414-symbol ANSI one (78 control blocks plus 336 NECA 100 construction
+symbols). The palette filters by *class*, so inside `library/nec` the NECA drawings appear under
+classes prefixed `NECA ...`; there was no way to tell from the palette which standard a user was
 looking at.
 
 What changed:
 
-- 	ools/make_library.py writes a fifth manifest column, standard (IEC or NEC), so the
+- `tools/make_library.py` writes a fifth manifest column, `standard` (`IEC` or `NEC`), so the
   catalogue records its own standard instead of the app guessing from geometry.
-- LibraryEntry carries that field. It is a hint, never a filter key: adding a fake
-  IEC/NEC chip row to a single-library palette would have been a chip that filters nothing.
-- ELECLIB NEC and ELECLIB IEC resolve against the loaded library's parent folder (or
-  <cwd>/library when nothing is loaded), so switching standard is a word, not a path.
-- A bare ELECLIB now reports which folder and standard are loaded - previously it printed a
+- `LibraryEntry` carries that field. It is a hint, never a filter key: adding a fake IEC/NEC chip
+  row to a single-library palette would have been a chip that filters nothing.
+- `ELECLIB NEC` and `ELECLIB IEC` resolve against the loaded library's parent folder (or
+  `<cwd>/library` when nothing is loaded), so switching standard is a word, not a path.
+- A bare `ELECLIB` now reports which folder and standard are loaded - previously it printed a
   usage error, which is what a user clicking the ribbon button saw.
-- The palette title is Electrical Library - IEC or Electrical Library - NEC; with no
-  recorded standard it stays the translated Electrical Library.
-- The load summary ends standard IEC. / standard NEC. and names the folder it actually read,
-  so ELECLIB NEC no longer echoes the word NEC where a path belongs.
+- The palette title is `Electrical Library - IEC` or `Electrical Library - NEC`; with no recorded
+  standard it stays the translated `Electrical Library`.
+- The load summary ends `standard IEC.` / `standard NEC.` and names the folder it actually read,
+  so `ELECLIB NEC` no longer echoes the word `NEC` where a path belongs.
 
-Verification: py -3.13 tests/ecad/run_features.py = **44/44 checks passed**, including a new
-section 10 that loads a copy of library/starter, switches to library/nec and back, and asserts
-the summaries, the alias resolution and both catalogue sizes (78 and 414). 
-un_smoke.py is
-still **127/127**. Screenshots: 	arget/tmp/n1.png (title IEC, 78/78) and 	arget/tmp/n5.png
-(title NEC, 414/414).
+Verification: `py -3.13 tests/ecad/run_features.py` = **44/44 checks passed**, including a new
+section 10 that loads a copy of `library/starter`, switches to `library/nec` and back, and asserts
+the summaries, the alias resolution and both catalogue sizes (78 and 414). `run_smoke.py` is
+still **127/127**. Screenshots: `docs/screenshots/ecad-library-iec.png` (title IEC, 78/78) and
+`docs/screenshots/ecad-library-nec.png` (title NEC, 414/414).
