@@ -45,8 +45,11 @@ wire numbers follow the project convention. `ELECLIB` lists or loads the symbol 
 - `ELECWIRE` / the drafting line command draws on the `WIRES` layer. Wires on layer `0`
   count too, but only if they are at least 0.5 units long — the flattened customer prints
   store wires that way, and symbol strokes shorter than that are ignored.
-- `ELECJUNCTION` and `DOT`/`WDDOT` inserts join wires that cross: a T junction only joins
-  when there is a dot on it, which is what the drawing convention says.
+- A T junction only joins when a dot sits on it, which is what the drawing convention
+  says. `ELECJUNCTIONS` draws those dots — circles on the `JUNCTIONS` layer, wherever
+  three or more wire segments actually meet — and only circles on that layer count as
+  dots. `DOT`/`WDDOT`/`JUNCTION` inserts from an imported print are furniture: they are
+  never mistaken for devices, but they do not join wires either.
 - `ELECCABLEDRAW <tag> [CORES=] [PART=] [MFG=] [SHIELD=yes]` draws a cable as real
   schematic objects: LINE segments on the `CABLES` layer, the tag as TEXT and a shield arc.
 
@@ -62,7 +65,6 @@ wire numbers follow the project convention. `ELECLIB` lists or loads the symbol 
 | `ELECCABLELIST [out.csv]` | cable schedule with measured route length, shield, ends resolved to device pins |
 | `ELECREPORT` | multi-sheet report workbook: wires, BOM, terminals, cables |
 | `ELECPANEL` | panel layout report |
-| `ELECZONE` | the sheet's zone letter/number for cross references |
 
 The connectivity all comes from one wire graph (`crates/elec`), so these commands agree.
 Net names follow AutoCAD Electrical conventions: connected pins share a net, a device with

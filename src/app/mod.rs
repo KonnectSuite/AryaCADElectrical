@@ -2236,11 +2236,14 @@ impl PendingConversionSave {
             #[cfg(target_arch = "wasm32")]
             Self::Web { ext, version, .. } => (ext.clone(), *version),
         };
-        // A DWG/DXF loss depends on the target version, so name it too.
+        // A DWG/DXF loss depends on the target version, so name it too. Name
+        // the file the save writes, not the nearest Save-dialog option: an R12
+        // drawing is saved as R13, and calling that "2018" contradicts both
+        // the file and the loss list below it.
         ocs_save::external_format(&ext)
             .map(|format| format.name().to_string())
             .unwrap_or_else(|| {
-                crate::io::format_for_version(version, ext.eq_ignore_ascii_case("dxf"))
+                crate::io::written_format(version, ext.eq_ignore_ascii_case("dxf"))
             })
     }
 }

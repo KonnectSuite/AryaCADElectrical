@@ -192,12 +192,22 @@ fn write_revision(
         format!("{next:03}-{safe_label}")
     };
     let directory = root.join(&name);
+    // A snapshot of nothing is not a revision: it burns the next order number and
+    // leaves a `.rev` folder that `ELECREV RESTORE` would happily roll the project
+    // back into. Say so before anything is written.
+    let sources = revision_files(folder);
+    if sources.is_empty() {
+        return Err(format!(
+            "no project files in {} to snapshot — save the sheets first",
+            folder.display()
+        ));
+    }
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
 
     let mut lines = Vec::new();
     let mut total = 0u64;
-    for file in revision_files(folder) {
+    for file in sources {
         let Some(file_name) = file.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
@@ -408,5 +418,38 @@ impl OpenCADStudio {
             )),
         }
         Task::none()
+    }
+}
+
+#[cfg(test)]
+mod revision_guard_tests {
+    use super::*;
+
+    /// A snapshot of a project folder that holds no sheets used to write
+    /// `001\manifest.tsv` with nothing in it, burn the next order number, and leave
+    /// a revision `ELECREV RESTORE` would roll the whole project back into.
+    #[test]
+    fn an_empty_project_folder_is_refused_before_anything_is_written() {
+        let root = std::env::temp_dir().join(format!(
+            "ocs-rev-guard-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|span| span.subsec_nanos())
+                .unwrap_or(0)
+        ));
+        let folder = root.join("sheets");
+        std::fs::create_dir_all(&folder).expect("temp folders");
+        let revisions = root.join(".rev");
+
+        let error = write_revision(&revisions, &folder, "qa")
+            .expect_err("an empty folder has nothing to snapshot");
+        assert!(error.contains("to snapshot"), "unexpected error: {error}");
+        assert!(
+            read_revisions(&revisions).is_empty(),
+            "an empty snapshot must not burn an order number"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -615,11 +615,17 @@ fn projected_fields(mut entity: Value, fields: Option<&Vec<Value>>) -> Value {
     entity
 }
 
-/// What a save to one target would lose: unsupported passthrough records and
-/// MTEXT data the DWG/DXF writer cannot store there. Either needs `allow_lossy`.
+/// What a save to one target would lose: unsupported passthrough records,
+/// MTEXT data the DWG/DXF writer cannot store there, and the filled-in drawing
+/// properties a pre-2004 target has no place for. Any of the three needs
+/// `allow_lossy`. The drawing-properties count is the same one the GUI's
+/// conversion-loss dialog reports (`drawing_properties_lost_on_save`): the
+/// electrical setup contract lives in those custom properties, so a check that
+/// missed them let a script save "successfully" while the contract vanished.
 pub(super) struct SaveLosses {
     pub dropped: usize,
     pub mtext: Vec<(crate::io::MTextTargetLoss, usize)>,
+    pub properties: usize,
 }
 
 impl SaveLosses {
@@ -627,11 +633,17 @@ impl SaveLosses {
         Self {
             dropped: crate::io::dropped_on_save_count(doc, version, is_dxf),
             mtext: crate::io::mtext_losses_on_save(doc, version, is_dxf),
+            properties: crate::io::drawing_properties_lost_on_save(
+                &doc.summary_info,
+                &doc.header.hyperlink_base,
+                version,
+                is_dxf,
+            ),
         }
     }
 
     pub fn lossless(&self) -> bool {
-        self.dropped == 0 && self.mtext.is_empty()
+        self.dropped == 0 && self.mtext.is_empty() && self.properties == 0
     }
 
     /// `[{"feature":"columns","objects":1}, …]` for the reply.
@@ -656,6 +668,13 @@ impl SaveLosses {
                 .map(|(loss, objects)| format!("{} on {objects} MTEXT object(s)", loss.key()))
                 .collect();
             parts.push(format!("MTEXT data ({})", features.join(", ")));
+        }
+        if self.properties > 0 {
+            parts.push(format!(
+                "{} drawing propert{}",
+                self.properties,
+                if self.properties == 1 { "y" } else { "ies" }
+            ));
         }
         format!(
             "conversion would drop {}; set allow_lossy=true to acknowledge",
@@ -1068,13 +1087,17 @@ impl OpenCADStudio {
                 let before = self.tabs[i].scene.document.entities().count();
                 let error_revision = self.command_line.error_revision;
                 // Surfaces that are already open belong to an earlier line (or
-                // another tab, or startup). Only what *this* line left open is
-                // reported as a blocker, otherwise a finished command would keep
-                // answering `waiting_input` because of someone else's editor and
-                // a caller polling for `completed` would never get there.
+                // another tab, or startup). An in-place editor left open elsewhere
+                // must not keep a finished command answering `waiting_input`, so
+                // only what *this* line opened counts for those. A windowed modal
+                // is different: it owns the command line of every tab, so a line
+                // that arrives into one is reported as blocked even when the modal
+                // predates it. Headless has no overlay to answer, so the line does
+                // run there and the open modal is only reported as context.
                 let editor_before = self.text_inline.is_some();
                 let mtext_before = self.mtext_editor.is_some();
                 let modal_before = self.active_modal.is_some();
+                let modal_owns_input = self.main_window.is_some();
                 if let Err(error) = self.run_headless(&cmd) {
                     return err(error);
                 }
@@ -1090,8 +1113,21 @@ impl OpenCADStudio {
                 // vocabulary and name the blocker.
                 let blocked_by: Option<String> = if self.tabs[i].active_cmd.is_some() {
                     Some("command".to_string())
-                } else if let (false, Some(modal)) = (modal_before, self.active_modal.as_ref()) {
-                    Some(format!("modal:{modal:?}"))
+                } else if let Some(modal) = self.active_modal.as_ref() {
+                    // A windowed modal swallows the command line, so a line that
+                    // arrives while one is open never runs at all — including a
+                    // modal an earlier line left open. Reporting `completed` there
+                    // told the caller the drawing had changed when the entity count
+                    // had not moved, and the batch carried on drafting into nothing.
+                    // Headless has no overlay, so the line does run; the modal is
+                    // still reported in `modal_open` rather than as a blocker.
+                    if modal_before && !modal_owns_input {
+                        None
+                    } else if modal_before {
+                        Some(format!("modal:{modal:?} (from an earlier command)"))
+                    } else {
+                        Some(format!("modal:{modal:?}"))
+                    }
                 } else if !editor_before && self.text_inline.is_some() {
                     Some("text_editor".to_string())
                 } else if !mtext_before && self.mtext_editor.is_some() {
@@ -1106,6 +1142,10 @@ impl OpenCADStudio {
                     "blocked_by": blocked_by,
                     "entities": after,
                     "added": after as i64 - before as i64,
+                    // A modal left standing is visible even where it did not
+                    // block this line, so a caller can tell an unanswered dialog
+                    // from a command that simply had nothing to draw.
+                    "modal_open": self.active_modal.as_ref().map(|modal| format!("{modal:?}")),
                     // Tokens no prompt ever asked for: leftover input is
                     // reported rather than dropped on the floor.
                     "unconsumed": self.command_line.unconsumed.clone(),
@@ -1401,6 +1441,7 @@ impl OpenCADStudio {
                             "target_version": format!("{version:?}"),
                             "dropped_on_save": dropped,
                             "mtext_losses": losses.mtext_json(),
+                            "properties_lost_on_save": losses.properties,
                         })
                     }
                     Err(e) => err(format!("save: {e}")),
@@ -1980,6 +2021,7 @@ impl OpenCADStudio {
                 "error":losses.refusal(),
                 "dropped_on_save":dropped,
                 "mtext_losses":losses.mtext_json(),
+                "properties_lost_on_save":losses.properties,
             }));
         }
 
@@ -2896,6 +2938,31 @@ mod tests {
         let r = app.automation_op(r#"{"op":"run","cmd":"LINE"}"#);
         assert_eq!(r["status"], "waiting_input", "{r}");
         assert_eq!(r["blocked_by"], "command", "{r}");
+    }
+
+    #[test]
+    fn a_modal_left_open_is_named_instead_of_faking_a_blocker() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+
+        // Headless has no overlay to answer, so a line arriving into an open
+        // modal does run — the answer used to be `completed` with no hint that
+        // a dialog was standing in front of the drawing, and in a windowed
+        // session the same line is swallowed. The modal is now named either way.
+        app.active_modal = Some(crate::app::ModalKind::About);
+        let r = app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 10,10"}"#);
+        assert_eq!(r["status"], "completed", "{r}");
+        assert_eq!(r["added"], 1, "{r}");
+        assert!(r["blocked_by"].is_null(), "{r}");
+        assert_eq!(r["modal_open"], "About", "{r}");
+
+        // Closing it clears the field.
+        let _ = app.automation_op(r#"{"op":"action","name":"close_modal"}"#);
+        app.active_modal = None;
+        let r = app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 20,20"}"#);
+        assert_eq!(r["status"], "completed", "{r}");
+        assert_eq!(r["added"], 1, "{r}");
+        assert!(r["modal_open"].is_null(), "{r}");
     }
 
     /// The text of the single `Text` entity in the drawing (panics otherwise).

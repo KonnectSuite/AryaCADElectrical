@@ -69,7 +69,13 @@ conventions. A NEMA-style set ships next to it in `library/nec`:
 py -3.13 tools/qet_import.py --source <qelectrotech-elements>/10_electric   # refresh the shapes
 py -3.13 tools/make_library.py                     # library/starter (IEC)
 py -3.13 tools/make_library.py --standard nec      # library/nec (NEMA)
+py -3.13 tools/pin_check.py                        # every pin number unique, manifest agrees
 ```
+
+A connection point is an invisible `X<d>TERM<nn>` attribute: the digit after `TERM` is the
+pin number, which has to be unique within the symbol so the wire list can tell the two ends
+of a device apart (`-K1:1 -> -M1:2`), and the digit after `X` is only the side the wire
+approaches from. `tools/pin_check.py` enforces that across both shipped catalogues.
 
 | Symbol library (IEC) | Symbol palette | Symbol Manager |
 |---|---|---|

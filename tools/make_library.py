@@ -97,24 +97,69 @@ PINS_NONE = []
 PINS_NETWORK_SWITCH = [
     (-5.0, 1.0, "X4TERM01"),
     (-5.0, -1.0, "X4TERM02"),
-    (5.0, 1.0, "X1TERM01"),
-    (5.0, -1.0, "X1TERM02"),
+    (5.0, 1.0, "X1TERM03"),
+    (5.0, -1.0, "X1TERM04"),
 ]
 PINS_HMI = [
     (-5.0, 1.5, "X4TERM01"),
     (-5.0, -1.5, "X4TERM02"),
-    (5.0, 0.0, "X1TERM01"),
+    (5.0, 0.0, "X1TERM03"),
 ]
 PINS_IO_MODULE = [
     (-5.0, 3.0, "X4TERM01"),
     (-5.0, 1.0, "X4TERM02"),
     (-5.0, -1.0, "X4TERM03"),
     (-5.0, -3.0, "X4TERM04"),
-    (5.0, 3.0, "X1TERM01"),
-    (5.0, 1.0, "X1TERM02"),
-    (5.0, -1.0, "X1TERM03"),
-    (5.0, -3.0, "X1TERM04"),
+    (5.0, 3.0, "X1TERM05"),
+    (5.0, 1.0, "X1TERM06"),
+    (5.0, -1.0, "X1TERM07"),
+    (5.0, -3.0, "X1TERM08"),
 ]
+
+
+def canonical_pins(pins):
+    """Number a symbol's connection points so no two of them share a pin number.
+
+    The convention the electrical layer reads (`crates/elec/src/pins.rs`) is that the
+    digits after `TERM` are the pin number and the digit after `X` only says which side
+    the wire approaches from, so `X4TERM01` and `X1TERM02` are pins 1 and 2 of one
+    device.  Numbering each side from 1 - which is what the importers used to do - makes
+    both ends of a device read as pin 1, and the wire list then prints `-K1:1 -> -K1:1`
+    instead of `-K1:1 -> -M1:2`.  Left-hand pins are numbered 1..n top to bottom and
+    right-hand pins continue from there, exactly as `PINS_2TERM` above already does.
+
+    The list keeps its original order, so only the tag text of a colliding symbol moves.
+    """
+
+    def side_of(tag):
+        match = re.fullmatch(r"X(\d)TERM\d+", tag.strip().upper())
+        return int(match.group(1)) if match else None
+
+    def rank(side):
+        # Left-hand (X4) first, then right-hand (X1), then any other side, then
+        # anything that is not a connection point at all.
+        if side == 4:
+            return (0, 0)
+        if side == 1:
+            return (1, 0)
+        if side is None:
+            return (3, 0)
+        return (2, side)
+
+    by_side = {}
+    for position, (x, y, tag) in enumerate(pins):
+        by_side.setdefault(side_of(tag), []).append(position)
+    numbered = list(pins)
+    number = 1
+    for side in sorted(by_side, key=rank):
+        column = sorted(by_side[side], key=lambda p: (-pins[p][1], pins[p][0]))
+        if side is None:
+            continue
+        for position in column:
+            x, y, _ = pins[position]
+            numbered[position] = (x, y, f"X{side}TERM{number:02d}")
+            number += 1
+    return numbered
 
 
 def L(x1, y1, x2, y2):
@@ -761,7 +806,7 @@ SYMBOLS = [
     dict(
         name="CONNECTOR_2P", cls="Connector", attrs=A_DEVICE,
         pins=[(-5.0, 1.0, "X4TERM01"), (-5.0, -1.0, "X4TERM02"),
-              (5.0, 1.0, "X1TERM01"), (5.0, -1.0, "X1TERM02")],
+              (5.0, 1.0, "X1TERM03"), (5.0, -1.0, "X1TERM04")],
         desc="Two-pole connector: plug body with two pins either side",
         geom=[L(-5.0, 1.0, -2.6, 1.0), L(-5.0, -1.0, -2.6, -1.0),
               L(2.6, 1.0, 5.0, 1.0), L(2.6, -1.0, 5.0, -1.0)]
@@ -771,8 +816,8 @@ SYMBOLS = [
         name="CONNECTOR_4P", cls="Connector", attrs=A_DEVICE,
         pins=[(-5.0, 1.5, "X4TERM01"), (-5.0, 0.5, "X4TERM02"),
               (-5.0, -0.5, "X4TERM03"), (-5.0, -1.5, "X4TERM04"),
-              (5.0, 1.5, "X1TERM01"), (5.0, 0.5, "X1TERM02"),
-              (5.0, -0.5, "X1TERM03"), (5.0, -1.5, "X1TERM04")],
+              (5.0, 1.5, "X1TERM05"), (5.0, 0.5, "X1TERM06"),
+              (5.0, -0.5, "X1TERM07"), (5.0, -1.5, "X1TERM08")],
         desc="Four-pole connector: four pins either side",
         geom=rect(-2.6, -2.4, 2.6, 2.4)
         + [L(-5.0, y, -2.6, y) for y in (1.5, 0.5, -0.5, -1.5)]
@@ -1089,6 +1134,10 @@ def build_symbol(entry):
         else:
             geom = scale_ops(flatten(entry["geom"]), UNIT_SCALE)
             pins = entry.get("pins", PINS_2TERM)
+    # Whatever produced the pin list - our constants, the QET import, the NECA import -
+    # the numbers are made unique here, so a stale intermediate cannot ship a symbol
+    # whose two ends are both pin 1.
+    pins = canonical_pins(pins)
     attrs = entry["attrs"]
 
     doc = dxfio.DxfDocument()

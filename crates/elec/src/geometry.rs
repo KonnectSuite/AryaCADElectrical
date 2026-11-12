@@ -110,8 +110,9 @@ impl NetlistHints {
 /// One electrical net found in the geometry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeoNet {
-    /// Stable identity: the lowest wire id in the net, or the lowest anchor id when the
-    /// net is a single symbol with no wires.
+    /// Position in the net list, 1-based. Nets are ordered by the lowest wire or
+    /// anchor id that joined them, then renumbered, because the two id spaces
+    /// overlap and a raw id would name two different nets the same thing.
     pub id: u64,
     /// Anchored component ids, ascending.
     pub anchors: Vec<u64>,
@@ -332,7 +333,16 @@ fn netlist_from_geometry_impl(
 
     loose_anchors.sort_unstable();
     loose_wires.sort_unstable();
+    // A net's birth id is the first wire or the first anchor that joined it, and
+    // those are two different id spaces: a wire-only run and a net made of pins
+    // alone can both claim `1`, so the printed net list repeated one label and
+    // skipped another, and the CSV rows carried the same duplicate. Order by the
+    // birth id, then hand out one sequence, so `ELECWIRELIST`, the wire rows and
+    // the automation read all name a net the same way.
     nets.sort_by_key(|net| net.id);
+    for (index, net) in nets.iter_mut().enumerate() {
+        net.id = (index + 1) as u64;
+    }
     GeoNetlist {
         nets,
         loose_anchors,
@@ -545,6 +555,22 @@ mod tests {
         assert_eq!(anchor.display_label(), "M326:2");
         let bare = Anchor::new(11, "-K1", p(0.0, 0.0));
         assert_eq!(bare.display_label(), "-K1");
+    }
+
+    #[test]
+    fn a_wire_run_and_a_pin_only_net_do_not_share_a_label() {
+        // The run is named by its first wire, the pin-only net by its first
+        // anchor. Those ids come from different counters and both are 1 here, so
+        // the net list used to print `net 1` twice and skip `net 2`.
+        let wires = vec![WireSeg::new(1, p(0.0, 10.0), p(50.0, 10.0))];
+        let anchors = vec![
+            Anchor::new(1, "-K1", p(0.0, 0.0)).with_pin("1"),
+            Anchor::new(2, "-K2", p(0.0, 0.0)).with_pin("2"),
+        ];
+        let netlist = netlist_from_geometry_with_wire_runs(&wires, &anchors, 0.01);
+        assert_eq!(netlist.nets.len(), 2);
+        let ids: Vec<u64> = netlist.nets.iter().map(|net| net.id).collect();
+        assert_eq!(ids, vec![1, 2], "one net list, one sequence of labels");
     }
 
     #[test]

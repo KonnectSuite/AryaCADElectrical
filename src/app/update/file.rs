@@ -3424,18 +3424,32 @@ impl OpenCADStudio {
                 .map(|ext| ext.to_string_lossy().to_lowercase())
                 .unwrap_or_default();
             if let Some(losses) = self.conversion_losses_to_confirm(i, &ext, version) {
-                let save = crate::app::PendingNativeThumbnailSave {
-                    tab_id: self.tabs[i].id,
-                    path,
-                    version,
-                    purpose,
-                    continuation,
-                    set_current_path,
-                    check_external_change,
-                    allow_conversion_loss: false,
-                };
-                let pending = crate::app::PendingConversionSave::Native(save);
-                return self.ask_conversion_loss(losses, pending);
+                if self.script_running {
+                    // A script has nobody to answer the modal. Holding the
+                    // save back there loses the whole run without a word: the
+                    // batch exits 0 and the file on disk never changed. Name
+                    // every loss and write anyway, the choice SAVEAS already
+                    // makes for a headless run (see `save_as_from_command_line`).
+                    // The flag, not the absence of a window, is the test: a
+                    // windowed session can answer, and a headless test app
+                    // without a script still expects to be asked.
+                    for loss in &losses {
+                        self.command_line.push_warning(loss);
+                    }
+                } else {
+                    let save = crate::app::PendingNativeThumbnailSave {
+                        tab_id: self.tabs[i].id,
+                        path,
+                        version,
+                        purpose,
+                        continuation,
+                        set_current_path,
+                        check_external_change,
+                        allow_conversion_loss: false,
+                    };
+                    let pending = crate::app::PendingConversionSave::Native(save);
+                    return self.ask_conversion_loss(losses, pending);
+                }
             }
         }
         let tab_id = self.tabs[i].id;

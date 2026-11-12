@@ -275,6 +275,35 @@ mod drawing_properties_loss {
 
     // S5
     #[test]
+    fn a_script_save_names_the_losses_and_writes_instead_of_freezing() {
+        // The batch path has nobody to click "Save anyway". Holding the save
+        // back there used to lose the whole run in silence: the batch exited 0
+        // and the file on disk never changed. A script therefore names every
+        // loss on the command line and writes.
+        let scratch = Scratch::new("script");
+        let path = scratch.0.join("old.dxf");
+        let mut app = app_with_properties();
+        app.script_running = true;
+        let _ = run(save_as(&mut app, &path, codec::DxfVersion::AC1015));
+        assert_ne!(app.active_modal, Some(ModalKind::ConversionLoss));
+        assert!(path.exists(), "the script save went ahead");
+        let loss = crate::tr!(
+            "dwgprops-dialog",
+            "save-loss",
+            format = "DXF",
+            count = "3"
+        );
+        assert!(
+            app.command_line.history_plain_text().contains(&loss),
+            "the script was told what it lost: {}",
+            app.command_line.history_plain_text()
+        );
+        // A warning is not a failed command, so the batch still exits 0.
+        assert_eq!(app.command_line.last_error, None);
+    }
+
+    // S5
+    #[test]
     fn save_anyway_writes_the_file_and_leaves_the_document_unchanged() {
         let scratch = Scratch::new("proceed");
         let path = scratch.0.join("old.dwg");

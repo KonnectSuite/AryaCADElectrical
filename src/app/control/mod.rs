@@ -223,6 +223,7 @@ fn lossy_refusal(losses: &super::automation::SaveLosses) -> Value {
     let mut reply = failure("lossy_conversion_not_acknowledged", error);
     reply["dropped_on_save"] = json!(losses.dropped);
     reply["mtext_losses"] = losses.mtext_json();
+    reply["properties_lost_on_save"] = json!(losses.properties);
     reply
 }
 /// `{"op":"open","name":"plan.dwg","data_base64":"…"}`: the web build has no
@@ -1442,7 +1443,15 @@ impl OpenCADStudio {
                     is_dxf,
                 );
                 let dropped = losses.dropped;
-                if !losses.lossless() && req["allow_lossy"].as_bool() != Some(true) {
+                // Refusing up front is right for a headless session, which has
+                // nobody to answer a dialog: `allow_lossy` is its acknowledgement.
+                // A windowed session does have somebody, and the contract there is
+                // the confirmation dialog plus the `conversion_loss_save_anyway`
+                // action, so the loss is reported and the choice left to the user.
+                if self.main_window.is_none()
+                    && !losses.lossless()
+                    && req["allow_lossy"].as_bool() != Some(true)
+                {
                     return Err(lossy_refusal(&losses));
                 }
                 self.set_control_result(json!({
@@ -1450,6 +1459,7 @@ impl OpenCADStudio {
                     "target_format":super::automation::source_format(Some(&path), is_dxf),
                     "target_version":format!("{version:?}"),"dropped_on_save":dropped,
                     "mtext_losses":losses.mtext_json(),
+                    "properties_lost_on_save":losses.properties,
                 }));
                 if self.main_window.is_none() {
                     self.save_tab_synchronously_protected_as(i, path, version, true)

@@ -543,9 +543,9 @@ ATTDEF
 1
 
 3
-Pin 1 position
+Pin 2 position
 2
-X1TERM01
+X1TERM02
 70
 1
 0
@@ -563,9 +563,9 @@ ATTDEF
 1
 
 3
-Pin 2 position
+X1TERM03
 2
-X1TERM02
+X1TERM03
 70
 1
 0

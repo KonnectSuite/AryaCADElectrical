@@ -1123,6 +1123,9 @@ impl OpenCADStudio {
             || tokens[0].eq_ignore_ascii_case("ELECWIRELIST")
             || tokens[0].eq_ignore_ascii_case("ELECHIGHLIGHT")
             || tokens[0].eq_ignore_ascii_case("ELECGOTO")
+            // `ELECEXPORT publish dxf` writes files; the bare probe printed its usage
+            // line and then the real run exported a second time.
+            || tokens[0].eq_ignore_ascii_case("ELECEXPORT")
         {
             return self.dispatch_command(cmd);
         }

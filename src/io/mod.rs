@@ -1782,6 +1782,57 @@ pub fn format_for_version(version: codec::DxfVersion, is_dxf: bool) -> String {
     format!("{} {}", if is_dxf { "DXF" } else { "DWG" }, year)
 }
 
+/// The format a save of `version` actually writes, for a message that has to
+/// name the file rather than offer a Save-dialog choice. It differs from
+/// [`format_for_version`] for the versions that are not offered as targets:
+/// a DXF document carrying R12 is written as R13, because the DXF writer
+/// always emits the handle-based object model R12 predates (acadrust
+/// `writable_version`, issue #68), while a DWG keeps its R11/R12 layout.
+/// Naming those targets "2018" told the user the save was going somewhere it
+/// was not.
+pub fn written_format(version: codec::DxfVersion, is_dxf: bool) -> String {
+    use codec::DxfVersion::*;
+    match version {
+        AC1009 if is_dxf => "DXF R13".to_string(),
+        AC1009 => "DWG R11/R12".to_string(),
+        AC1012 => format!("{} R13", if is_dxf { "DXF" } else { "DWG" }),
+        _ => format_for_version(version, is_dxf),
+    }
+}
+
+#[cfg(test)]
+mod written_format_tests {
+    use super::*;
+    use codec::types::DxfVersion;
+
+    /// The conversion-loss dialog names the target it is about to write, so a
+    /// name that belongs to another version tells the user the save is going
+    /// somewhere it is not. Every shipped electrical template is R12, which is
+    /// exactly the case that was labelled "DXF 2018".
+    #[test]
+    fn an_r12_target_is_named_by_what_the_writer_emits() {
+        assert_eq!(written_format(DxfVersion::AC1009, true), "DXF R13");
+        assert_eq!(written_format(DxfVersion::AC1009, false), "DWG R11/R12");
+        assert_eq!(written_format(DxfVersion::AC1012, true), "DXF R13");
+        assert_eq!(written_format(DxfVersion::AC1012, false), "DWG R13");
+    }
+
+    /// The offered targets keep the Save-dialog wording, so the dialog and the
+    /// dropdown agree wherever a version can actually be chosen.
+    #[test]
+    fn an_offered_target_keeps_the_save_dialog_wording() {
+        for (version, label) in [
+            (DxfVersion::AC1032, "2018"),
+            (DxfVersion::AC1027, "2013"),
+            (DxfVersion::AC1018, "2004"),
+            (DxfVersion::AC1014, "R14"),
+        ] {
+            assert_eq!(written_format(version, true), format!("DXF {label}"));
+            assert_eq!(written_format(version, false), format!("DWG {label}"));
+        }
+    }
+}
+
 /// Drawing properties (`SummaryInfo`, the DWGPROPS dialog) that saving to
 /// `version` would silently drop. DWG R2000 and older write no SummaryInfo
 /// section at all; DXF R2000 and older write no `$TITLE`…`$CUSTOMPROPERTY`

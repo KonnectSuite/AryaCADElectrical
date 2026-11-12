@@ -64,6 +64,49 @@ fn remembered_library() -> Option<std::path::PathBuf> {
     }
 }
 
+/// The catalogues that ship with the product: `<cwd>/library` is the folder
+/// `ELECLIB IEC` and `ELECLIB NEC` resolve their words against.
+fn shipped_library_root() -> Option<std::path::PathBuf> {
+    std::env::current_dir()
+        .ok()
+        .map(|directory| directory.join("library"))
+}
+
+/// Whether a catalogue folder is one that ships with the product rather than one the
+/// user pointed at. Canonicalised, because the same folder reached by two spellings must
+/// not look like two different catalogues.
+fn is_shipped_library(directory: &std::path::Path) -> bool {
+    let Some(root) = shipped_library_root() else {
+        return false;
+    };
+    match (directory.canonicalize(), root.canonicalize()) {
+        (Ok(directory), Ok(root)) => directory.starts_with(&root),
+        _ => false,
+    }
+}
+
+/// The catalogue authored symbols live in, beside the machine's app-data folder.
+fn user_library_folder() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("APPDATA").map(std::path::PathBuf::from)?;
+    Some(base.join("AryaCAD").join("elec_user_library"))
+}
+
+/// The catalogue `ELECMAKESYMBOL` and `ELECMAKEMODULE` write into.
+///
+/// Both commands add a symbol to the catalogue in use, and in a normal session the
+/// catalogue in use is the one that ships with the product. Writing there mutates
+/// shipped data - the symbol files and `library.tsv` are part of the product - and lets
+/// an authored name replace a shipped symbol outright. So a shipped catalogue is never
+/// written to: the symbol goes to a per-user catalogue that `ELECLIB` loads on top of the
+/// shipped one. A catalogue the user chose for themselves is written to directly, because
+/// that is the point of choosing it.
+fn authored_library_folder() -> Option<std::path::PathBuf> {
+    match library_directory().or_else(remembered_library) {
+        Some(directory) if !is_shipped_library(&directory) => Some(directory),
+        _ => user_library_folder(),
+    }
+}
+
 /// Resolve `IEC` and `NEC` to the library folder that sits beside the loaded one.
 ///
 /// A drawing is either drawn to IEC or to NEC, and which one is decided by the folder
@@ -291,6 +334,81 @@ fn read_library_manifest(
     index
 }
 
+/// Every designator written on an insert in model space, pin-less inserts included.
+///
+/// `wire_graph` drops an insert that has no pins, so its anchor list is not a
+/// census of the tags on the sheet: a flattened print, a symbol whose attributes
+/// were exploded, or a symbol placed by an older build carries its designator
+/// but no `X<n>TERM<nn>` attributes. Allocating a new tag from the anchors alone
+/// hands that designator out a second time, and two devices on one sheet under
+/// one tag break the BOM, the cross-reference and the wire list together.
+fn drawing_tags(document: &codec::Document) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    for entity in document.entities() {
+        if !OpenCADStudio::in_drawing_space(document, entity.common().owner_handle) {
+            continue;
+        }
+        let codec::EntityType::Insert(insert) = entity else {
+            continue;
+        };
+        if is_setup_block(&insert.block_name) {
+            continue;
+        }
+        let Some(attribute) = insert
+            .attributes
+            .iter()
+            .find(|attribute| is_tag_attribute(&attribute.tag))
+        else {
+            continue;
+        };
+        let value = attribute.value.trim();
+        if !value.is_empty() && !tags.iter().any(|seen| seen == value) {
+            tags.push(value.to_string());
+        }
+    }
+    tags
+}
+
+/// The attribute definition points recorded in a block this drawing already
+/// defines.
+///
+/// `ELECLIB` measures these as it loads a folder, but it skips a symbol whose
+/// block is already in the drawing — a sheet reopened the next day, or a
+/// library loaded a second time — and the manifest carries no points at all, so
+/// `ELECPLACE` stacked every attribute, the invisible `X<n>TERM<nn>` pins
+/// included, in a column below the insertion point instead of putting them on
+/// the symbol's own connection points. The drawing's own block record answers
+/// for both cases, and its tags answer the case where the catalogue has no
+/// entry for the symbol at all.
+fn block_attribute_offsets(document: &codec::Document, block: &str) -> Vec<(String, f64, f64)> {
+    let Some(record) = document
+        .block_records
+        .iter()
+        .find(|record| record.name.eq_ignore_ascii_case(block))
+    else {
+        return Vec::new();
+    };
+    let (name, base) = (record.name.as_str(), record.base_point);
+    document
+        .entities_in_block(name)
+        .filter_map(|entity| match entity {
+            codec::EntityType::AttributeDefinition(definition) => {
+                let tag = definition.tag.trim();
+                if tag.is_empty() {
+                    None
+                } else {
+                    Some((
+                        tag.to_string(),
+                        definition.insertion_point.x - base.x,
+                        definition.insertion_point.y - base.y,
+                    ))
+                }
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// Attribute names that carry the well-known component fields.
 ///
 /// The set covers the conventions this project has to read: AutoCAD Electrical's
@@ -434,9 +552,14 @@ fn read_setup(document: &codec::Document) -> ElecSetup {
         // The first WD_M wins; a sheet carries two identical inserts in practice.
         break;
     }
-    // A drawing created here has no WD_M block, so the setup dialog stores the
-    // same contract as custom properties. A real WD_M always wins over them.
-    if !setup.present {
+    // The `ELEC_*` properties carry the same contract plus the numbering extras
+    // `WD_M` has no attribute for. `write_setup_contract` keeps the two stores
+    // in step, so on a drawing this app has written they agree; on a drawing
+    // only AutoCAD Electrical has touched there are no properties and the block
+    // answers alone. Where both exist and disagree — a `WD_M` edited outside
+    // this app after our write — the properties are the newer write, so they
+    // win per key.
+    {
         let property = |key: &str| {
             document
                 .summary_info
@@ -557,6 +680,55 @@ fn write_setup_properties(document: &mut codec::Document, setup: &ElecSetup) {
                 .summary_info
                 .custom_properties
                 .push((key.to_string(), value));
+        }
+    }
+}
+
+/// The `WD_M` spelling of the fields the block can carry.
+fn wdm_values(setup: &ElecSetup) -> [(&'static str, String); 9] {
+    [
+        ("TAGFMT", setup.tag_format.trim().to_string()),
+        ("TAGMODE", setup.tag_mode.trim().to_string()),
+        ("TAG-START", setup.tag_start.to_string()),
+        ("TAG-RSUF", setup.tag_suffixes.join(",")),
+        ("WIREFMT", setup.wire_format.trim().to_string()),
+        ("WIREMODE", setup.wire_mode.trim().to_string()),
+        ("WIRE-START", setup.wire_start.to_string()),
+        ("XREFFMT", setup.xref_format.trim().to_string()),
+        ("SHEET", setup.sheet.trim().to_string()),
+    ]
+}
+
+/// Store the setup where both AutoCAD Electrical and this app can read it back.
+///
+/// `WD_M` is the contract ACADE itself reads, so every `WD_M` insert already on
+/// the sheet is updated in place — a sheet carries two identical inserts in
+/// practice. The `ELEC_*` custom properties carry the same contract plus the
+/// numbering extras `WD_M` has no attribute for. Writing only the properties
+/// left the block, and therefore the next read, at the template's values: on a
+/// template sheet `ELECSETUP` reported the change and then silently discarded
+/// it. A sheet with no `WD_M` keeps the properties alone — inventing a block
+/// would put geometry on a drawing that never asked for one — and an attribute
+/// the block does not carry is left out rather than pushed at the origin,
+/// because `read_setup` takes the property value for any key the block omits.
+fn write_setup_contract(document: &mut codec::Document, setup: &ElecSetup) {
+    write_setup_properties(document, setup);
+    let values = wdm_values(setup);
+    for entity in document.entities_mut() {
+        let codec::EntityType::Insert(insert) = entity else {
+            continue;
+        };
+        if !insert.block_name.trim().eq_ignore_ascii_case("WD_M") {
+            continue;
+        }
+        for (tag, value) in &values {
+            if let Some(attribute) = insert
+                .attributes
+                .iter_mut()
+                .find(|attribute| attribute.tag.trim().eq_ignore_ascii_case(tag))
+            {
+                attribute.value = value.clone();
+            }
         }
     }
 }
@@ -2246,7 +2418,7 @@ fn class_for_reference(tag: &str) -> &'static str {
             wire_number_web: state.wire_number_web.trim().eq_ignore_ascii_case("Yes"),
             tag_unique: canonical_uniqueness(&state.tag_unique),
         };
-        write_setup_properties(&mut self.tabs[i].scene.document, &stored);
+        write_setup_contract(&mut self.tabs[i].scene.document, &stored);
         self.tabs[i].dirty = true;
         // Fields showing a custom property read it again.
         let hosts = crate::entities::field::acvar_hosts(&self.tabs[i].scene.document);
@@ -2268,7 +2440,7 @@ fn class_for_reference(tag: &str) -> &'static str {
     /// `ELECSETUP KEY=VALUE ...` stores the numbering contract without a dialog.
     ///
     /// The dialog is the human path; scripts and the smoke suite need the same
-    /// contract headlessly, and both write through `write_setup_properties`.
+    /// contract headlessly, and both write through `write_setup_contract`.
     pub(super) fn elec_setup_assign(&mut self, i: usize, argument: &str) -> Task<Message> {
         use crate::ui::window::elec_setup::{mode_label, mode_letter};
 
@@ -2346,7 +2518,7 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
             return Task::none();
         }
         self.push_undo_snapshot(i, "ELECSETUP");
-        write_setup_properties(&mut self.tabs[i].scene.document, &setup);
+        write_setup_contract(&mut self.tabs[i].scene.document, &setup);
         self.tabs[i].dirty = true;
         let hosts = crate::entities::field::acvar_hosts(&self.tabs[i].scene.document);
         if !hosts.is_empty() {
@@ -4057,15 +4229,27 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
         }
         let directory = directory.as_path();
 
+        // The user catalogue is where ELECMAKESYMBOL and ELECMAKEMODULE put what you
+        // author while the shipped catalogue is in use. It loads on top of a shipped
+        // folder, so an authored symbol is available in every drawing without replacing
+        // the shipped one. A catalogue the user pointed at is their own and authoring
+        // already goes there, so it is not merged.
+        let overlay = is_shipped_library(directory)
+            .then(user_library_folder)
+            .flatten()
+            .filter(|folder| folder.as_path() != directory);
+
         let mut paths: Vec<std::path::PathBuf> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(directory) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("dxf"))
-                {
-                    paths.push(path);
+        for source in std::iter::once(directory).chain(overlay.as_deref()) {
+            if let Ok(entries) = std::fs::read_dir(source) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("dxf"))
+                    {
+                        paths.push(path);
+                    }
                 }
             }
         }
@@ -4077,7 +4261,12 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
         let mut measured_offsets: std::collections::BTreeMap<String, Vec<(String, f64, f64)>> =
             std::collections::BTreeMap::new();
         let mut failed: Vec<String> = Vec::new();
-        let manifest = read_library_manifest(directory);
+        let mut manifest = read_library_manifest(directory);
+        if let Some(extra) = overlay.as_deref() {
+            for (symbol, entry) in read_library_manifest(extra) {
+                manifest.insert(symbol, entry);
+            }
+        }
         // Name the standard before the entries are moved into the index: the manifest's
         // own column is the only source that cannot be confused by an earlier folder.
         let loaded_standard = {
@@ -4395,6 +4584,11 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
     pub(super) fn elec_place(&mut self, i: usize, block: &str) -> Task<Message> {
         use crate::modules::electrical::place::{PlaceSymbolCommand, PlacedAttribute};
 
+        // A drawing opened the next day has an empty catalogue index, and the
+        // class it carries decides the tag prefix and the attribute set: without
+        // it a placed symbol came in with only `TAG1`/`CAT`, mute to the netlist,
+        // and the next instance took the same tag.
+        ensure_library_index();
         let class = library_index()
             .read()
             .ok()
@@ -4406,12 +4600,12 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
             .unwrap_or_else(|| block.to_string());
 
         // Tags already in this family, so the new instance joins the sequence.
+        // The census reads the inserts, not the wire graph's anchors: an insert
+        // with no pins is no device to the netlist, but it still owns its tag.
         let prefix = ::elec::default_prefix(&class);
-        let (_, anchors) = self.elec_collect(i);
-        let tags: Vec<String> = anchors
-            .iter()
-            .filter(|anchor| anchor.label.starts_with(prefix.as_str()))
-            .map(|anchor| anchor.label.clone())
+        let tags: Vec<String> = drawing_tags(&self.tabs[i].scene.document)
+            .into_iter()
+            .filter(|tag| tag.starts_with(prefix.as_str()))
             .collect();
         let tag_refs: Vec<&str> = tags.iter().map(String::as_str).collect();
         let new_tag = ::elec::next_tag(&tag_refs, &class);
@@ -4420,21 +4614,37 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
             .read()
             .ok()
             .and_then(|index| index.get(&block.to_ascii_uppercase()).cloned());
+        // The definition points come from the catalogue when `ELECLIB` measured
+        // them, and from the drawing's own block record when it did not — a
+        // sheet reopened the next day has the blocks but no measurements.
+        let offsets = match entry
+            .as_ref()
+            .map(|entry| entry.attribute_offsets.clone())
+            .filter(|offsets| !offsets.is_empty())
+        {
+            Some(offsets) => offsets,
+            // Read per placement rather than caching in the shared index: two
+            // drawings can define one block name with different pin points.
+            None => block_attribute_offsets(&self.tabs[i].scene.document, block),
+        };
         let mut template: Vec<String> = entry
             .as_ref()
             .map(|entry| entry.attributes.clone())
             .filter(|attributes| !attributes.is_empty())
-            .unwrap_or_else(|| vec!["TAG1".to_string(), "CAT".to_string()]);
+            .unwrap_or_default();
+        if template.is_empty() {
+            // No catalogue entry either — a symbol that arrived with the drawing.
+            // Its own attribute definitions say what it carries, pins included;
+            // without them the insert would come in mute and could not be wired.
+            template = offsets
+                .iter()
+                .map(|(tag, _, _)| tag.clone())
+                .filter(|tag| !is_tag_attribute(tag))
+                .collect();
+        }
         if !template.iter().any(|tag| is_tag_attribute(tag)) {
             template.insert(0, "TAG1".to_string());
         }
-
-        // Attribute definitions recorded in the block travel with the symbol; placing the
-        // insert puts each attribute on its own definition point instead of stacking them.
-        let offsets = entry
-            .as_ref()
-            .map(|entry| entry.attribute_offsets.clone())
-            .unwrap_or_default();
         let attributes: Vec<PlacedAttribute> = template
             .iter()
             .map(|tag| PlacedAttribute {
@@ -4875,10 +5085,15 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
             let pin_height = (span_y / (count as f64 * 3.0)).clamp(0.1, 2.5);
             let right = count.div_ceil(2);
             let left = count / 2;
+            // The numbers run 1..count across the symbol, not 1..n down each edge: the
+            // digits after `TERM` are the pin number to the electrical layer, so two
+            // edges sharing a number would be one connection point to the netlist.
+            let mut number = 0_usize;
             for (side, x, on_side) in [("X1", max_x, right), ("X2", min_x, left)] {
                 for index in 0..on_side {
+                    number += 1;
                     let y = min_y + (index as f64 + 0.5) * span_y / on_side as f64;
-                    let tag = format!("{side}TERM{:02}", index + 1);
+                    let tag = format!("{side}TERM{number:02}");
                     if attributes
                         .iter()
                         .any(|existing| existing.eq_ignore_ascii_case(&tag))
@@ -4915,12 +5130,9 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
         }
         self.tabs[i].dirty = true;
 
-        // Write the symbol into the library so it outlives this drawing.
-        let folder = library_dir()
-            .read()
-            .ok()
-            .and_then(|guard| guard.clone())
-            .or_else(remembered_library);
+        // Write the symbol into a catalogue so it outlives this drawing - but never into
+        // the shipped one, see `authored_library_folder`.
+        let folder = authored_library_folder();
         let class = class
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -5023,16 +5235,21 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
         }
 
         // Invisible terminal definitions, one per lead. They make each stub a declared
-        // pin instead of a guessed connection point.
+        // pin instead of a guessed connection point.  The numbers run 1..2n across the
+        // whole module, not 1..n down each edge: the electrical layer reads the digits
+        // after `TERM` as the pin number (`elec::pin_number`), so a left lead and a
+        // right lead sharing a number read as one connection point and the wire list
+        // prints `-X1:1 -> -X1:1`.
         let mut tags: Vec<String> = Vec::new();
         let mut pins: Vec<(String, f64, f64)> = Vec::new();
+        let offset = if with_left && with_right { channels } else { 0 };
         for channel in 0..channels {
             let y = (channel as f64 + 0.5) * pitch;
             if with_left {
                 pins.push((format!("X4TERM{:02}", channel + 1), -0.15, y));
             }
             if with_right {
-                pins.push((format!("X1TERM{:02}", channel + 1), width + 0.15, y));
+                pins.push((format!("X1TERM{:02}", channel + 1 + offset), width + 0.15, y));
             }
         }
         for (tag, x, y) in &pins {
@@ -5087,6 +5304,21 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
         self.tabs[i].dirty = true;
 
         // One instance, so the command produces something you can see and wire.
+        let class = class
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Module");
+        // The instance needs a designator, or the module is invisible to every
+        // tag-based command — `ELECSETATTR`, `ELECASSIGN`, `ELECBOM` all work by
+        // tag, and an empty `TAG1` left the strip unaddressable.
+        let prefix = ::elec::default_prefix(class);
+        let (_, anchors) = self.elec_collect(i);
+        let family: Vec<&str> = anchors
+            .iter()
+            .filter(|anchor| anchor.label.starts_with(prefix.as_str()))
+            .map(|anchor| anchor.label.as_str())
+            .collect();
+        let designator = ::elec::next_tag(&family, class);
         let (x, y) = at.unwrap_or((0.0, 0.0));
         let mut insert = codec::entities::Insert::new(
             name.to_string(),
@@ -5101,7 +5333,12 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
             insert.attributes.push(attribute);
         }
         for (row, tag) in ["TAG1", "CAT", "MFG", "DESC1"].iter().enumerate() {
-            let mut attribute = codec::entities::AttributeEntity::new(tag.to_string(), String::new());
+            let value = if *tag == "TAG1" {
+                designator.clone()
+            } else {
+                String::new()
+            };
+            let mut attribute = codec::entities::AttributeEntity::new(tag.to_string(), value);
             attribute.height = label_height;
             attribute.insertion_point = codec::types::Vector3::new(
                 x + width + 0.3,
@@ -5117,15 +5354,7 @@ WIREFMT, WIREMODE, WIRESTART, WIREINC, WIREKIND, WIREEMPTY, WIREWEB, XREFFMT, SH
             .add_entity(codec::EntityType::Insert(insert));
         self.tabs[i].dirty = true;
 
-        let class = class
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("Module");
-        let folder = library_dir()
-            .read()
-            .ok()
-            .and_then(|guard| guard.clone())
-            .or_else(remembered_library);
+        let folder = authored_library_folder();
         let written = folder.and_then(|folder| {
             store_library_symbol(&folder, name, &entities, class, &tags, glam::DVec3::ZERO)
                 .ok()
@@ -7568,6 +7797,8 @@ fn store_library_symbol(
             }
         })
         .collect();
+    // The user catalogue is created the first time something is authored into it.
+    std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
     let path = folder.join(format!("{safe}.dxf"));
     let mut document = codec::Document::new();
     let translate = crate::command::EntityTransform::Translate(-origin);
@@ -7582,11 +7813,34 @@ fn store_library_symbol(
 
     let manifest = folder.join("library.tsv");
     let mut text = std::fs::read_to_string(&manifest)
-        .unwrap_or_else(|_| "symbol\tclass\tattributes\tsheets\n".to_string());
+        .unwrap_or_else(|_| "symbol\tclass\tattributes\tscale\tstandard\n".to_string());
     if !text.ends_with('\n') {
         text.push('\n');
     }
-    text.push_str(&format!("{safe}\t{class}\t{}\t1\n", tags.join("|")));
+    // The row has to carry the same five columns `read_library_manifest` parses.
+    // A four-field row put the attribute list where the scale belongs, so the
+    // symbol loaded at scale 1 with no standard and no class lookup. An
+    // authored symbol is used at the size it was drawn, hence scale 1; the
+    // standard column stays empty because the folder, not the symbol, decides
+    // whether it is an IEC or a NEC part. Re-authoring replaces the row instead
+    // of appending a second one for the same symbol.
+    let row = format!("{safe}\t{class}\t{}\t1", tags.join("|"));
+    let mut replaced = false;
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            let same = !line.is_empty()
+                && line.split('\t').next().unwrap_or("").eq_ignore_ascii_case(&safe);
+            replaced |= same;
+            !same
+        })
+        .collect();
+    let mut text = kept.join("\n");
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&row);
+    text.push('\n');
     std::fs::write(&manifest, text).map_err(|error| error.to_string())?;
     Ok(path)
 }
@@ -8136,6 +8390,7 @@ mod library_manifest_tests {
                 attributes: vec!["TAG1".to_string(), "X1TERM01".to_string()],
                 label_height: 0.0,
                 scale: 25.4,
+                standard: String::new(),
                 attribute_offsets: Vec::new(),
             },
         );
@@ -8232,6 +8487,67 @@ mod elec_setup_tests {
         assert!(app.tabs[i].dirty);
     }
 
+    /// Every shipped electrical template carries a `WD_M` block, and the block —
+    /// not the custom properties — is what `read_setup` answers from. Writing
+    /// the contract only to the properties let `ELECSETUP` report a change and
+    /// then discard it on the next read.
+    #[test]
+    fn a_template_sheet_keeps_the_setup_it_was_given() {
+        let mut document = codec::Document::new();
+        for _ in 0..2 {
+            let mut insert =
+                codec::entities::Insert::new("WD_M".to_string(), codec::types::Vector3::ZERO);
+            for (tag, value) in [
+                ("TAGFMT", "%F%N"),
+                ("TAGMODE", "S"),
+                ("TAG-START", "1"),
+                ("WIREFMT", "%N"),
+                ("WIREMODE", "S"),
+                ("WIRE-START", "1"),
+                ("XREFFMT", "%S.%N"),
+            ] {
+                insert.attributes.push(codec::entities::AttributeEntity::new(
+                    tag.to_string(),
+                    value.to_string(),
+                ));
+            }
+            document.add_entity(codec::EntityType::Insert(insert)).unwrap();
+        }
+        assert_eq!(read_setup(&document).tag_start, 1);
+
+        let mut setup = read_setup(&document);
+        setup.tag_start = 101;
+        setup.tag_increment = 7;
+        setup.sheet = "2".to_string();
+        write_setup_contract(&mut document, &setup);
+
+        // The block itself moved, not just the properties that shadow it.
+        let block_start = document
+            .entities()
+            .filter_map(|entity| match entity {
+                codec::EntityType::Insert(insert)
+                    if insert.block_name.eq_ignore_ascii_case("WD_M") =>
+                {
+                    insert
+                        .attributes
+                        .iter()
+                        .find(|attribute| attribute.tag.eq_ignore_ascii_case("TAG-START"))
+                        .map(|attribute| attribute.value.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(block_start, vec!["101".to_string(); 2]);
+
+        let after = read_setup(&document);
+        assert!(after.present, "the sheet still carries its WD_M block");
+        assert_eq!(after.tag_start, 101);
+        assert_eq!(after.sheet, "2");
+        // WD_M has no attribute for the increment, so the property carries it
+        // and the read has to merge the two stores rather than pick one.
+        assert_eq!(after.tag_increment, 7);
+    }
+
     #[test]
     fn a_zero_increment_is_refused() {
         let mut app = OpenCADStudio::new_for_test();
@@ -8259,5 +8575,43 @@ mod elec_setup_tests {
         let _ = app.update(Message::ElecSetup(crate::ui::window::elec_setup::SetupMsg::Ok));
         let state = app.elec_setup_dialog.as_ref().expect("dialog stays open");
         assert_eq!(state.error.as_deref(), Some("Tag start must be a whole number."));
+    }
+}
+
+#[cfg(test)]
+mod tag_census_tests {
+    use super::*;
+
+    /// A symbol with no pin attributes is not a device to the netlist, but it
+    /// still owns its designator. Allocating the next tag from the wire graph's
+    /// anchors — which skip every pin-less insert — handed that designator out a
+    /// second time, so a sheet edited a day later ended up with two `-F1`.
+    #[test]
+    fn a_pin_less_symbol_still_owns_its_tag() {
+        let mut document = codec::Document::new();
+        let mut bare = codec::entities::Insert::new(
+            "FUSE".to_string(),
+            codec::types::Vector3::new(60.0, 40.0, 0.0),
+        );
+        bare.attributes.push(codec::entities::AttributeEntity::new(
+            "TAG1".to_string(),
+            "-F1".to_string(),
+        ));
+        bare.attributes.push(codec::entities::AttributeEntity::new(
+            "CAT".to_string(),
+            String::new(),
+        ));
+        document.add_entity(codec::EntityType::Insert(bare)).unwrap();
+
+        assert_eq!(drawing_tags(&document), vec!["-F1".to_string()]);
+        let class = "Fuse";
+        let prefix = ::elec::default_prefix(class);
+        let owned = drawing_tags(&document);
+        let used: Vec<&str> = owned
+            .iter()
+            .filter(|tag| tag.starts_with(prefix.as_str()))
+            .map(String::as_str)
+            .collect();
+        assert_eq!(::elec::next_tag(&used, class), "-F2");
     }
 }

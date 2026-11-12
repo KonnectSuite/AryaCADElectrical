@@ -266,7 +266,7 @@ def normalise(ops):
     right_pin = place((right, sum(right_y) / len(right_y)))
     pins = [
         [left_pin[0], left_pin[1], "X4TERM01"],
-        [right_pin[0], right_pin[1], "X1TERM01"],
+        [right_pin[0], right_pin[1], "X1TERM02"],
     ]
     return geom, pins
 

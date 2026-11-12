@@ -268,6 +268,18 @@ def appdata_cache_path():
     return os.path.join(base, "AryaCAD", "elec_library.txt")
 
 
+def appdata_user_library():
+    """The per-machine catalogue ELECMAKESYMBOL / ELECMAKEMODULE author into.
+
+    ELECLIB loads it on top of a shipped catalogue, so a symbol authored on this machine
+    in an earlier session changes the counts every catalogue check below reads.
+    """
+    base = os.environ.get("APPDATA")
+    if not base:
+        return None
+    return os.path.join(base, "AryaCAD", "elec_user_library")
+
+
 def prepare_work(library):
     if os.path.isdir(WORK):
         shutil.rmtree(WORK)
@@ -652,8 +664,8 @@ def run_makemodule(baseline):
           placed is not None, "INSERT SMOKE_MODULE")
     if placed is not None:
         tags = set(attribute_map(placed))
-        check("the placed module carries its pin attributes",
-              {"X1TERM01", "X1TERM06", "X4TERM01", "X4TERM06"} <= tags,
+        check("the placed module numbers its pins once across both edges",
+              {"X4TERM01", "X4TERM06", "X1TERM07", "X1TERM12"} <= tags,
               sorted(tag for tag in tags if "TERM" in tag))
 
     section("5b. reload the generated module and place it again")
@@ -1366,6 +1378,61 @@ def run_export(binary):
           all(os.path.getsize(os.path.join(out, name)) > 1024 for name in published),
           "")
 
+def run_user_library(binary):
+    """Authored symbols must never land in the catalogue that ships with the product.
+
+    `ELECMAKESYMBOL` / `ELECMAKEMODULE` add to the catalogue in use, which in a normal
+    session is the shipped one. Writing there mutates delivered data and lets an authored
+    name replace a shipped symbol, so the symbol goes to a per-user catalogue that
+    `ELECLIB` loads on top of the shipped folder instead.
+    """
+    section("17. the authored catalogue: never the shipped folder, loaded on top of it")
+    shipped_rows = read_manifest(STARTER)
+    shipped_files = sorted(name for name in os.listdir(STARTER) if name.endswith(".dxf"))
+    sheet = blank_drawing(os.path.join(WORK, "user_lib.dxf"))
+    batch = write_inline_batch("user_library_batch.txt", [
+        f"ELECLIB {STARTER}",
+        "ELECMAKEMODULE SMOKE_USER 4 AT=2,2",
+        "QSAVE",
+    ])
+    code, text = run(binary, [binary, "--each", batch, sheet], "user_library")
+    check("the authoring run succeeds", code == 0, f"exit {code}")
+    overlay = appdata_user_library()
+    authored = os.path.join(overlay, "SMOKE_USER.dxf") if overlay else ""
+    check("the shipped catalogue is left exactly as delivered",
+          not os.path.exists(os.path.join(STARTER, "SMOKE_USER.dxf"))
+          and sorted(name for name in os.listdir(STARTER) if name.endswith(".dxf"))
+          == shipped_files
+          and len(read_manifest(STARTER)) == len(shipped_rows),
+          f"{len(shipped_files)} files, {len(shipped_rows)} manifest rows")
+    check("the authored symbol names the user catalogue it wrote to",
+          "elec_user_library" in text,
+          next((line for line in text.splitlines() if "MAKEMODULE" in line), ""))
+    check("the authored symbol lands in the user catalogue",
+          bool(overlay) and os.path.exists(authored), authored or "no APPDATA")
+
+    reload_sheet = blank_drawing(os.path.join(WORK, "user_lib_reload.dxf"))
+    batch = write_inline_batch("user_library_reload.txt", [
+        f"ELECLIB {STARTER}",
+        "ELECINSERT SMOKE_USER",
+        "ELECLIST",
+        "QSAVE",
+    ])
+    code, text = run(binary, [binary, "--each", batch, reload_sheet], "user_library_reload")
+    expected = len(shipped_rows) + 1
+    check("a later ELECLIB loads the shipped set plus the authored symbol",
+          f"loaded {expected} symbol(s)" in text and f"{expected} in the catalogue" in text,
+          next((line for line in text.splitlines() if "ELECLIB:" in line), ""))
+    check("the authored symbol is placeable in a later drawing",
+          "ELECINSERT: placed SMOKE_USER" in text,
+          next((line for line in text.splitlines() if "ELECINSERT" in line), ""))
+    drawing = dxfio.load(reload_sheet)
+    placed = insert_of_block(drawing, "SMOKE_USER")
+    designator = attribute_map(placed).get("TAG1", "") if placed is not None else ""
+    check("the placed instance carries a designator", bool(designator),
+          "no insert" if placed is None else f"TAG1={designator!r}")
+
+
 def run_machine_files():
     section("14. the machine-readable artifacts")
     # WD_M profile
@@ -1477,6 +1544,16 @@ def main(argv=None):
         shutil.move(cache, backup)
         print(f"parked remembered-library cache at {backup}")
 
+    # The authored catalogue is machine state too: ELECLIB merges it into a shipped
+    # folder, so a symbol authored earlier on this box would move every catalogue count.
+    # Park it for the run; whatever this run authors is removed on the way out.
+    overlay = appdata_user_library()
+    overlay_backup = None
+    if overlay and os.path.exists(overlay):
+        overlay_backup = overlay + ".smoke_backup"
+        shutil.move(overlay, overlay_backup)
+        print(f"parked the authored catalogue at {overlay_backup}")
+
     try:
         run_smoke(baseline, symbols)
         run_makesymbol(baseline)
@@ -1487,6 +1564,7 @@ def main(argv=None):
         run_numbering_setup(current)
         run_uniqueness_scope(current)
         run_export(current)
+        run_user_library(current)
         if args.no_real_sheets:
             section("13. baseline on the real client sheets (skipped: --no-real-sheets)")
             run_machine_files()
@@ -1498,6 +1576,10 @@ def main(argv=None):
             os.remove(cache)
         if backup and os.path.exists(backup):
             shutil.move(backup, cache)
+        if overlay and os.path.exists(overlay):
+            shutil.rmtree(overlay)
+        if overlay_backup and os.path.exists(overlay_backup):
+            shutil.move(overlay_backup, overlay)
 
     passed = sum(1 for _, ok, _ in CHECKS if ok)
     failed = [(label, detail) for label, ok, detail in CHECKS if not ok]

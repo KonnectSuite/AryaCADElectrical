@@ -242,14 +242,17 @@ def transform(ops, terminals):
             final.append(("poly", [fit(x, y) for x, y in op[1]], op[2]))
 
     # Pins: left-hand ones are X4 (AutoCAD Electrical's left terminal), right-hand
-    # ones X1, numbered top to bottom on each side.
+    # ones X1.  The number after TERM is the pin number and is unique across the
+    # whole symbol - the left-hand column is numbered 1..n top to bottom and the
+    # right-hand column continues from there - because the electrical layer reads
+    # that number as the pin, and two pins sharing it read as one connection.
     fitted = [fit(x, y) for x, y in pins]
     left = sorted([p for p in fitted if p[0] < 0], key=lambda p: (-p[1], p[0]))
     right = sorted([p for p in fitted if p[0] >= 0], key=lambda p: (-p[1], p[0]))
     named = []
     for index, (x, y) in enumerate(left, start=1):
         named.append((x, y, f"X4TERM{index:02d}"))
-    for index, (x, y) in enumerate(right, start=1):
+    for index, (x, y) in enumerate(right, start=len(left) + 1):
         named.append((x, y, f"X1TERM{index:02d}"))
     return final, named
 

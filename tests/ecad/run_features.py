@@ -377,6 +377,12 @@ def first(text, needle):
 # --------------------------------------------------------------------------- #
 
 
+def appdata_user_library():
+    """The per-machine catalogue that ELECMAKESYMBOL / ELECMAKEMODULE author into."""
+    base = os.environ.get("APPDATA")
+    return os.path.join(base, "AryaCAD", "elec_user_library") if base else None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", default=EXE, help="built release binary")
@@ -388,16 +394,32 @@ def main(argv=None):
     shutil.rmtree(WORK, ignore_errors=True)
     os.makedirs(WORK, exist_ok=True)
 
-    feature_cross_references(exe)
-    feature_terminals(exe)
-    feature_plc(exe)
-    feature_io_import(exe)
-    feature_cables(exe)
-    feature_panel_report(exe)
-    feature_systems(exe)
-    feature_revisions(exe)
-    feature_built_control(exe)
-    feature_standards(exe)
+    # ELECLIB loads that authored catalogue on top of the shipped one, so a symbol
+    # authored on this machine in an earlier session would move the shipped counts the
+    # checks below read. Park it for the run and put it back afterwards.
+    overlay = appdata_user_library()
+    backup = None
+    if overlay and os.path.exists(overlay):
+        backup = overlay + ".features_backup"
+        shutil.move(overlay, backup)
+        print(f"parked the authored catalogue at {backup}")
+
+    try:
+        feature_cross_references(exe)
+        feature_terminals(exe)
+        feature_plc(exe)
+        feature_io_import(exe)
+        feature_cables(exe)
+        feature_panel_report(exe)
+        feature_systems(exe)
+        feature_revisions(exe)
+        feature_built_control(exe)
+        feature_standards(exe)
+    finally:
+        if overlay and os.path.exists(overlay):
+            shutil.rmtree(overlay)
+        if backup and os.path.exists(backup):
+            shutil.move(backup, overlay)
 
     failed = [f for f in FINDINGS if not f[1]]
     print()
